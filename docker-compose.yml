@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  ar1-platform:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=file:./prisma/dev.db
+      - JWT_SECRET=${JWT_SECRET:-change-this-in-production}
+    volumes:
+      - ./knowledge-base:/app/knowledge-base
+      - ./sandboxes:/app/sandboxes
+      - ./prisma:/app/prisma
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 2G

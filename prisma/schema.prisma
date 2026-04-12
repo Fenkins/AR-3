@@ -1,0 +1,116 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id               String              @id @default(uuid())
+  email            String              @unique
+  password         String
+  username         String              @unique
+  role             String              @default("USER")
+  isActive         Boolean             @default(true)
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+  serviceProviders ServiceProvider[]
+  agents           Agent[]
+  spaces           Space[]
+  experiments      Experiment[]
+  breakthroughs    Breakthrough[]
+}
+
+model ServiceProvider {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider    String   // openai, anthropic, google, openrouter, minimax
+  name        String   // Display name
+  apiKey      String
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  agents      Agent[]
+
+  @@unique([userId, provider])
+}
+
+model Agent {
+  id                 String           @id @default(uuid())
+  userId             String
+  user               User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  serviceProviderId  String
+  serviceProvider    ServiceProvider  @relation(fields: [serviceProviderId], references: [id], onDelete: Cascade)
+  name               String
+  model              String
+  role               String
+  order              Int              @default(0)
+  isActive           Boolean          @default(true)
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+}
+
+model Space {
+  id              String       @id @default(uuid())
+  userId          String
+  user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name            String
+  description     String?
+  initialPrompt   String
+  status          String       @default("INITIALIZING")
+  currentPhase    String       @default("PLANNING")
+  totalTokens     Int          @default(0)
+  totalCost       Float        @default(0)
+  experiments     Experiment[]
+  breakthroughs   Breakthrough[]
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+}
+
+model Experiment {
+  id           String   @id @default(uuid())
+  userId       String?
+  user         User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  spaceId      String
+  space        Space    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  phase        String
+  agentId      String
+  agentName    String
+  prompt       String
+  response     String?
+  tokensUsed   Int      @default(0)
+  cost         Float    @default(0)
+  status       String   @default("PENDING")
+  result       String?
+  metrics      String?
+  grade        Float?
+  feedback     String?
+  userRating   String?  // thumbs_up or thumbs_down
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Breakthrough {
+  id          String   @id @default(uuid())
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  spaceId     String
+  space       Space    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  title       String
+  description String
+  category    String
+  confidence  Float
+  verified    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+}
+
+model SystemConfig {
+  id            String  @id @default(uuid())
+  key           String  @unique
+  value         String
+  description   String?
+  updatedAt     DateTime @updatedAt
+}
