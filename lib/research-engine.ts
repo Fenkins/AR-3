@@ -33,6 +33,12 @@ export interface SpaceExecutionState {
   selectedVariantId?: string
   experiments: any[]
   lastUpdated: Date
+  // Error tracking for timeout/failure visibility
+  lastError?: string
+  lastErrorTime?: Date
+  lastErrorType?: 'TIMEOUT' | 'RATE_LIMIT' | 'API_ERROR' | 'OTHER'
+  retryCount: number
+  retryCountByStage: Record<string, number>  // track retries per stage
 }
 
 export const DEFAULT_STAGES: Omit<ResearchStage, 'id'>[] = [
@@ -924,6 +930,8 @@ Keep your response concise (3-5 sentences).`
     variants: [],
     experiments: [],
     lastUpdated: new Date(),
+    retryCount: 0,
+    retryCountByStage: {},
   })
 
   // Pre-allocate variants and steps for all recommended stages - IN PARALLEL
@@ -946,16 +954,34 @@ Keep your response concise (3-5 sentences).`
   debugLog('[runThinkingSetup] Starting first stage execution')
   let firstResult = null
   let attempts = 0
-  const maxAttempts = 3
+  const maxAttempts = 10
+  const stageId = recommendedStages[0].id
+  const currentRetryCount = state.retryCountByStage[stageId] || 0
   while (attempts < maxAttempts) {
     try {
       firstResult = await executeResearchCycle(spaceId, recommendedStages[0].id)
+      // Success - clear any previous errors for this stage
+      updateExecutionState(spaceId, {
+        lastError: undefined,
+        lastErrorTime: undefined,
+        lastErrorType: undefined,
+        retryCountByStage: { ...state.retryCountByStage, [stageId]: 0 },
+      })
       break
     } catch (err: any) {
       attempts++
-      debugLog(`[runThinkingSetup] Stage execution attempt ${attempts} failed: ${err.message}. Retrying...`)
+      const isTimeout = err.message?.includes('timeout') || err.message?.includes('timed out')
+      const errorType: SpaceExecutionState['lastErrorType'] = isTimeout ? 'TIMEOUT' : 'API_ERROR'
+      updateExecutionState(spaceId, {
+        lastError: err.message,
+        lastErrorTime: new Date(),
+        lastErrorType: errorType,
+        retryCount: (state.retryCount || 0) + 1,
+        retryCountByStage: { ...state.retryCountByStage, [stageId]: currentRetryCount + attempts },
+      })
+      debugLog(`[runThinkingSetup] Stage execution attempt ${attempts}/${maxAttempts} failed: ${err.message}. Retrying...`)
       if (attempts >= maxAttempts) {
-        debugLog('[runThinkingSetup] All stage execution attempts failed. Continuing anyway - pipeline will retry on next poll.')
+        debugLog('[runThinkingSetup] All stage execution attempts failed. Will show error in UI and allow manual retry.')
       }
     }
   }
