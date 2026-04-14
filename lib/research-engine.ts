@@ -26,6 +26,7 @@ export interface ResearchStage {
 export interface SpaceExecutionState {
   spaceId: string
   isRunning: boolean
+  isThinkingSetupRunning?: boolean  // guards against duplicate setup calls
   currentStageId: string
   currentPhase: string
   variants: Variant[]
@@ -797,6 +798,13 @@ export async function executeVariantCycle(spaceId: string, variantId: string) {
 export async function runThinkingSetup(spaceId: string) {
   debugLog('[runThinkingSetup] Starting for spaceId:', spaceId)
 
+  // Guard: skip if a thinking setup is already running for this space
+  const existingState = getExecutionState(spaceId)
+  if (existingState?.isThinkingSetupRunning) {
+    debugLog('[runThinkingSetup] Already running, skipping duplicate call')
+    return { skipped: true, reason: 'thinking_setup already in progress' }
+  }
+
   const space = await prisma.space.findUnique({
     where: { id: spaceId },
     include: {
@@ -910,6 +918,7 @@ Keep your response concise (3-5 sentences).`
   executionStates.set(spaceId, {
     spaceId,
     isRunning: true,
+    isThinkingSetupRunning: true,
     currentStageId: recommendedStages[0].id,
     currentPhase: 'Investigation',
     variants: [],
@@ -917,22 +926,33 @@ Keep your response concise (3-5 sentences).`
     lastUpdated: new Date(),
   })
 
-  // Pre-allocate variants and steps for all recommended stages
-  debugLog('[runThinkingSetup] Pre-allocating variants and steps for all stages...')
-  for (const stage of recommendedStages) {
-    try {
-      debugLog(`[runThinkingSetup] Generating variants for ${stage.name} (${stage.id})...`)
-      await generateStageVariants(spaceId, stage.id, 'auto', 'auto')
-    } catch (err: any) {
-      debugLog(`[runThinkingSetup] Failed to generate variants for ${stage.name}:`, err.message)
-    }
-  }
+  // Pre-allocate variants and steps for all recommended stages - IN PARALLEL
+  debugLog('[runThinkingSetup] Pre-allocating variants and steps for all stages (parallel)...')
+  const variantPromises = recommendedStages.map(stage =>
+    (async () => {
+      try {
+        debugLog(`[runThinkingSetup] Generating variants for ${stage.name} (${stage.id})...`)
+        await generateStageVariants(spaceId, stage.id, 'auto', 'auto')
+        debugLog(`[runThinkingSetup] Variants for ${stage.name} complete`)
+      } catch (err: any) {
+        debugLog(`[runThinkingSetup] Failed to generate variants for ${stage.name}: ${err.message}`)
+      }
+    })()
+  )
+  await Promise.all(variantPromises)
+  debugLog('[runThinkingSetup] All variant pre-allocation attempts finished')
 
   // Execute first stage immediately
   debugLog('[runThinkingSetup] Starting first stage execution')
   const firstResult = await executeResearchCycle(spaceId, recommendedStages[0].id)
 
   debugLog('[runThinkingSetup] Done!')
+
+  // Clear thinking setup running flag
+  const finalState = getExecutionState(spaceId)
+  if (finalState) {
+    updateExecutionState(spaceId, { isThinkingSetupRunning: false })
+  }
 
   return {
     setup: {
