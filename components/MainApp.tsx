@@ -542,17 +542,9 @@ function SpaceDetailModalNew({ space, onClose, onUpdate }: { space: any; onClose
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      {/* Backdrop overlay (dismissible) */}
-      <div 
-        className="absolute inset-0 bg-black/60 transition-opacity" 
-        onClick={onClose} 
-      />
-      
-      {/* Drawer */}
-      <div className="relative w-full max-w-6xl h-full bg-dark-900 border-l border-dark-700 shadow-2xl flex flex-col overflow-hidden transform transition-transform duration-300">
-        
-        {/* Header - Fixed */}
-        <div className="flex-shrink-0 border-b border-dark-800 p-6 flex items-start justify-between bg-dark-900 z-10">
+      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
+      <div className="relative w-full max-w-6xl h-full bg-dark-900 border-l border-dark-700 shadow-2xl flex flex-col">
+        <div className="flex-shrink-0 border-b border-dark-800 p-6 flex items-start justify-between">
           <div>
             <h3 className="text-2xl font-bold">{spaceDetail.name}</h3>
             <p className="text-dark-400 mt-1 max-w-3xl truncate">{spaceDetail.initialPrompt}</p>
@@ -560,34 +552,30 @@ function SpaceDetailModalNew({ space, onClose, onUpdate }: { space: any; onClose
           <div className="flex items-center gap-3">
             <button
               onClick={() => {
-                if(confirm('Are you sure you want to PAUSE/CANCEL this research?')) {
-                  // TODO: hook up to api
+                if (confirm('Are you sure you want to PAUSE/CANCEL this research?')) {
+                  // TODO: hook up to pause/cancel API
                 }
               }}
-              className="px-3 py-1.5 bg-red-900/30 hover:bg-red-800/50 text-red-400 rounded text-sm transition-colors border border-red-900/50"
-            >
-              ⏸ Pause / Cancel
-            </button>
+              className="px-3 py-1.5 bg-red-900/30 hover:bg-red-800/50 text-red-400 rounded text-sm border border-red-900/50"
+            >⏸ Pause/Cancel</button>
             <button
               onClick={() => setShowOldView(!showOldView)}
-              className="px-3 py-1.5 bg-dark-700 hover:bg-dark-600 rounded text-sm transition-colors"
+              className="px-3 py-1.5 bg-dark-700 hover:bg-dark-600 rounded text-sm"
             >
               {showOldView ? '📊 Stages' : '📈 Stats'}
             </button>
             <button onClick={onClose} className="text-dark-400 hover:text-dark-200 text-3xl ml-2">&times;</button>
           </div>
         </div>
-
-        {/* Scrollable Content */}
         <div className="flex-1 overflow-y-auto p-6">
-          {!showOldView ? (
-            <StageWorkflow
-              spaceId={space.id}
-              initialPrompt={spaceDetail.initialPrompt}
-              onClose={onClose}
-            />
-          ) : (
-            <div className="space-y-6">
+        {!showOldView ? (
+          <StageWorkflow
+            spaceId={space.id}
+            initialPrompt={spaceDetail.initialPrompt}
+            onClose={onClose}
+          />
+        ) : (
+          <div className="space-y-6">
             {/* Stats Grid */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <div className="bg-dark-800 rounded p-4">
@@ -624,6 +612,7 @@ function SpaceDetailModalNew({ space, onClose, onUpdate }: { space: any; onClose
             )}
           </div>
         )}
+        </div>
       </div>
     </div>
   )
