@@ -251,11 +251,11 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
         agentId: agent.id,
         agentName: agent.name,
         prompt: 'Variant execution',
-        response: executedVariant.result || 'Variant completed',
+        response: 'Variant executed',
         tokensUsed: 0,
         cost: 0,
         status: 'COMPLETED',
-        result: executedVariant.result || 'Variant completed',
+        result: 'Variant executed',
         createdAt: new Date(),
         updatedAt: new Date()
       }
