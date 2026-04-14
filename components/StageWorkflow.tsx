@@ -692,10 +692,10 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
         </div>
       </div>
 
-      {/* Stage Pipeline */}
+      {/* Stage Pipeline Vertical */}
       <div className="bg-dark-900 rounded-xl border border-dark-700 p-4">
         <h4 className="text-sm font-semibold text-dark-400 mb-3">Research Pipeline</h4>
-        <div className="flex gap-2 overflow-x-auto pb-2">
+        <div className="flex flex-col gap-3">
           {stages.map((stage, index) => {
             const isCurrent = index === currentStageIndex
             const isCompleted = stage.status === 'completed'
@@ -703,10 +703,9 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
             const hasRun = !!experiment
             
             return (
-              <button
+              <div
                 key={stage.id}
-                onClick={() => setCurrentStageIndex(index)}
-                className={`flex-shrink-0 w-40 p-3 rounded-lg border-2 transition-all text-left ${
+                className={`flex items-center justify-between p-3 rounded-lg border-2 transition-all ${
                   isCurrent 
                     ? 'bg-primary-500/10 border-primary-500' 
                     : hasRun
@@ -714,25 +713,59 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
                       : 'bg-dark-800 border-dark-700 hover:border-dark-500'
                 }`}
               >
-                <div className="flex items-center gap-2 mb-1">
-                  <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
+                <button 
+                  onClick={() => setCurrentStageIndex(index)}
+                  className="flex-1 flex items-center gap-3 text-left"
+                >
+                  <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${
                     isCurrent ? 'bg-primary-600 text-white' 
                       : hasRun ? 'bg-green-600 text-white'
                         : 'bg-dark-700 text-dark-400'
                   }`}>
                     {hasRun ? '✓' : index + 1}
                   </div>
+                  <div>
+                    <p className={`text-base font-medium ${isCurrent ? 'text-white' : 'text-dark-200'}`}>
+                      {stage.name}
+                    </p>
+                    <p className="text-xs text-dark-500 line-clamp-1">{stage.description}</p>
+                    {experiment && (
+                      <p className="text-xs text-green-400 mt-0.5">
+                        {experiment.tokensUsed.toLocaleString()} tokens
+                      </p>
+                    )}
+                  </div>
+                </button>
+
+                {/* Stage Controls */}
+                <div className="flex items-center gap-2 ml-4 flex-shrink-0">
+                  <button 
+                    onClick={() => setShowEditModal(stage.id)}
+                    className="p-1.5 hover:bg-dark-600 rounded text-dark-400 hover:text-white transition-colors"
+                    title="Edit Stage"
+                  >
+                    ✏️
+                  </button>
+                  
+                  <button
+                    onClick={() => setIsAutoMode(!isAutoMode)}
+                    className={`px-2 py-1 text-xs rounded font-medium border ${
+                      isAutoMode ? 'bg-primary-600/20 text-primary-400 border-primary-500/50' : 'bg-dark-700 text-dark-400 border-dark-600'
+                    }`}
+                    title="Toggle Auto/Manual Mode"
+                  >
+                    Auto {isAutoMode ? 'ON' : 'OFF'}
+                  </button>
+
+                  <button
+                    onClick={() => setShowHistoryModal(true)}
+                    className="p-1.5 hover:bg-dark-600 rounded text-dark-400 hover:text-white transition-colors"
+                    title="View History & Ratings"
+                  >
+                    🕒 History
+                  </button>
                 </div>
-                <p className={`text-sm font-medium truncate ${isCurrent ? 'text-white' : 'text-dark-200'}`}>
-                  {stage.name}
-                </p>
-                <p className="text-xs text-dark-500 truncate">{stage.description}</p>
-                {experiment && (
-                  <p className="text-xs text-green-400 mt-1">
-                    {experiment.tokensUsed.toLocaleString()} tokens
-                  </p>
-                )}
-              </button>
+              </div>
             )
           })}
         </div>
