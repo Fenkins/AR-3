@@ -18,6 +18,7 @@ import {
   runCycleBackground,
   runStartBackground,
   runLoopBackground,
+  runThinkingSetupBackground,
 } from '@/lib/research-engine'
 
 export async function GET(
@@ -139,10 +140,9 @@ export async function POST(
         console.log('[Spaces API] Running thinking setup:', params.id)
         console.log('[Spaces API] Request headers:', JSON.stringify(request.headers).substring(0, 200))
         try {
-          console.log('[Spaces API] Calling runThinkingSetup...')
-          const setupResult = await runThinkingSetup(params.id)
-          console.log('[Spaces API] Thinking setup complete:', JSON.stringify(setupResult).substring(0, 200))
-          return NextResponse.json({ success: true, result: setupResult })
+          console.log('[Spaces API] Calling runThinkingSetupBackground...')
+          runThinkingSetupBackground(params.id)
+          return NextResponse.json({ success: true, message: 'Setup started in background' })
         } catch (error: any) {
           console.error('[Spaces API] Thinking setup error:', error)
           console.error('[Spaces API] Error stack:', error.stack)

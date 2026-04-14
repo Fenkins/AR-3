@@ -234,6 +234,33 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
     model: agent.model,
   }
 
+  // Check if we have pending variants to execute instead
+  const state = getExecutionState(spaceId)
+  if (state && state.variants && state.variants.length > 0) {
+    const pendingVariant = state.variants.find(v => v.stageId === currentStage.id && v.status === 'PENDING')
+    if (pendingVariant) {
+      debugLog(`[executeResearchCycle] Found pending variant ${pendingVariant.name}, delegating to executeVariantCycle`)
+      const executedVariant = await executeVariantCycle(spaceId, pendingVariant.id)
+      
+      // Return a dummy experiment since we just executed a variant with steps (which logged their own experiments)
+      return {
+        id: 'variant_' + pendingVariant.id,
+        spaceId,
+        phase: currentStage.name.toUpperCase(),
+        agentId: agent.id,
+        agentName: agent.name,
+        prompt: 'Variant execution',
+        response: executedVariant.result || 'Variant completed',
+        tokensUsed: 0,
+        cost: 0,
+        status: 'COMPLETED',
+        result: executedVariant.result || 'Variant completed',
+        createdAt: new Date(),
+        updatedAt: new Date()
+      }
+    }
+  }
+
   // Get context from previous experiments
   const previousExperiments = space.experiments.slice(0, 10)
   const messages = generateStagePrompt(space, currentStage, previousExperiments)
@@ -246,7 +273,7 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
   try {
     debugLog(`[executeResearchCycle] About to call callAI, config:`, JSON.stringify({provider: agentConfig.provider, model: agentConfig.model, hasKey: !!agentConfig.apiKey}))
     response = await callAI(agentConfig, messages)
-    debugLog(`[executeResearchCycle] AI call succeeded, tokens: ${response.tokensUsed}, cost: $${response.cost}`)
+    debugLog(`[executeResearchCycle] AI call succeeded, tokens: ${response.tokensUsed}, cost: ${response.cost}`)
   } catch (error: any) {
     debugLog(`[executeResearchCycle] AI call failed:`, error.message)
     throw error
@@ -412,6 +439,30 @@ async function executeVariant(variant: Variant, spaceId: string, stageName: stri
       step.result = response.content
       step.status = 'COMPLETED'
       step.grade = Math.min(100, Math.max(0, Math.floor(response.tokensUsed / 10)))
+      
+      await prisma.experiment.create({
+        data: {
+          spaceId: space.id,
+          phase: stageName.toUpperCase() + '_STEP',
+          agentId: agent.id,
+          agentName: agent.name,
+          prompt: JSON.stringify(messages),
+          response: response.content,
+          tokensUsed: response.tokensUsed,
+          cost: response.cost,
+          status: 'COMPLETED',
+          result: response.content,
+          metrics: JSON.stringify({ variantId: variant.id, stepId: step.id, grade: step.grade }),
+        }
+      })
+      
+      await prisma.space.update({
+        where: { id: spaceId },
+        data: {
+          totalTokens: { increment: response.tokensUsed },
+          totalCost: { increment: response.cost },
+        }
+      })
     } catch (error: any) {
       step.status = 'FAILED'
       step.result = `Error: ${error.message}`
@@ -866,6 +917,17 @@ Keep your response concise (3-5 sentences).`
     lastUpdated: new Date(),
   })
 
+  // Pre-allocate variants and steps for all recommended stages
+  debugLog('[runThinkingSetup] Pre-allocating variants and steps for all stages...')
+  for (const stage of recommendedStages) {
+    try {
+      debugLog(`[runThinkingSetup] Generating variants for ${stage.name} (${stage.id})...`)
+      await generateStageVariants(spaceId, stage.id, 'auto', 'auto')
+    } catch (err: any) {
+      debugLog(`[runThinkingSetup] Failed to generate variants for ${stage.name}:`, err.message)
+    }
+  }
+
   // Execute first stage immediately
   debugLog('[runThinkingSetup] Starting first stage execution')
   const firstResult = await executeResearchCycle(spaceId, recommendedStages[0].id)
@@ -913,4 +975,10 @@ export async function getSpaceStatus(spaceId: string) {
     totalTokens: space.totalTokens,
     totalCost: space.totalCost,
   }
+}
+
+export function runThinkingSetupBackground(spaceId: string): void {
+  runThinkingSetup(spaceId).catch(err => {
+    console.error('[runThinkingSetupBackground] failed:', err.message);
+  });
 }
