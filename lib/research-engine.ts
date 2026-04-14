@@ -942,9 +942,23 @@ Keep your response concise (3-5 sentences).`
   await Promise.all(variantPromises)
   debugLog('[runThinkingSetup] All variant pre-allocation attempts finished')
 
-  // Execute first stage immediately
+  // Execute first stage immediately - with retry on timeout/failure
   debugLog('[runThinkingSetup] Starting first stage execution')
-  const firstResult = await executeResearchCycle(spaceId, recommendedStages[0].id)
+  let firstResult = null
+  let attempts = 0
+  const maxAttempts = 3
+  while (attempts < maxAttempts) {
+    try {
+      firstResult = await executeResearchCycle(spaceId, recommendedStages[0].id)
+      break
+    } catch (err: any) {
+      attempts++
+      debugLog(`[runThinkingSetup] Stage execution attempt ${attempts} failed: ${err.message}. Retrying...`)
+      if (attempts >= maxAttempts) {
+        debugLog('[runThinkingSetup] All stage execution attempts failed. Continuing anyway - pipeline will retry on next poll.')
+      }
+    }
+  }
 
   debugLog('[runThinkingSetup] Done!')
 
