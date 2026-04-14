@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# AR-1 Research Platform - Vast.ai Setup with Public URL
+# AR-3 Research Platform - Vast.ai Setup with Public URL
 # This script runs ON the Vast.ai instance
 # Pulls latest code on each boot so updates are applied without recreating instance
 
 set -e
-echo "=== AR-1 Setup starting at $(date) ==="
+echo "=== AR-3 Setup starting at $(date) ==="
 
 export DEBIAN_FRONTEND=noninteractive
 
@@ -19,17 +19,17 @@ curl -fsSL https://deb.nodesource.com/setup_22.x | bash - > /dev/null 2>&1
 apt-get install -y -qq nodejs > /dev/null 2>&1
 echo "Node: $(node --version), npm: $(npm --version)"
 
-# Clone or update AR-1
-echo "[3/8] Setting up AR-1..."
+# Clone or update AR-3
+echo "[3/8] Setting up AR-3..."
 cd /opt
-if [ -d "AR-1" ]; then
-    echo "AR-1 directory exists, pulling latest..."
-    cd AR-1
+if [ -d "AR-3" ]; then
+    echo "AR-3 directory exists, pulling latest..."
+    cd AR-3
     git pull origin main
 else
-    echo "Cloning AR-1 fresh..."
-    git clone https://github.com/Fenkins/AR-1.git
-    cd AR-1
+    echo "Cloning AR-3 fresh..."
+    git clone https://github.com/Fenkins/AR-3.git
+    cd AR-3
 fi
 
 # Install deps
@@ -76,8 +76,8 @@ pkill -f "npm start" 2>/dev/null || true
 sleep 2
 
 # Start the app on port 3001
-echo "Starting AR-1 on port 3001..."
-cd /opt/AR-1
+echo "Starting AR-3 on port 3001..."
+cd /opt/AR-3
 PORT=3001 nohup npm start > /var/log/ar1.log 2>&1 &
 APP_PID=$!
 echo "App PID: $APP_PID"
@@ -105,7 +105,7 @@ sleep 10
 TUNNEL_URL=$(grep -oP 'https://[a-z0-9-]+\.trycloudflare\.com' /tmp/tunnel-url.txt 2>/dev/null || echo "")
 
 echo ""
-echo "=== AR-1 Setup Complete ==="
+echo "=== AR-3 Setup Complete ==="
 echo "Date: $(date)"
 echo "App: http://localhost:3000 (nginx) or http://localhost:3001 (direct)"
 echo "Public URL: $TUNNEL_URL"
