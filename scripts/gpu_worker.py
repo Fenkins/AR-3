@@ -125,39 +125,62 @@ def execute_gpu_command(job: dict) -> dict:
         # Look for JSON object pattern: {...}
         gpu_command = None
         
-        # Try direct JSON parse first
+        # Try direct JSON parse first (including if LLM wrapped code in JSON)
+        gpu_command = None
         try:
             gpu_command = json.loads(prompt.strip())
         except json.JSONDecodeError:
-            # Search for JSON object in the text
-            import re
-            json_matches = re.findall(r'\{[^{}]*"action"[^{}]*\}', prompt, re.DOTALL)
-            if json_matches:
-                for match in json_matches:
-                    try:
-                        gpu_command = json.loads(match)
-                        break
-                    except:
-                        continue
-            
-            # Also try to find code blocks like ```python ... ```
-            code_matches = re.findall(r'```(?:python)?\s*\n?(.*?)```', prompt, re.DOTALL)
-            if code_matches:
-                # Use the largest code block as the code to execute
-                biggest = max(code_matches, key=len)
-                gpu_command = {"action": "run_python", "code": biggest.strip()}
+            pass
         
-        if not gpu_command:
-            # Fall back to treating entire prompt as code (but clean it up first)
-            log(f"No JSON GPU command found, attempting to extract code")
+        # If not valid JSON, look for JSON with code inside (possibly wrapped in markdown)
+        if not gpu_command or not isinstance(gpu_command.get('code'), str):
             import re
-            code_blocks = re.findall(r'```(?:python)?\s*\n?(.*?)```', prompt, re.DOTALL)
+            # Try to find JSON object with action and code fields (code may be wrapped in ```python ... ```)
+            json_pattern = r'\{"action":\s*"run_python"[^{}]*(?:"code":\s*)?([^{}]*(?:\{[^{}]*\}[^{}]*)*)'
+            matches = re.findall(json_pattern, prompt, re.DOTALL)
+            for m in matches:
+                # Extract code from markdown code blocks if present
+                code_match = re.search(r'```python\s*(.*?)```', m, re.DOTALL)
+                if code_match:
+                    gpu_command = {"action": "run_python", "code": code_match.group(1).strip()}
+                    break
+        
+        # If still no valid GPU command, look for code blocks
+        if not gpu_command or not isinstance(gpu_command.get('code'), str):
+            import re
+            # Find ALL python code blocks
+            code_blocks = re.findall(r'```python\s+(.*?)\s+```', prompt, re.DOTALL)
             if code_blocks:
-                code = max(code_blocks, key=len).strip()
-                gpu_command = {"action": "run_python", "code": code}
+                # Use the largest code block
+                biggest = max(code_blocks, key=len).strip()
+                if len(biggest) > 20:  # Only use if substantial
+                    gpu_command = {"action": "run_python", "code": biggest}
             else:
-                # No code found at all, run nvidia-smi as a test
-                gpu_command = {"action": "nvidia_smi"}
+                # Look for any code-looking content (import statements, def, class, torch., etc.)
+                code_indicators = re.findall(r'(?:import\s+\w+|from\s+\w+\s+import|def\s+\w+|class\s+\w+|torch\.|cuda|tensor\()', prompt)
+                if code_indicators:
+                    # Try to extract a contiguous block of code-ish lines
+                    lines = prompt.split('\n')
+                    code_lines = []
+                    in_code = False
+                    for line in lines:
+                        stripped = line.strip()
+                        # Skip markdown headers, lists, plain text
+                        if stripped.startswith('#') or stripped.startswith('- ') or stripped.startswith('* ') or stripped.startswith('1.') or stripped.startswith('2.') or not stripped:
+                            if in_code:
+                                in_code = False
+                            continue
+                        if any(ind in stripped for ind in ['import ', 'from ', 'def ', 'class ', 'torch.', 'cuda', 'tensor']):
+                            in_code = True
+                            code_lines.append(stripped)
+                        elif in_code:
+                            code_lines.append(stripped)
+                    if code_lines:
+                        gpu_command = {"action": "run_python", "code": '\n'.join(code_lines)}
+        
+        if not gpu_command or not isinstance(gpu_command.get('code'), str) or len(gpu_command.get('code', '')) < 10:
+            # Nothing useful found, run nvidia-smi
+            gpu_command = {"action": "nvidia_smi"}
         
         action = gpu_command.get('action', 'run_python')
         
