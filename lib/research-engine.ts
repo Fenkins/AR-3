@@ -283,60 +283,71 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
   debugLog(`[executeResearchCycle] Calling AI for stage: ${currentStage.name}`)
   debugLog(`[executeResearchCycle] Agent: ${agent?.name} (${agent?.role}), Provider: ${serviceProvider?.provider}`)
 
-  // Call AI (or GPU worker if stage has gpuEnabled)
+  // Call LLM API
   let response: { content: string; tokensUsed: number; cost: number } | null = null
   try {
-    if (currentStage.gpuEnabled) {
-      // Submit job to GPU worker
-      debugLog(`[executeResearchCycle] GPU-enabled stage, submitting to GPU worker`)
-      const gpuResponse = await fetch(`${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/api/jobs/gpu`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          spaceId,
-          stageName: currentStage.name,
-          prompt: JSON.stringify(messages),
-          context: JSON.stringify({ previousExperiments: previousExperiments.slice(0, 5) }),
-        }),
-      })
-      if (!gpuResponse.ok) {
-        throw new Error(`GPU job submission failed: ${gpuResponse.status}`)
-      }
-      const { jobId } = await gpuResponse.json()
-      debugLog(`[executeResearchCycle] GPU job submitted: ${jobId}`)
+    debugLog(`[executeResearchCycle] About to call callAI, config:`, JSON.stringify({provider: agentConfig.provider, model: agentConfig.model, hasKey: !!agentConfig.apiKey}))
+    response = await callAI(agentConfig, messages)
+    debugLog(`[executeResearchCycle] AI call succeeded, tokens: ${response.tokensUsed}, cost: ${response.cost}`)
 
-      // Poll for result (max 5 minutes)
-      const maxWait = 300000 // 5 min
-      const pollInterval = 5000 // 5 sec
-      let waited = 0
-      while (waited < maxWait) {
-        await new Promise(r => setTimeout(r, pollInterval))
-        waited += pollInterval
-        const statusRes = await fetch(`${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/api/jobs/gpu?jobId=${jobId}`)
-        if (statusRes.ok) {
-          const statusData = await statusRes.json()
-          if (statusData.status === 'completed') {
-            const result = statusData.result
-            response = {
-              content: result.output || result.error || 'GPU job completed',
-              tokensUsed: result.tokensUsed || 0,
-              cost: result.cost || 0,
+    // If stage has gpuEnabled, also submit to GPU worker based on LLM's response
+    // The LLM's response text contains GPU commands in structured format
+    if (currentStage.gpuEnabled) {
+      debugLog(`[executeResearchCycle] GPU-enabled stage, submitting LLM output to GPU worker`)
+      try {
+        const gpuResponse = await fetch(`${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/api/jobs/gpu`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            spaceId,
+            stageName: currentStage.name,
+            prompt: response.content,  // LLM's GPU command instructions
+            context: JSON.stringify({ previousExperiments: previousExperiments.slice(0, 5) }),
+          }),
+        })
+        if (gpuResponse.ok) {
+          const { jobId } = await gpuResponse.json()
+          debugLog(`[executeResearchCycle] GPU job submitted: ${jobId}`)
+
+          // Poll for result (max 5 minutes)
+          const maxWait = 300000
+          const pollInterval = 5000
+          let waited = 0
+          while (waited < maxWait) {
+            await new Promise(r => setTimeout(r, pollInterval))
+            waited += pollInterval
+            const statusRes = await fetch(`${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/api/jobs/gpu?jobId=${jobId}`)
+            if (statusRes.ok) {
+              const statusData = await statusRes.json()
+              if (statusData.status === 'completed') {
+                const result = statusData.result
+                // Append GPU result to LLM response
+                const gpuResultText = result.success
+                  ? `[GPU Execution Result]: ${result.output}`
+                  : `[GPU Execution Error]: ${result.error}`
+                response.content += '\n\n' + gpuResultText
+                debugLog(`[executeResearchCycle] GPU job completed: ${gpuResultText.substring(0, 100)}`)
+                break
+              } else if (statusData.status === 'failed') {
+                debugLog(`[executeResearchCycle] GPU job failed: ${statusData.error}`)
+                response.content += `\n\n[GPU Error]: ${statusData.error}`
+                break
+              }
             }
-            debugLog(`[executeResearchCycle] GPU job completed: ${response.content.substring(0, 100)}`)
-            break
-          } else if (statusData.status === 'failed') {
-            throw new Error(`GPU job failed: ${statusData.error}`)
+            if (waited >= maxWait) {
+              debugLog(`[executeResearchCycle] GPU job timed out`)
+              response.content += '\n\n[GPU Timeout]: Job did not complete within 5 minutes'
+              break
+            }
           }
+        } else {
+          debugLog(`[executeResearchCycle] GPU job submission failed: ${gpuResponse.status}`)
+          response.content += '\n\n[GPU Error]: Failed to submit GPU job'
         }
-        if (waited >= maxWait) {
-          throw new Error('GPU job timed out after 5 minutes')
-        }
+      } catch (gpuError: any) {
+        debugLog(`[executeResearchCycle] GPU worker error: ${gpuError.message}`)
+        response.content += `\n\n[GPU Error]: ${gpuError.message}`
       }
-    } else {
-      // Normal LLM API call
-      debugLog(`[executeResearchCycle] About to call callAI, config:`, JSON.stringify({provider: agentConfig.provider, model: agentConfig.model, hasKey: !!agentConfig.apiKey}))
-      response = await callAI(agentConfig, messages)
-      debugLog(`[executeResearchCycle] AI call succeeded, tokens: ${response.tokensUsed}, cost: ${response.cost}`)
     }
   } catch (error: any) {
     debugLog(`[executeResearchCycle] AI/GPU call failed:`, error.message)
