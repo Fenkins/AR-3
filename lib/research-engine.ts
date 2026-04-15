@@ -605,6 +605,8 @@ export async function startSpace(spaceId: string) {
     variants: [],
     experiments: [],
     lastUpdated: new Date(),
+    retryCount: 0,
+    retryCountByStage: {},
   })
 
   // Execute first cycle immediately
@@ -662,6 +664,93 @@ export function runLoopBackground(spaceId: string, numCycles: number = 3): void 
   runResearchLoop(spaceId, numCycles).catch(err => {
     console.error('[runLoopBackground] runResearchLoop failed:', err.message)
   })
+}
+
+// Active background loops (prevent duplicate loops)
+const activeLoops: Set<string> = new Set()
+
+/**
+ * Continuous background loop that keeps executing research cycles
+ * while the space is running. This is the auto-pilot for the pipeline.
+ */
+export function startBackgroundLoop(spaceId: string): void {
+  if (activeLoops.has(spaceId)) {
+    debugLog(`[startBackgroundLoop] Loop already running for ${spaceId}, skipping`)
+    return
+  }
+  activeLoops.add(spaceId)
+  debugLog(`[startBackgroundLoop] Starting background loop for ${spaceId}`)
+
+  const pollInterval = 15000 // 15 seconds between cycles
+  const maxConsecutiveErrors = 5
+  let consecutiveErrors = 0
+
+  async function loop() {
+    try {
+      const state = getExecutionState(spaceId)
+      if (!state || !state.isRunning) {
+        debugLog(`[startBackgroundLoop] Space ${spaceId} no longer running, stopping loop`)
+        activeLoops.delete(spaceId)
+        return
+      }
+
+      const stages = DEFAULT_STAGES.map((s, i) => ({ ...s, id: `stage_${i}` }))
+      const currentStageId = state.currentStageId || stages[0].id
+      const currentStage = stages.find(s => s.id === currentStageId)
+
+      // Check if there are pending variants to execute
+      if (state.variants && state.variants.length > 0) {
+        const pendingVariant = state.variants.find(v => v.stageId === currentStageId && v.status === 'PENDING')
+        if (pendingVariant) {
+          debugLog(`[startBackgroundLoop] Executing pending variant ${pendingVariant.name}`)
+          try {
+            await executeVariantCycle(spaceId, pendingVariant.id)
+            consecutiveErrors = 0
+          } catch (err: any) {
+            consecutiveErrors++
+            debugLog(`[startBackgroundLoop] Variant execution failed: ${err.message}`)
+          }
+          scheduleNext()
+          return
+        }
+      }
+
+      // Execute next cycle
+      debugLog(`[startBackgroundLoop] Executing cycle for stage ${currentStage?.name}`)
+      try {
+        await executeResearchCycle(spaceId, currentStageId)
+        consecutiveErrors = 0
+      } catch (err: any) {
+        consecutiveErrors++
+        const isTimeout = err.message?.includes('timeout')
+        debugLog(`[startBackgroundLoop] Cycle failed (${consecutiveErrors}/${maxConsecutiveErrors}): ${err.message}`)
+
+        if (consecutiveErrors >= maxConsecutiveErrors) {
+          updateExecutionState(spaceId, {
+            lastError: `Too many consecutive failures: ${err.message}`,
+            lastErrorTime: new Date(),
+            lastErrorType: 'API_ERROR',
+          })
+          debugLog(`[startBackgroundLoop] Max consecutive errors reached, pausing space`)
+          await pauseSpace(spaceId)
+          activeLoops.delete(spaceId)
+          return
+        }
+      }
+
+      scheduleNext()
+    } catch (err: any) {
+      debugLog(`[startBackgroundLoop] Loop error: ${err.message}`)
+      scheduleNext()
+    }
+  }
+
+  function scheduleNext() {
+    setTimeout(loop, pollInterval)
+  }
+
+  // Start the loop
+  loop()
 }
 
 export async function pauseSpace(spaceId: string) {
@@ -874,21 +963,13 @@ Keep your response concise (3-5 sentences).`
     id: `stage_${i}`,
   }))
 
-  // Check if AI suggested specific stages
-  const stageMentions = ['Investigation', 'Proposition', 'Planning', 'Implementation', 'Testing', 'Verification', 'Evaluation']
-  const foundStages = stageMentions.filter(s => response.content.includes(s))
-
-  if (foundStages.length >= 3) {
-    // AI suggested specific stages
-    recommendedStages = foundStages.map((name, i) => {
-      const defaultStage = DEFAULT_STAGES.find(ds => ds.name === name)
-      return {
-        ...defaultStage!,
-        id: `stage_${i}`,
-        order: i,
-      }
-    })
-  }
+  // IMPORTANT: Always use ALL 7 DEFAULT_STAGES regardless of AI suggestions.
+  // The AI sometimes suggests fewer stages, which causes incomplete pipelines.
+  // We use DEFAULT_STAGES as the source of truth.
+  recommendedStages = DEFAULT_STAGES.map((s, i) => ({
+    ...s,
+    id: `stage_${i}`,
+  }))
 
   // Create thinking setup experiment
   await prisma.experiment.create({
@@ -956,7 +1037,6 @@ Keep your response concise (3-5 sentences).`
   let attempts = 0
   const maxAttempts = 10
   const stageId = recommendedStages[0].id
-  const currentRetryCount = state.retryCountByStage[stageId] || 0
   while (attempts < maxAttempts) {
     try {
       firstResult = await executeResearchCycle(spaceId, recommendedStages[0].id)
@@ -965,19 +1045,20 @@ Keep your response concise (3-5 sentences).`
         lastError: undefined,
         lastErrorTime: undefined,
         lastErrorType: undefined,
-        retryCountByStage: { ...state.retryCountByStage, [stageId]: 0 },
+        retryCountByStage: { [stageId]: 0 },
       })
       break
     } catch (err: any) {
       attempts++
       const isTimeout = err.message?.includes('timeout') || err.message?.includes('timed out')
       const errorType: SpaceExecutionState['lastErrorType'] = isTimeout ? 'TIMEOUT' : 'API_ERROR'
+      const currentRetryCount = (executionStates.get(spaceId)?.retryCountByStage[stageId]) || 0
       updateExecutionState(spaceId, {
         lastError: err.message,
         lastErrorTime: new Date(),
         lastErrorType: errorType,
-        retryCount: (state.retryCount || 0) + 1,
-        retryCountByStage: { ...state.retryCountByStage, [stageId]: currentRetryCount + attempts },
+        retryCount: (executionStates.get(spaceId)?.retryCount || 0) + 1,
+        retryCountByStage: { [stageId]: currentRetryCount + attempts },
       })
       debugLog(`[runThinkingSetup] Stage execution attempt ${attempts}/${maxAttempts} failed: ${err.message}. Retrying...`)
       if (attempts >= maxAttempts) {
@@ -985,6 +1066,11 @@ Keep your response concise (3-5 sentences).`
       }
     }
   }
+
+  // Start background polling loop to keep advancing stages
+  startBackgroundLoop(spaceId)
+
+  debugLog('[runThinkingSetup] Done!')
 
   debugLog('[runThinkingSetup] Done!')
 

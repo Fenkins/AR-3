@@ -1,5 +1,13 @@
 import { prisma } from './prisma'
 import { callAI, AIConfig } from './ai'
+import fs from 'fs'
+
+const logFile = '/tmp/ar1_debug.log'
+function debugLog(...args: any[]) {
+  const msg = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ')
+  fs.appendFileSync(logFile, new Date().toISOString() + ' [VariantEngine] ' + msg + '\n')
+  console.log('[VariantEngine]', ...args)
+}
 
 export interface Variant {
   id: string
@@ -94,7 +102,8 @@ export async function generateVariants(
   // Determine number of variants
   let numVariants = stageConfig.numVariants
   if (numVariants === 'auto') {
-    const prompt = `
+    try {
+      const prompt = `
 Research Goal: ${initialPrompt}
 Stage: ${stageConfig.name}
 Previous Context: ${previousContext}
@@ -108,12 +117,16 @@ Consider:
 
 Respond with just a number between 2-5.`
 
-    const response = await callAI(agentConfig, [
-      { role: 'user', content: prompt },
-    ])
+      const response = await callAI(agentConfig, [
+        { role: 'user', content: prompt },
+      ])
 
-    const match = response.content.match(/\d+/)
-    numVariants = match ? Math.min(Math.max(parseInt(match[0]), 2), 5) : 3
+      const match = response.content.match(/\d+/)
+      numVariants = match ? Math.min(Math.max(parseInt(match[0]), 2), 5) : 3
+    } catch (err: any) {
+      debugLog(`[generateVariants] Failed to determine variant count via AI, using 3: ${err.message}`)
+      numVariants = 3
+    }
   }
 
   // Generate variant descriptions
@@ -144,30 +157,53 @@ Steps:
       { role: 'user', content: variantPrompt },
     ])
 
-    // Parse response
+    // Parse response - robust parsing with fallbacks
     const nameMatch = response.content.match(/Name:\s*(.+?)(?:\n|$)/i)
     const descMatch = response.content.match(/Description:\s*([\s\S]+?)(?:\n\n|\nSteps:|$)/i)
     const stepsMatch = response.content.match(/Steps:\s*([\s\S]+)/i)
 
     const name = nameMatch ? nameMatch[1].trim() : `Variant ${i + 1}`
     const description = descMatch ? descMatch[1].trim() : 'Exploration variant'
-    
-    // Parse steps
+
+    // Parse steps - robust with multiple fallback strategies
     let steps: Step[] = []
-    if (stepsMatch) {
+    if (stepsMatch && stepsMatch[1].trim()) {
       const stepLines = stepsMatch[1].split('\n').filter(l => l.trim())
       steps = stepLines.map((line, idx) => {
         const stepText = line.replace(/^\d+[\.\)]\s*/, '').trim()
         return {
-          id: `step_${Date.now()}_${idx}`,
-          variantId: '', // Will be set after variant creation
-          name: stepText.substring(0, 50) || `Step ${idx + 1}`,
+          id: `step_${Date.now()}_${i}_${idx}`,
+          variantId: '',
+          name: stepText.substring(0, 60) || `Step ${idx + 1}`,
           description: stepText,
           order: idx,
           isAuto: true,
           status: 'PENDING',
         }
       })
+    }
+
+    // Fallback: if no steps parsed, generate default steps based on stage
+    if (steps.length === 0) {
+      const defaultStepTemplates: Record<string, string[]> = {
+        'Investigation': ['Research background and context', 'Identify key concepts and relationships', 'Find gaps in existing approaches', 'Document findings', 'Prepare investigation summary'],
+        'Proposition': ['Synthesize investigation insights', 'Formulate hypothesis', 'Identify potential solutions', 'Evaluate novelty of approaches', 'Draft proposition statement'],
+        'Planning': ['Analyze requirements and constraints', 'Break down into actionable tasks', 'Define success criteria', 'Estimate resource needs', 'Create implementation timeline'],
+        'Implementation': ['Set up development environment', 'Implement core functionality', 'Add error handling', 'Test the implementation', 'Refine and optimize'],
+        'Testing': ['Design test cases', 'Execute test suite', 'Analyze test results', 'Document failures and issues', 'Prepare test report'],
+        'Verification': ['Review testing methodology', 'Verify reproducibility', 'Cross-check results', 'Validate assumptions', 'Confirm verification verdict'],
+        'Evaluation': ['Aggregate all stage results', 'Assess overall quality', 'Identify breakthrough potential', 'Rate confidence level', 'Prepare evaluation summary'],
+      }
+      const templates = defaultStepTemplates[stageConfig.name] || ['Define approach', 'Execute investigation', 'Analyze results', 'Document findings', 'Prepare next steps']
+      steps = templates.map((desc, idx) => ({
+        id: `step_${Date.now()}_${i}_${idx}`,
+        variantId: '',
+        name: desc.substring(0, 60),
+        description: desc,
+        order: idx,
+        isAuto: true,
+        status: 'PENDING',
+      }))
     }
 
     // If auto mode for steps, configure range
@@ -182,8 +218,19 @@ Steps:
         }
       })
     } else {
-      // Use exact number from config
-      steps = steps.slice(0, numSteps)
+      // Ensure we have at least numSteps
+      while (steps.length < (numSteps as number)) {
+        steps.push({
+          id: `step_${Date.now()}_${i}_${steps.length}`,
+          variantId: '',
+          name: `Additional step ${steps.length + 1}`,
+          description: `Additional exploration for variant ${i + 1}`,
+          order: steps.length,
+          isAuto: true,
+          status: 'PENDING',
+        })
+      }
+      steps = steps.slice(0, numSteps as number)
       steps.forEach(step => {
         step.isAuto = false
       })
