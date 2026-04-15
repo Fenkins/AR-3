@@ -283,7 +283,7 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
   const pauseResearch = async () => {
     try {
       await fetch(`/api/spaces/${spaceId}`, {
-        method: 'POST',
+        method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
@@ -300,7 +300,7 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
   const resumeResearch = async () => {
     try {
       await fetch(`/api/spaces/${spaceId}`, {
-        method: 'POST',
+        method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
@@ -318,7 +318,7 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
     if (!confirm('Stop all research? This cannot be undone.')) return
     try {
       await fetch(`/api/spaces/${spaceId}`, {
-        method: 'POST',
+        method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,

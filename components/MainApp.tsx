@@ -570,13 +570,23 @@ function SpaceDetailModalNew({ space, onClose, onUpdate }: { space: any; onClose
           </div>
           <div className="flex items-center gap-3">
             <button
-              onClick={() => {
-                if (confirm('Are you sure you want to PAUSE/CANCEL this research?')) {
-                  // TODO: hook up to pause/cancel API
-                }
+              onClick={async () => {
+                const token = localStorage.getItem('research_token')
+                const action = spaceDetail.status === 'PAUSED' ? 'resume' : 'pause'
+                if (action === 'pause' && !confirm('Pause this research?')) return
+                try {
+                  const res = await fetch(`/api/spaces/${space.id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                    body: JSON.stringify({ action }),
+                  })
+                  if (res.ok) {
+                    setSpaceDetail((prev: any) => ({ ...prev, status: action === 'pause' ? 'PAUSED' : 'RUNNING' }))
+                  }
+                } catch (e) { console.error('Failed to', action, e) }
               }}
-              className="px-3 py-1.5 bg-red-900/30 hover:bg-red-800/50 text-red-400 rounded text-sm border border-red-900/50"
-            >⏸ Pause/Cancel</button>
+              className={`px-3 py-1.5 rounded text-sm border ${spaceDetail.status === 'PAUSED' ? 'bg-green-900/30 hover:bg-green-800/50 text-green-400 border-green-900/50' : 'bg-red-900/30 hover:bg-red-800/50 text-red-400 border-red-900/50'}`}
+            >{spaceDetail.status === 'PAUSED' ? '▶ Resume' : '⏸ Pause'}</button>
             <button
               onClick={() => setShowOldView(!showOldView)}
               className="px-3 py-1.5 bg-dark-700 hover:bg-dark-600 rounded text-sm"
