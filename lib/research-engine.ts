@@ -97,20 +97,21 @@ Be specific and practical in your planning.`,
   {
     name: 'Implementation',
     description: 'Execute the implementation based on plan',
-    prompt: `Implement the solution based on the planning stage output.
+    prompt: `Your primary output MUST be a JSON object with a GPU command. Format:
+{"action": "run_python", "code": "YOUR_PYTHON_CODE"}
 
-Your tasks:
-1. Execute the implementation plan
-2. Write code, configure systems, or create artifacts
-3. Address technical challenges as they arise
-4. Incorporate all previous stage feedback
-5. Produce a viable, working implementation
+The GPU worker will execute this Python code on an NVIDIA RTX 3060 GPU. Write self-contained Python code using torch that runs independently.
 
-IMPORTANT: After your implementation response, you MUST output a GPU command in this exact JSON format:
-{"action": "run_python", "code": "YOUR_PYTHON_CODE_HERE"}
+Example: {"action": "run_python", "code": "import torch; x = torch.randn(100, 100, device='cuda'); print('CUDA:', torch.cuda.is_available(), 'GPU:', torch.cuda.get_device_name(0)); print('Result:', x.sum().item())"}
 
-The GPU worker will execute this Python code on an NVIDIA RTX 3060 GPU. Write self-contained Python code that can run independently. Example:
-{"action": "run_python", "code": "import torch; x = torch.randn(100, 100, device='cuda'); print('GPU:', torch.cuda.is_available(), 'Result:', x.sum().item())"}`,
+CONTEXT: Implement the solution based on the planning stage output.
+- Execute the implementation plan
+- Write code, configure systems, or create artifacts
+- Address technical challenges as they arise
+- Incorporate all previous stage feedback
+- Produce a viable, working implementation
+
+Be specific and technical in your code. The code you output will be executed on GPU.`,
     order: 3,
     isActive: true,
     gpuEnabled: true,  // GPU needed for model training / compute-intensive work
@@ -118,21 +119,21 @@ The GPU worker will execute this Python code on an NVIDIA RTX 3060 GPU. Write se
   {
     name: 'Testing',
     description: 'Test implementation and determine viability',
-    prompt: `Test the implementation thoroughly.
+    prompt: `Your primary output MUST be a JSON object with a GPU command if your tests need GPU. Format:
+{"action": "run_python", "code": "YOUR_TEST_CODE"}
 
-Your tasks:
-1. Run tests and validate the implementation
-2. Identify issues, bugs, or weaknesses
-3. Determine if implementation passes quality bar
-4. Document what went wrong if it failed
-5. Provide clear verdict: PASS or FAIL with reasoning
+The GPU worker will execute this on an NVIDIA RTX 3060 GPU.
 
-IMPORTANT: If your tests require GPU execution (inference, model loading, etc), output a GPU command in this exact JSON format:
-{"action": "run_python", "code": "YOUR_TEST_CODE_HERE"}
+Example: {"action": "run_python", "code": "import torch; model = torch.nn.Linear(10, 10).cuda(); x = torch.randn(1, 10, device='cuda'); y = model(x); print('Output:', y.shape, y.device)"}
 
-The GPU worker will execute this Python code on an NVIDIA RTX 3060 GPU. Write self-contained test code.
+CONTEXT: Test the implementation thoroughly.
+- Run tests and validate the implementation
+- Identify issues, bugs, or weaknesses
+- Determine if implementation passes quality bar
+- Document what went wrong if it failed
+- Provide clear verdict: PASS or FAIL with reasoning
 
-Be critical but fair in your assessment.`,
+Be critical but fair. Output JSON GPU commands only if your tests actually need GPU execution.`,
     order: 4,
     isActive: true,
     gpuEnabled: true,  // GPU needed for inference on trained models
