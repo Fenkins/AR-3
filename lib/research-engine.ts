@@ -18,6 +18,7 @@ export interface ResearchStage {
   prompt: string
   order: number
   isActive: boolean
+  gpuEnabled?: boolean  // if true, route to GPU worker instead of LLM API
   status?: 'pending' | 'running' | 'completed' | 'failed'
   numVariants?: number | 'auto'
   stepsPerVariant?: number | 'auto'
@@ -57,6 +58,7 @@ Your tasks:
 Be thorough and curious in your investigation.`,
     order: 0,
     isActive: true,
+    gpuEnabled: false,
   },
   {
     name: 'Proposition',
@@ -73,6 +75,7 @@ Your tasks:
 Be creative but grounded in the investigation results.`,
     order: 1,
     isActive: true,
+    gpuEnabled: false,
   },
   {
     name: 'Planning',
@@ -89,6 +92,7 @@ Your tasks:
 Be specific and practical in your planning.`,
     order: 2,
     isActive: true,
+    gpuEnabled: false,
   },
   {
     name: 'Implementation',
@@ -105,6 +109,7 @@ Your tasks:
 Focus on creating something that actually works.`,
     order: 3,
     isActive: true,
+    gpuEnabled: true,  // GPU needed for model training / compute-intensive work
   },
   {
     name: 'Testing',
@@ -121,6 +126,7 @@ Your tasks:
 Be critical but fair in your assessment.`,
     order: 4,
     isActive: true,
+    gpuEnabled: true,  // GPU needed for inference on trained models
   },
   {
     name: 'Verification',
@@ -137,6 +143,7 @@ Your tasks:
 Be skeptical and thorough in verification.`,
     order: 5,
     isActive: true,
+    gpuEnabled: false,
   },
   {
     name: 'Evaluation',
@@ -153,6 +160,7 @@ Your tasks:
 Only mark as breakthrough if absolutely certain.`,
     order: 6,
     isActive: true,
+    gpuEnabled: false,
   },
 ]
 
@@ -275,15 +283,69 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
   debugLog(`[executeResearchCycle] Calling AI for stage: ${currentStage.name}`)
   debugLog(`[executeResearchCycle] Agent: ${agent?.name} (${agent?.role}), Provider: ${serviceProvider?.provider}`)
 
-  // Call AI
-  let response
+  // Call AI (or GPU worker if stage has gpuEnabled)
+  let response: { content: string; tokensUsed: number; cost: number } | null = null
   try {
-    debugLog(`[executeResearchCycle] About to call callAI, config:`, JSON.stringify({provider: agentConfig.provider, model: agentConfig.model, hasKey: !!agentConfig.apiKey}))
-    response = await callAI(agentConfig, messages)
-    debugLog(`[executeResearchCycle] AI call succeeded, tokens: ${response.tokensUsed}, cost: ${response.cost}`)
+    if (currentStage.gpuEnabled) {
+      // Submit job to GPU worker
+      debugLog(`[executeResearchCycle] GPU-enabled stage, submitting to GPU worker`)
+      const gpuResponse = await fetch(`${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/api/jobs/gpu`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          spaceId,
+          stageName: currentStage.name,
+          prompt: JSON.stringify(messages),
+          context: JSON.stringify({ previousExperiments: previousExperiments.slice(0, 5) }),
+        }),
+      })
+      if (!gpuResponse.ok) {
+        throw new Error(`GPU job submission failed: ${gpuResponse.status}`)
+      }
+      const { jobId } = await gpuResponse.json()
+      debugLog(`[executeResearchCycle] GPU job submitted: ${jobId}`)
+
+      // Poll for result (max 5 minutes)
+      const maxWait = 300000 // 5 min
+      const pollInterval = 5000 // 5 sec
+      let waited = 0
+      while (waited < maxWait) {
+        await new Promise(r => setTimeout(r, pollInterval))
+        waited += pollInterval
+        const statusRes = await fetch(`${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/api/jobs/gpu?jobId=${jobId}`)
+        if (statusRes.ok) {
+          const statusData = await statusRes.json()
+          if (statusData.status === 'completed') {
+            const result = statusData.result
+            response = {
+              content: result.output || result.error || 'GPU job completed',
+              tokensUsed: result.tokensUsed || 0,
+              cost: result.cost || 0,
+            }
+            debugLog(`[executeResearchCycle] GPU job completed: ${response.content.substring(0, 100)}`)
+            break
+          } else if (statusData.status === 'failed') {
+            throw new Error(`GPU job failed: ${statusData.error}`)
+          }
+        }
+        if (waited >= maxWait) {
+          throw new Error('GPU job timed out after 5 minutes')
+        }
+      }
+    } else {
+      // Normal LLM API call
+      debugLog(`[executeResearchCycle] About to call callAI, config:`, JSON.stringify({provider: agentConfig.provider, model: agentConfig.model, hasKey: !!agentConfig.apiKey}))
+      response = await callAI(agentConfig, messages)
+      debugLog(`[executeResearchCycle] AI call succeeded, tokens: ${response.tokensUsed}, cost: ${response.cost}`)
+    }
   } catch (error: any) {
-    debugLog(`[executeResearchCycle] AI call failed:`, error.message)
+    debugLog(`[executeResearchCycle] AI/GPU call failed:`, error.message)
     throw error
+  }
+
+  // Defensive: ensure response was set
+  if (!response) {
+    throw new Error('executeResearchCycle: response was not set (GPU timeout without result?)')
   }
 
   // Create experiment record
