@@ -10,7 +10,7 @@ echo "[$(date)] Heartbeat check starting" >> $LOG
 # Check Vast.ai instance using vastai CLI
 export VAST_API_KEY="8a40b921ecdc6af9124f6715fdee718cd046a1b746e8aa40594480030e03d781"
 
-INSTANCES=$(vastai list instances 2>/dev/null | grep "running" | wc -l || echo "0")
+INSTANCES=$(vastai show instances 2>/dev/null | grep -c "running" || echo "0")
 echo "Running instances: $INSTANCES" >> $LOG
 
 # If no running instance, deploy
