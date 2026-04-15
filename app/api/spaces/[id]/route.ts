@@ -71,11 +71,11 @@ export async function GET(
   }
 }
 
-export async function POST(
+export async function PUT(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {
-  console.log('[Spaces API] POST received for:', params.id)
+  console.log('[Spaces API] PUT received for:', params.id)
 
   try {
     const auth = await authMiddleware(request)
