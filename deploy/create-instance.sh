@@ -1,10 +1,10 @@
 #!/bin/bash
-# AR-1 Research Platform - Vast.ai Instance Creation Script
+# AR-3 Research Platform - Vast.ai Instance Creation Script
 # This script runs ON the Vast.ai instance after it boots
 
 set -e
 
-echo "=== AR-1 Research Platform - Instance Setup ==="
+echo "=== AR-3 Research Platform - Instance Setup ==="
 echo "Started at: $(date)"
 
 # Install dependencies
@@ -20,11 +20,11 @@ apt-get install -y -qq nodejs > /dev/null 2>&1
 echo "Node.js version: $(node --version)"
 echo "npm version: $(npm --version)"
 
-# Clone and setup AR-1
-echo "[3/6] Cloning AR-1 repository..."
+# Clone and setup AR-3
+echo "[3/6] Cloning AR-3 repository..."
 cd /opt
-git clone https://github.com/Fenkins/AR-1.git
-cd /opt/AR-1
+git clone https://github.com/Fenkins/AR-3.git
+cd /opt/AR-3
 
 # Install dependencies
 echo "[4/6] Installing npm packages..."
@@ -42,7 +42,7 @@ npm run build
 
 # Configure nginx for Vast.ai port mapping detection
 echo "Configuring nginx..."
-cat > /etc/nginx/sites-available/ar1 <<'EOF'
+cat > /etc/nginx/sites-available/ar3 <<'EOF'
 server {
     listen 80;
     server_name _;
@@ -62,21 +62,21 @@ server {
 }
 EOF
 
-ln -sf /etc/nginx/sites-available/ar1 /etc/nginx/sites-enabled/
+ln -sf /etc/nginx/sites-available/ar3 /etc/nginx/sites-enabled/
 rm -f /etc/nginx/sites-enabled/default
 nginx -t && systemctl restart nginx
 
 # Create systemd service
 echo "Creating systemd service..."
-cat > /etc/systemd/system/ar1-platform.service <<EOF
+cat > /etc/systemd/system/ar3-platform.service <<EOF
 [Unit]
-Description=AR-1 Research Platform
+Description=AR-3 Research Platform
 After=network.target nginx.service
 
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/opt/AR-1
+WorkingDirectory=/opt/AR-3
 Environment=NODE_ENV=production
 Environment=NEXTAUTH_URL=http://localhost
 ExecStart=/usr/bin/npm start
@@ -88,15 +88,15 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable ar1-platform
-systemctl start ar1-platform
+systemctl enable ar3-platform
+systemctl start ar3-platform
 
 # Get public IP and port info
 echo "=== Setup Complete ==="
 echo "Completed at: $(date)"
 echo ""
 echo "Service Status:"
-systemctl status ar1-platform --no-pager -l | head -20
+systemctl status ar3-platform --no-pager -l | head -20
 echo ""
 echo "Nginx Status:"
 systemctl status nginx --no-pager -l | head -10
@@ -115,5 +115,5 @@ cat > /tmp/deployment-status.json <<EOJSON
 EOJSON
 
 echo ""
-echo "AR-1 Platform is ready!"
+echo "AR-3 Platform is ready!"
 echo "Access via the Vast.ai instance URL (port 80 or 3000)"
