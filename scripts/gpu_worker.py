@@ -146,14 +146,29 @@ def execute_gpu_command(job: dict) -> dict:
             except json.JSONDecodeError:
                 continue
         
-        # Strategy 2: Look for ```python blocks (most reliable for LLM output)
+        # Strategy 2: Look for ```python blocks
         if not gpu_command:
             code_blocks = re.findall(r'```python\s*(.*?)\s*```', prompt, re.DOTALL)
             if code_blocks:
                 # Use the largest code block
                 biggest = max(code_blocks, key=len).strip()
                 if len(biggest) > 20:
-                    gpu_command = {"action": "run_python", "code": biggest}
+                    # Check if this is actually a JSON command (not Python code)
+                    if biggest.strip().startswith('{'):
+                        try:
+                            parsed = json.loads(biggest)
+                            if isinstance(parsed.get('code'), str) and isinstance(parsed.get('action'), str):
+                                gpu_command = parsed
+                            else:
+                                # It's JSON but not a GPU command format - extract code from it
+                                code_match = re.search(r'"code":\s*"([^"\\]*(?:\\.[^"\\]*)*)"', biggest, re.DOTALL)
+                                if code_match:
+                                    gpu_command = {"action": "run_python", "code": code_match.group(1)}
+                        except:
+                            pass
+                    # If not JSON, treat as raw Python code
+                    if not gpu_command:
+                        gpu_command = {"action": "run_python", "code": biggest}
         
         # Strategy 3: Look for raw Python-like code (import statements, def, class)
         if not gpu_command:
