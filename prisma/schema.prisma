@@ -17,6 +17,7 @@ model User {
   createdAt        DateTime            @default(now())
   updatedAt        DateTime            @updatedAt
   serviceProviders ServiceProvider[]
+  embeddingProviders EmbeddingProvider[]
   agents           Agent[]
   spaces           Space[]
   experiments      Experiment[]
@@ -34,6 +35,24 @@ model ServiceProvider {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   agents      Agent[]
+
+  @@unique([userId, provider])
+}
+
+model EmbeddingProvider {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider    String   // openai, azure, google, cohere, huggingface
+  name        String   // Display name
+  apiKey      String
+  apiEndpoint String?  // For Azure or custom endpoints
+  model       String   // e.g. text-embedding-3-small, embedding-001, embed-english-v3.0
+  dimensions  Int?     // Output dimensions (for OpenAI 3-series)
+  isActive    Boolean  @default(true)
+  isDefault   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   @@unique([userId, provider])
 }

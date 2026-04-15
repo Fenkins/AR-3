@@ -5,6 +5,7 @@ import { useState, useEffect } from 'react'
 import StageWorkflow from './StageWorkflow'
 import ServiceProviders from './ServiceProviders'
 import Agents from './AgentsView'
+import EmbeddingsView from './EmbeddingsView'
 
 export default function Home() {
   const { isAuthenticated, isAdmin } = useAuth()
@@ -22,6 +23,7 @@ export default function Home() {
         {activeTab === 'providers' && <ServiceProviders />}
         {activeTab === 'agents' && <Agents />}
         {activeTab === 'spaces' && <SpacesView />}
+        {activeTab === 'embeddings' && <EmbeddingsView />}
         {activeTab === 'admin' && isAdmin && <AdminView />}
       </main>
     </div>
@@ -1319,6 +1321,7 @@ function Navigation({ activeTab, setActiveTab }: { activeTab: string; setActiveT
     { id: 'dashboard', label: 'Dashboard', icon: '📊' },
     { id: 'providers', label: 'Providers', icon: '🔑' },
     { id: 'agents', label: 'Agents', icon: '🤖' },
+    { id: 'embeddings', label: 'Embeddings', icon: '🔢' },
     { id: 'spaces', label: 'Spaces', icon: '🔬' },
   ]
 
