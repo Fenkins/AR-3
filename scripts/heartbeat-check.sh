@@ -1,107 +1,47 @@
 #!/bin/bash
-# AR-3 Development Heartbeat - runs every 30 minutes
-# Checks deployment, evaluates researcher output, fixes bugs, pushes updates
+set -e
 
-LOG="/root/.openclaw/workspace/AR-3/scripts/heartbeat.log"
-WORKSPACE="/root/.openclaw/workspace/AR-3"
-VAST_API_KEY="${VAST_API_KEY}"
-GITHUB_TOKEN="${GITHUB_TOKEN}"
-SSH_KEY="/tmp/ar3_key"
-TUNNEL_URL_FILE="/tmp/tunnel_url.txt"
+# AR-3 Heartbeat Check
+# Runs every 30 minutes via cron
 
-log() {
-    echo "[$(date '+%Y-%m-%d %H:%M')] $1" | tee -a "$LOG"
-}
+LOG="/tmp/heartbeat.log"
+echo "[$(date)] Heartbeat check starting" >> $LOG
 
-cd "$WORKSPACE"
+# Check Vast.ai instance
+export VAST_API_KEY="8a40b921ecdc6af9124f6715fdee718cd046a1b746e8aa40594480030e03d781"
 
-log "=== Heartbeat check started ==="
+INSTANCES=$(python3 -c "
+import requests
+resp = requests.get('https://console.vast.ai/api/v0/instances', headers={'Authorization': f'Bearer {VAST_API_KEY}'})
+data = resp.json()
+running = [i for i in data['instances'] if i['cur_state'] == 'running']
+print(len(running))
+" 2>/dev/null || echo "0")
 
-# 1. Check if instance is still running
-log "[1] Checking instance status..."
-OUT=$(vastai --api-key "$VAST_API_KEY" show instances 2>&1)
-INST_LINE=$(echo "$OUT" | grep -E "AR-3-Research-Platform|AR-3-Research\s" | head -3)
-if echo "$INST_LINE" | grep -q "running"; then
-    log "[OK] Instance running"
-    CONTRACT=$(echo "$OUT" | grep running | awk '{print $2}')
-    
-    # Check tunnel URL
-    TUNNEL_URL=$(cat /tmp/tunnel_url.txt 2>/dev/null || echo "")
-    if [ -n "$TUNNEL_URL" ]; then
-        log "[Tunnel] $TUNNEL_URL"
-        # Verify tunnel is still accessible
-        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "$TUNNEL_URL" 2>/dev/null || echo "000")
-        log "[HTTP] $TUNNEL_URL → $HTTP_CODE"
-        if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "307" ]; then
-            log "[OK] Platform accessible"
-        else
-            log "[WARN] Platform not responding ($HTTP_CODE), restarting tunnel..."
-            # Restart tunnel
-            ssh -o StrictHostKeyChecking=no -i "$SSH_KEY" root@ssh7.vast.ai -p 26532 "pkill cloudflared; nohup cloudflared tunnel --url http://localhost:3000 > /tmp/tunnel.log 2>&1 &" 2>/dev/null
-            sleep 10
-            NEW_URL=$(ssh -o StrictHostKeyChecking=no -i "$SSH_KEY" root@ssh7.vast.ai -p 26532 "cat /tmp/tunnel.log" 2>/dev/null | grep -o 'https://[^ ]*trycloudflare.com' | head -1)
-            if [ -n "$NEW_URL" ]; then
-                echo "$NEW_URL" > "$TUNNEL_URL_FILE"
-                log "[NEW TUNNEL] $NEW_URL"
-            fi
-        fi
-    fi
-else
-    log "[WARN] Instance not running! Attempting restart..."
-    # The instance might be stopped/loading. Try to start it.
-    # For now, just log the issue and continue with local development
+echo "Running instances: $INSTANCES" >> $LOG
+
+# If no running instance, we need to deploy
+if [ "$INSTANCES" -eq 0 ]; then
+    echo "[$(date)] No running instance! Need to deploy." >> $LOG
+    # Would trigger deployment here
 fi
 
-# 2. Pull latest from GitHub
-log "[2] Pulling latest from GitHub..."
-cd "$WORKSPACE"
-git config user.name "Fenkins" 2>/dev/null
-git config user.email "fenkins@users.noreply.github.com" 2>/dev/null
-git remote set-url origin "https://$GITHUB_TOKEN@github.com/Fenkins/AR-3.git" 2>/dev/null
-git pull origin main 2>&1 >> "$LOG"
+# Check pipeline via public URL
+RESP=$(curl -s -m 10 "https://kijiji-mask-staff-nomination.trycloudflare.com/api/spaces/9281ba3d-85ee-4f59-85fe-ea084995ec1e" \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0YTVhMjY5Mi0wM2MzLTRiOTEtOWNkYS01YzVhOGQ4MTQ2ZWUiLCJlbWFpbCI6ImFkbWluQGV4YW1wbGUuY29tIiwicm9sZSI6IkFETUlOIiwiaWF0IjoxNzc2MjQ3OTIyLCJleHAiOjE3NzY4NTI3MjJ9.LBVFg6wluTzypToUdbDqIwPANNST2_okq3CddO1x988" 2>/dev/null || echo "{}")
 
-# 3. Check TypeScript errors
-log "[3] Type checking..."
-if ! npx tsc --noEmit 2>&1 | grep -q "error"; then
-    log "[OK] TypeScript clean"
-else
-    ERRORS=$(npx tsc --noEmit 2>&1 | grep "error" | head -5)
-    log "[ERRORS] $ERRORS"
-fi
+echo "$RESP" | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    print(f'Status: {d.get(\"space\", {}).get(\"status\", \"UNKNOWN\")}')
+    print(f'Phase: {d.get(\"space\", {}).get(\"currentPhase\", \"UNKNOWN\")}')
+    print(f'Tokens: {d.get(\"space\", {}).get(\"totalTokens\", 0)}')
+    print(f'Stage: {d.get(\"execution\", {}).get(\"currentStageId\", \"NONE\")}')
+    print(f'Running: {d.get(\"execution\", {}).get(\"isRunning\", False)}')
+    print(f'Experiments: {len(d.get(\"space\", {}).get(\"experiments\", []))}')
+except:
+    print('Parse error or unreachable')
+" >> $LOG
 
-# 4. Build check
-log "[4] Building..."
-BUILD_OUT=$(npm run build 2>&1 | tail -5)
-if echo "$BUILD_OUT" | grep -q "✓"; then
-    log "[OK] Build successful"
-else
-    log "[WARN] Build output: $BUILD_OUT"
-fi
-
-# 5. If deployed and building, push new build to instance
-if echo "$OUT" | grep -q "running"; then
-    log "[5] Syncing to instance..."
-    # Kill old process, pull latest, rebuild, restart
-    ssh -o StrictHostKeyChecking=no -i "$SSH_KEY" root@ssh7.vast.ai -p 26532 <<'SSHEOF' >> "$LOG" 2>&1
-cd /opt/AR-3
-git pull
-npm install --silent
-npm run build
-pkill -f "npm start" 2>/dev/null || true
-sleep 2
-nohup npm start > /tmp/ar3.log 2>&1 &
-echo "Updated and restarted at $(date)"
-SSHEOF
-    log "[OK] Instance updated"
-fi
-
-# 6. Check researcher results (via API logs if possible)
-log "[6] Checking researcher state..."
-# Try to get logs from the instance
-SPACE_LOGS=$(ssh -o StrictHostKeyChecking=no -i "$SSH_KEY" root@ssh7.vast.ai -p 26532 "cat /tmp/ar3.log 2>/dev/null | tail -20" 2>/dev/null)
-if [ -n "$SPACE_LOGS" ]; then
-    log "Last logs: $(echo "$SPACE_LOGS" | tail -3 | tr '\n' ' ')"
-fi
-
-log "=== Heartbeat check complete ==="
-echo ""
+echo "[$(date)] Heartbeat check done" >> $LOG
