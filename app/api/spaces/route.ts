@@ -60,7 +60,7 @@ export async function POST(request: NextRequest) {
     if ('json' in auth) return auth
 
     const body = await request.json()
-    const { name, description, initialPrompt } = body
+    const { name, description, initialPrompt, useEmbeddings } = body
 
     if (!name || !initialPrompt) {
       return NextResponse.json(
@@ -77,6 +77,7 @@ export async function POST(request: NextRequest) {
         initialPrompt,
         status: 'INITIALIZING',
         currentPhase: 'PLANNING',
+        useEmbeddings: useEmbeddings || false,
       },
     })
 
