@@ -119,7 +119,7 @@ async function callMiniMax(config: AIConfig, messages: AIMessage[]): Promise<AIR
   const openai = new OpenAI({
     apiKey: config.apiKey,
     baseURL: 'https://api.minimax.io/v1',
-    timeout: 120000, // 120 second timeout - MiniMax can be slow
+    timeout: 90000, // 90 second timeout - fail faster so retry can happen
     maxRetries: 1,   // Only 1 retry - fail fast, don't multiply wait time
   })
 
