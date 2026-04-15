@@ -51,8 +51,12 @@ function writeResults(results: Record<string, GPUResult>) {
 
 // GET: poll for job result
 export async function GET(request: NextRequest) {
-  const auth = await authMiddleware(request)
-  if ('json' in auth) return auth
+  // Skip auth for internal server-side calls (no auth header = internal)
+  const authHeader = request.headers.get('authorization')
+  if (authHeader) {
+    const auth = await authMiddleware(request)
+    if ('json' in auth) return auth
+  }
 
   const { searchParams } = new URL(request.url)
   const jobId = searchParams.get('jobId')
@@ -79,8 +83,12 @@ export async function GET(request: NextRequest) {
 
 // POST: submit a GPU job
 export async function POST(request: NextRequest) {
-  const auth = await authMiddleware(request)
-  if ('json' in auth) return auth
+  // Skip auth for internal server-side calls
+  const authHeader = request.headers.get('authorization')
+  if (authHeader) {
+    const auth = await authMiddleware(request)
+    if ('json' in auth) return auth
+  }
 
   try {
     const body = await request.json()

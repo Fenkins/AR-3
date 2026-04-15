@@ -11,7 +11,7 @@ import sys
 import os
 import re
 
-API_KEY = "8a40b921ecdc6af9124f6715fdee718cd046a1b746e8aa40594480030e03d781"
+API_KEY = "5d2d46bd85397a2196ae40d659cfa52a6efd1e871d1377dd8b0631359115ae1e"
 SSH_KEY_PATH = os.path.expanduser("~/.ssh/id_ed25519.pub")
 AR3_REPO = "https://github.com/Fenkins/AR-3.git"
 SETUP_SCRIPT = """

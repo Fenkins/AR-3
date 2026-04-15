@@ -9,7 +9,7 @@ import json
 import time
 import sys
 
-API_KEY = "8a40b921ecdc6af9124f6715fdee718cd046a1b746e8aa40594480030e03d781"
+API_KEY = "5d2d46bd85397a2196ae40d659cfa52a6efd1e871d1377dd8b0631359115ae1e"
 BASE_URL = "https://console.vast.ai/api/v0"
 
 def get_headers():
