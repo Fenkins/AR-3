@@ -106,7 +106,11 @@ Your tasks:
 4. Incorporate all previous stage feedback
 5. Produce a viable, working implementation
 
-Focus on creating something that actually works.`,
+IMPORTANT: After your implementation response, you MUST output a GPU command in this exact JSON format:
+{"action": "run_python", "code": "YOUR_PYTHON_CODE_HERE"}
+
+The GPU worker will execute this Python code on an NVIDIA RTX 3060 GPU. Write self-contained Python code that can run independently. Example:
+{"action": "run_python", "code": "import torch; x = torch.randn(100, 100, device='cuda'); print('GPU:', torch.cuda.is_available(), 'Result:', x.sum().item())"}`,
     order: 3,
     isActive: true,
     gpuEnabled: true,  // GPU needed for model training / compute-intensive work
@@ -122,6 +126,11 @@ Your tasks:
 3. Determine if implementation passes quality bar
 4. Document what went wrong if it failed
 5. Provide clear verdict: PASS or FAIL with reasoning
+
+IMPORTANT: If your tests require GPU execution (inference, model loading, etc), output a GPU command in this exact JSON format:
+{"action": "run_python", "code": "YOUR_TEST_CODE_HERE"}
+
+The GPU worker will execute this Python code on an NVIDIA RTX 3060 GPU. Write self-contained test code.
 
 Be critical but fair in your assessment.`,
     order: 4,

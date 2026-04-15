@@ -121,17 +121,54 @@ def execute_gpu_command(job: dict) -> dict:
     log(f"Prompt length: {len(prompt)} chars")
     
     try:
-        # Parse the prompt as JSON (LLM should output structured GPU commands)
+        # Try to extract JSON from the prompt (LLM response may contain natural language + JSON)
+        # Look for JSON object pattern: {...}
+        gpu_command = None
+        
+        # Try direct JSON parse first
         try:
-            gpu_command = json.loads(prompt)
+            gpu_command = json.loads(prompt.strip())
         except json.JSONDecodeError:
-            # If not JSON, treat the prompt itself as code to run
-            gpu_command = {"action": "run_python", "code": prompt}
+            # Search for JSON object in the text
+            import re
+            json_matches = re.findall(r'\{[^{}]*"action"[^{}]*\}', prompt, re.DOTALL)
+            if json_matches:
+                for match in json_matches:
+                    try:
+                        gpu_command = json.loads(match)
+                        break
+                    except:
+                        continue
+            
+            # Also try to find code blocks like ```python ... ```
+            code_matches = re.findall(r'```(?:python)?\s*\n?(.*?)```', prompt, re.DOTALL)
+            if code_matches:
+                # Use the largest code block as the code to execute
+                biggest = max(code_matches, key=len)
+                gpu_command = {"action": "run_python", "code": biggest.strip()}
+        
+        if not gpu_command:
+            # Fall back to treating entire prompt as code (but clean it up first)
+            log(f"No JSON GPU command found, attempting to extract code")
+            import re
+            code_blocks = re.findall(r'```(?:python)?\s*\n?(.*?)```', prompt, re.DOTALL)
+            if code_blocks:
+                code = max(code_blocks, key=len).strip()
+                gpu_command = {"action": "run_python", "code": code}
+            else:
+                # No code found at all, run nvidia-smi as a test
+                gpu_command = {"action": "nvidia_smi"}
         
         action = gpu_command.get('action', 'run_python')
         
         if action == 'run_python':
-            code = gpu_command.get('code', gpu_command.get('script', prompt))
+            code = gpu_command.get('code', '')
+            if not code or len(code) < 10:
+                return {
+                    'success': False,
+                    'output': '',
+                    'error': 'No valid Python code found in LLM response',
+                }
             log(f"Running Python code, {len(code)} chars")
             result = execute_python_code(code)
             
@@ -148,7 +185,6 @@ def execute_gpu_command(job: dict) -> dict:
             }
             
         elif action == 'nvidia_smi':
-            # Just return GPU info
             result = subprocess.run(
                 ['nvidia-smi', '--query-gpu=name,memory.total,memory.used,utilization.gpu,utilization.memory', '--format=csv,noheader,nounits'],
                 capture_output=True, text=True, timeout=10
