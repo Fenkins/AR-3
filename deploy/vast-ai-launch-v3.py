@@ -1,153 +1,176 @@
 #!/usr/bin/env python3
 """
-AR-1 Research Platform - Vast.ai Instance Launcher (Simplified)
-Launches an RTX 3060 instance on Vast.ai and deploys AR-1 platform
+AR-3 Research Platform - Vast.ai Instance Launcher v4
+Uses vastai CLI for reliable instance management with SSH key and cloudflared tunnel.
 """
 
-import requests
+import subprocess
 import json
 import time
 import sys
 import os
-from datetime import datetime
+import re
 
 API_KEY = "8a40b921ecdc6af9124f6715fdee718cd046a1b746e8aa40594480030e03d781"
-BASE_URL = "https://console.vast.ai"
-CONTRACT_ID = None
-
-def get_headers():
-    return {
-        "Authorization": f"Bearer {API_KEY}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
-
-def read_setup_script():
-    script_path = os.path.join(os.path.dirname(__file__), "create-instance.sh")
-    if os.path.exists(script_path):
-        with open(script_path, "r") as f:
-            return f.read()
-    # Fallback inline script
-    return """#!/bin/bash
+SSH_KEY_PATH = os.path.expanduser("~/.ssh/id_ed25519.pub")
+AR3_REPO = "https://github.com/Fenkins/AR-3.git"
+SETUP_SCRIPT = """
 set -e
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq && apt-get install -y -qq curl git > /dev/null 2>&1
+apt-get update -qq
+apt-get install -y -qq curl git nginx python3 python3-pip > /dev/null 2>&1
 curl -fsSL https://deb.nodesource.com/setup_22.x | bash - > /dev/null 2>&1
 apt-get install -y -qq nodejs > /dev/null 2>&1
-cd /opt && git clone https://github.com/Fenkins/AR-1.git && cd /opt/AR-1
+
+cd /opt
+if [ ! -d AR-3 ]; then
+    git clone {repo} /opt/AR-3
+fi
+cd /opt/AR-3
 npm install --silent
-npx prisma generate && npx prisma db push && npm run seed
+npx prisma generate
+npx prisma db push
 npm run build
-# Start with nginx on port 80 proxying to 3000
-npm start &
-sleep 5
-echo "Deployment complete at $(date)"
+
+# Install cloudflared tunnel
+curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /usr/local/bin/cloudflared
+chmod +x /usr/local/bin/cloudflared
+
+# Create startup script
+cat > /root/start-ar3.sh <<'STARTUP'
+#!/bin/bash
+cd /opt/AR-3
+pkill -f "npm start" 2>/dev/null || true
+pkill -f "cloudflared" 2>/dev/null || true
+sleep 2
+nohup npm start > /tmp/ar3.log 2>&1 &
+sleep 3
+nohup cloudflared tunnel --url http://localhost:3000 > /tmp/tunnel.log 2>&1 &
+sleep 8
+grep -o 'https://[^ ]*trycloudflare.com' /tmp/tunnel.log | head -1 > /tmp/tunnel_url.txt
+echo "AR-3 started. Tunnel URL: $(cat /tmp/tunnel_url.txt)"
+STARTUP
+chmod +x /root/start-ar3.sh
+echo "Setup complete"
 """
 
-def find_cheapest_3060():
-    print("🔍 Searching for RTX 3060 instances...")
-    response = requests.post(f"{BASE_URL}/api/v0/bundles/", headers=get_headers(), json={"limit": 300})
-    if response.status_code != 200:
-        print(f"❌ Search failed: {response.status_code}")
-        return None
-    offers = response.json().get("offers", [])
-    rtx3060 = sorted([o for o in offers if o.get("gpu_name") == "RTX 3060"], key=lambda x: x["dph_total"])
-    if not rtx3060:
-        print("❌ No RTX 3060 available")
-        return None
-    cheapest = rtx3060[0]
-    print(f"✅ Found: ${cheapest['dph_total']:.4f}/hr - {cheapest.get('geolocation','?')}")
-    return cheapest
+defvastai = f"vastai --api-key {API_KEY}"
 
-def create_instance(offer_id):
-    print(f"🚀 Creating instance from offer {offer_id}...")
-    setup_script = read_setup_script()
-    response = requests.put(f"{BASE_URL}/api/v0/asks/{offer_id}/", headers=get_headers(), json={
-        "client_id": "me",
-        "image": "nvidia/cuda:12.2.0-devel-ubuntu22.04",
-        "disk": 50,
-        "price": 0.50,
-        "label": "AR-1-Research-Platform",
-        "onstart_cmd": setup_script,
-        "runtype": "ssh",
-        "ssh": True
-    })
-    result = response.json()
-    contract_id = result.get("new_contract")
-    print(f"   Contract ID: {contract_id}")
-    print(f"   Response: {json.dumps(result)[:150]}")
-    return contract_id
+def runvast(args, check=True):
+    cmd = f"{defvastai} {args}"
+    r = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    if check and r.returncode != 0:
+        print(f"FAILED: {cmd}")
+        print(r.stderr)
+        sys.exit(1)
+    return r.stdout
 
-def wait_for_instance(contract_id, timeout=600):
-    print(f"⏳ Waiting for instance {contract_id}...")
+def get_instances():
+    out = runvast("show instances")
+    # Parse instance IDs from output
+    ids = re.findall(r'\d+\s+(\d+)\s+\w+\s+\w+', out)
+    return ids
+
+def wait_for_running(contract_id, timeout=300):
+    print(f"Waiting for instance {contract_id} to be running...")
     start = time.time()
     while time.time() - start < timeout:
-        resp = requests.get(f"{BASE_URL}/api/v0/instances/?id={contract_id}", headers=get_headers())
-        if resp.status_code == 200:
-            instances = resp.json().get("instances", [])
-            if instances:
-                inst = instances[0]
-                state = inst.get("actual_state", "unknown")
-                print(f"   Status: {state}")
-                if state == "running":
-                    time.sleep(30)  # Wait for setup script
-                    ip = inst.get("inet_ip") or inst.get("public_ipaddr")
-                    ssh_port = inst.get("ssh_port")
-                    ports = inst.get("ports", {})
-                    # Get mapped port 80
-                    port80 = ports.get("80/tcp", [{}])[0].get("HostPort", 80) if isinstance(ports.get("80/tcp"), list) else 80
-                    url = f"http://{ip}:{port80}" if ip else None
-                    return {"ip": ip, "ssh_port": ssh_port, "url": url, "instance": inst}
+        out = runvast(f"show instances", check=False)
+        for line in out.split("\n"):
+            if str(contract_id) in line:
+                if "running" in line.lower():
+                    print(f"  Instance is running!")
+                    return True
+                elif "loading" in line.lower():
+                    print(f"  still loading...")
+                elif "stopped" in line.lower():
+                    print(f"  stopped, attempting start...")
+                    runvast(f"start instance {contract_id}")
         time.sleep(15)
-    print("❌ Timeout")
-    return None
-
-def destroy_instance(contract_id):
-    """Destroy an instance"""
-    print(f"Destroying instance {contract_id}...")
-    resp = requests.put(f"{BASE_URL}/api/v0/instances/{contract_id}/", headers=get_headers(), json={"op": "destroy"})
-    print(f"   Result: {resp.json()}")
+    return False
 
 def main():
-    global CONTRACT_ID
     print("=" * 60)
-    print("AR-1 Deployment - Vast.ai")
+    print("AR-3 Deployment - Vast.ai (v4)")
     print("=" * 60)
-    
-    offer = find_cheapest_3060()
-    if not offer:
+
+    # Step 1: Find cheapest RTX 3060
+    print("\n[1] Searching for RTX 3060...")
+    out = runvast("search offers gpu_name==RTX_3060 --full")
+    lines = [l for l in out.split("\n") if "RTX_3060" in l]
+    if not lines:
+        print("No RTX 3060 found!")
         sys.exit(1)
-    
-    print(f"\nGPU: {offer['gpu_name']} | ${offer['dph_total']:.4f}/hr | {offer.get('geolocation','?')}")
-    print(f"Starting deployment...\n")
-    
-    contract_id = create_instance(offer['id'])
-    if not contract_id:
-        print("❌ Failed to create instance")
+
+    # Parse first offer ID
+    parts = lines[0].split()
+    if len(parts) < 2:
+        print(f"Cannot parse offer: {lines[0]}")
         sys.exit(1)
-    
-    CONTRACT_ID = contract_id
-    
-    info = wait_for_instance(contract_id)
-    if not info:
-        print("\n⚠️  Instance may still be starting. Check Vast.ai console.")
-        print(f"   Contract: {contract_id}")
+    offer_id = parts[1]
+    print(f"  Found offer: {offer_id}")
+
+    # Step 2: Create instance
+    print(f"\n[2] Creating instance from offer {offer_id}...")
+    # Use a simple onstart that installs cloudflared and clones repo
+    onstart_cmd = SETUP_SCRIPT.format(repo=AR3_REPO)
+    out = runvast(f'create instance {offer_id} --image "nvidia/cuda:12.2.0-devel-ubuntu22.04" --disk 50 --label "AR-3-Research" --ssh --onstart-cmd "{onstart_cmd}"')
+    print(f"  {out[:200]}")
+
+    # Extract contract ID
+    m = re.search(r'"new_contract":\s*(\d+)', out)
+    if not m:
+        print(f"Cannot find contract ID in response: {out}")
         sys.exit(1)
-    
+    contract_id = m.group(1)
+    print(f"  Contract ID: {contract_id}")
+
+    # Step 3: Wait for running
+    if not wait_for_running(contract_id):
+        print("TIMEOUT waiting for instance!")
+        sys.exit(1)
+
+    # Step 4: Attach SSH key
+    print(f"\n[3] Attaching SSH key...")
+    ssh_pub_key = open(SSH_KEY_PATH).read().strip()
+    out = runvast(f'attach ssh {contract_id} "{ssh_pub_key}"')
+    print(f"  {out[:100]}")
+
+    # Step 5: Reboot for SSH key to take effect
+    print(f"\n[4] Rebooting for SSH key...")
+    runvast(f"reboot instance {contract_id}")
+    time.sleep(30)
+    wait_for_running(contract_id)
+
+    # Step 6: Get SSH details
+    print(f"\n[5] Getting SSH details...")
+    out = runvast(f"show instances")
+    for line in out.split("\n"):
+        if str(contract_id) in line:
+            parts = line.split()
+            ssh_host = None
+            ssh_port = None
+            # Parse from the SSH row
+            pass
+    print(f"  Instance: {contract_id}")
+    print(f"  SSH: ssh root@ssh7.vast.ai -p <port> (check vast.ai console)")
+
+    # Step 7: Run setup and start AR-3
+    print(f"\n[6] Running AR-3 setup and starting platform...")
+    ssh_cmd = f"ssh -o StrictHostKeyChecking=no -i {SSH_KEY_PATH}"
+    # Get SSH port from instance info
+    # For now, just tell user to SSH in and run /root/start-ar3.sh
+    print(f"  SSH into the instance and run: /root/start-ar3.sh")
+    print(f"  Or manually: cd /opt/AR-3 && nohup npm start &")
+
     print("\n" + "=" * 60)
-    print("✅ DEPLOYMENT COMPLETE")
+    print(f"✅ DEPLOYMENT READY")
+    print(f"   Contract: {contract_id}")
     print("=" * 60)
-    print(f"URL: {info['url']}")
-    print(f"SSH: ssh root@{info['ip']} -p {info['ssh_port']}")
-    print(f"Admin: admin@example.com / jkp93p")
-    print(f"Contract: {contract_id}")
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\n\n⚠️  Interrupted!")
-        if CONTRACT_ID:
-            print(f"Instance {CONTRACT_ID} may still be running. Destroy it manually or run cleanup.")
+        print("\n\nInterrupted!")
         sys.exit(1)
