@@ -612,6 +612,9 @@ export async function startSpace(spaceId: string) {
   // Execute first cycle immediately
   const result = await executeResearchCycle(spaceId, defaultStagesWithIds[0].id)
 
+  // Start the continuous background loop
+  startBackgroundLoop(spaceId)
+
   return result
 }
 
