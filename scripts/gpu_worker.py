@@ -135,16 +135,53 @@ def execute_gpu_command(job: dict) -> dict:
         gpu_command = None
         
         # Strategy 1: Look for a JSON object with action="run_python" and code field
-        # Find all JSON objects in the prompt
-        json_matches = list(re.finditer(r'\{[^{}]*"action"[^{}]*"code"[^{}]*\}', prompt, re.DOTALL))
-        for match in json_matches:
-            try:
-                candidate = json.loads(match.group())
-                if isinstance(candidate.get('code'), str) and len(candidate['code']) > 10:
-                    gpu_command = candidate
-                    break
-            except json.JSONDecodeError:
-                continue
+        # Try parsing the entire prompt as JSON first
+        gpu_command = None
+        try:
+            parsed = json.loads(prompt.strip())
+            if isinstance(parsed, dict) and parsed.get('action') == 'run_python' and isinstance(parsed.get('code'), str):
+                gpu_command = parsed
+                log(f"Strategy 1a: Parsed full prompt as JSON GPU command")
+        except (json.JSONDecodeError, AttributeError):
+            pass
+        
+        # If full parse fails, try to find JSON objects with proper brace matching
+        if not gpu_command:
+            # Use a stack-based approach to find matching braces, then extract JSON
+            in_str = False
+            escape_next = False
+            brace_depth = 0
+            json_start = -1
+            for i, ch in enumerate(prompt):
+                if escape_next:
+                    escape_next = False
+                    continue
+                if ch == '\\' and in_str:
+                    escape_next = True
+                    continue
+                if ch == '"' and not escape_next:
+                    in_str = not in_str
+                    continue
+                if in_str:
+                    continue
+                if ch == '{':
+                    if brace_depth == 0:
+                        json_start = i
+                    brace_depth += 1
+                elif ch == '}':
+                    brace_depth -= 1
+                    if brace_depth == 0 and json_start >= 0:
+                        # Found a complete JSON object
+                        candidate_str = prompt[json_start:i+1]
+                        try:
+                            candidate = json.loads(candidate_str)
+                            if isinstance(candidate, dict) and candidate.get('action') == 'run_python' and isinstance(candidate.get('code'), str):
+                                gpu_command = candidate
+                                log(f"Strategy 1b: Found JSON GPU command at pos {json_start}")
+                                break
+                        except json.JSONDecodeError:
+                            pass
+                        json_start = -1
         
         # Strategy 2: Look for ```python blocks
         if not gpu_command:
