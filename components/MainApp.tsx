@@ -417,6 +417,7 @@ function CreateSpaceModal({ onClose, onSuccess }: { onClose: () => void; onSucce
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [initialPrompt, setInitialPrompt] = useState('')
+  const [useEmbeddings, setUseEmbeddings] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const token = localStorage.getItem('research_token')
@@ -433,7 +434,7 @@ function CreateSpaceModal({ onClose, onSuccess }: { onClose: () => void; onSucce
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ name, description, initialPrompt }),
+        body: JSON.stringify({ name, description, initialPrompt, useEmbeddings }),
       })
 
       if (!response.ok) {
@@ -501,6 +502,22 @@ function CreateSpaceModal({ onClose, onSuccess }: { onClose: () => void; onSucce
             <p className="text-sm text-dark-400 mt-2">
               This prompt will guide the autonomous research agents in their exploration.
             </p>
+          </div>
+
+
+          <div className="mb-6">
+            <label className="flex items-center gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={useEmbeddings}
+                onChange={(e) => setUseEmbeddings(e.target.checked)}
+                className="w-5 h-5 rounded border-dark-600 bg-dark-800 text-primary-600 focus:ring-primary-500"
+              />
+              <div>
+                <span className="font-medium">Enable Semantic Search</span>
+                <p className="text-sm text-dark-400">Use embeddings to find relevant context from prior experiments</p>
+              </div>
+            </label>
           </div>
 
           <div className="flex gap-3">

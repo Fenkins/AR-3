@@ -83,6 +83,7 @@ model Space {
   currentPhase    String       @default("PLANNING")
   totalTokens     Int          @default(0)
   totalCost       Float        @default(0)
+  useEmbeddings   Boolean      @default(false)
   experiments     Experiment[]
   breakthroughs   Breakthrough[]
   createdAt       DateTime     @default(now())

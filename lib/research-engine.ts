@@ -1,6 +1,8 @@
 import { prisma } from './prisma'
 import { callAI, AIConfig, AIMessage } from './ai'
 import { generateVariants, gradeVariant, selectBestVariant, saveVariantsToDatabase, Variant } from './variant-engine'
+import { buildEmbeddingContext } from './embeddings'
+import fs from 'fs'
 
 const logFile = '/tmp/ar1_debug.log'
 function debugLog(...args: any[]) {
@@ -8,8 +10,6 @@ function debugLog(...args: any[]) {
   fs.appendFileSync(logFile, new Date().toISOString() + ' ' + msg + '\n')
   console.log('[ResearchEngine]', ...args)
 }
-
-import fs from 'fs'
 
 export interface ResearchStage {
   id: string
@@ -270,7 +270,7 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
 
   // Get context from previous experiments
   const previousExperiments = space.experiments.slice(0, 10)
-  const messages = generateStagePrompt(space, currentStage, previousExperiments)
+  const messages = await generateStagePrompt(space, currentStage, previousExperiments)
 
   debugLog(`[executeResearchCycle] Calling AI for stage: ${currentStage.name}`)
   debugLog(`[executeResearchCycle] Agent: ${agent?.name} (${agent?.role}), Provider: ${serviceProvider?.provider}`)
@@ -530,7 +530,7 @@ function getNextStageId(stages: ResearchStage[], currentId: string): string {
   return stages[currentIndex + 1].id
 }
 
-function generateStagePrompt(space: any, stage: ResearchStage, previousExperiments: any[]): AIMessage[] {
+async function generateStagePrompt(space: any, stage: ResearchStage, previousExperiments: any[]): Promise<AIMessage[]> {
   let contextFromPrevious = ''
   if (previousExperiments.length > 0) {
     contextFromPrevious = `\n\nContext from Previous Work:\n${
@@ -540,7 +540,22 @@ function generateStagePrompt(space: any, stage: ResearchStage, previousExperimen
     }`
   }
 
-  const fullPrompt = `${stage.prompt}${contextFromPrevious}
+  // Add semantic search context from embeddings if enabled
+  let embeddingContext = ''
+  if (space.useEmbeddings) {
+    try {
+      embeddingContext = await buildEmbeddingContext(
+        space.initialPrompt,
+        space.userId,
+        space.id,
+        2000
+      )
+    } catch (e: any) {
+      debugLog('[generateStagePrompt] Embedding context error:', e.message)
+    }
+  }
+
+  const fullPrompt = `${stage.prompt}${contextFromPrevious}${embeddingContext}
 
 Research Goal: ${space.initialPrompt}
 
