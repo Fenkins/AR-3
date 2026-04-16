@@ -354,48 +354,146 @@ export async function selectBestVariant(variants: Variant[]): Promise<Variant> {
   return scored[0].variant
 }
 
+// Save variants to DB as first-class entities
 export async function saveVariantsToDatabase(
   spaceId: string,
   stageId: string,
-  variants: Variant[]
+  stageName: string,
+  variants: Variant[],
+  cycleNumber: number = 1
 ) {
-  // Store variants in experiment metadata
-  const experiment = await prisma.experiment.create({
-    data: {
-      spaceId,
-      phase: `VARIANTS_${stageId}`,
-      agentId: 'system',
-      agentName: 'Variant Generator',
-      prompt: JSON.stringify({ stageId, numVariants: variants.length }),
-      response: JSON.stringify(variants),
-      status: 'COMPLETED',
-      metrics: JSON.stringify({
-        type: 'variants',
-        stageId,
-        variants: variants.map(v => ({
-          id: v.id,
-          name: v.name,
-          numSteps: v.steps.length,
-        })),
-      }),
-    },
+  // Delete any existing variants for this stage/cycle to avoid duplicates on re-run
+  await prisma.variant.deleteMany({
+    where: { spaceId, stageId, cycleNumber },
   })
 
-  return experiment
+  // Create each variant with its steps
+  for (const variant of variants) {
+    await prisma.variant.create({
+      data: {
+        id: variant.id,
+        spaceId,
+        stageId,
+        stageName,
+        cycleNumber,
+        name: variant.name,
+        description: variant.description,
+        grade: variant.grade,
+        feedback: variant.feedback,
+        userRating: variant.userRating,
+        isSelected: variant.isSelected,
+        order: variant.order,
+        status: variant.status,
+        steps: {
+          create: variant.steps.map(step => ({
+            id: step.id,
+            name: step.name,
+            description: step.description,
+            order: step.order,
+            result: step.result,
+            grade: step.grade,
+            feedback: step.feedback,
+            userRating: step.userRating,
+            status: step.status,
+            isAuto: step.isAuto,
+            autoConfig: step.autoConfig ? JSON.stringify(step.autoConfig) : null,
+          })),
+        },
+      },
+    })
+  }
+}
+
+// Load variants from DB for a space
+export async function loadVariantsFromDb(spaceId: string, stageId?: string): Promise<Variant[]> {
+  const where = stageId ? { spaceId, stageId } : { spaceId }
+  const dbVariants = await prisma.variant.findMany({
+    where,
+    include: { steps: { orderBy: { order: 'asc' } } },
+    orderBy: [{ cycleNumber: 'desc' }, { order: 'asc' }],
+  })
+
+  return dbVariants.map(v => ({
+    id: v.id,
+    stageId: v.stageId,
+    name: v.name,
+    description: v.description || '',
+    stageName: v.stageName,
+    cycleNumber: v.cycleNumber,
+    grade: v.grade || undefined,
+    feedback: v.feedback || undefined,
+    userRating: v.userRating || undefined,
+    isSelected: v.isSelected,
+    order: v.order,
+    status: v.status as Variant['status'],
+    createdAt: v.createdAt,
+    steps: v.steps.map(s => ({
+      id: s.id,
+      variantId: s.variantId,
+      name: s.name,
+      description: s.description || '',
+      order: s.order,
+      result: s.result || undefined,
+      grade: s.grade || undefined,
+      feedback: s.feedback || undefined,
+      userRating: s.userRating || undefined,
+      isAuto: s.isAuto,
+      autoConfig: s.autoConfig ? JSON.parse(s.autoConfig) : undefined,
+      status: s.status as Step['status'],
+    })),
+  }))
+}
+
+// Update a single variant step in DB
+export async function updateVariantStepDb(
+  stepId: string,
+  updates: { result?: string; grade?: number; feedback?: string; status?: string }
+) {
+  await prisma.variantStep.update({
+    where: { id: stepId },
+    data: updates,
+  })
+}
+
+// Update variant grade/rating in DB
+export async function updateVariantDb(
+  variantId: string,
+  updates: { grade?: number; feedback?: string; userRating?: string; isSelected?: boolean; status?: string }
+) {
+  await prisma.variant.update({
+    where: { id: variantId },
+    data: updates,
+  })
+}
+
+// Select best variant from DB (factors in userRatings)
+export async function selectBestVariantFromDb(spaceId: string, stageId: string): Promise<Variant | null> {
+  const variants = await loadVariantsFromDb(spaceId, stageId)
+  const completed = variants.filter(v => v.status === 'COMPLETED')
+  if (completed.length === 0) return null
+
+  const scored = completed.map(v => {
+    let score = v.grade || 50
+    if (v.userRating === 'thumbs_up') score += 10
+    if (v.userRating === 'thumbs_down') score -= 20
+    const stepGrades = v.steps.filter(s => s.grade).map(s => s.grade!)
+    if (stepGrades.length > 0) {
+      score = (score + stepGrades.reduce((a, b) => a + b, 0) / stepGrades.length) / 2
+    }
+    return { variant: v, score }
+  })
+  scored.sort((a, b) => b.score - a.score)
+  return scored[0]?.variant || null
 }
 
 export async function updateVariantGrade(
-  experimentId: string,
+  variantId: string,
   grade: number,
   feedback: string,
   userRating?: string
 ) {
-  await prisma.experiment.update({
-    where: { id: experimentId },
-    data: {
-      grade,
-      feedback,
-      userRating,
-    },
+  await prisma.variant.update({
+    where: { id: variantId },
+    data: { grade, feedback, userRating },
   })
 }

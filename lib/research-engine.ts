@@ -1,6 +1,6 @@
 import { prisma } from './prisma'
 import { callAI, AIConfig, AIMessage } from './ai'
-import { generateVariants, gradeVariant, selectBestVariant, saveVariantsToDatabase, Variant } from './variant-engine'
+import { generateVariants, gradeVariant, selectBestVariant, saveVariantsToDatabase, updateVariantStepDb, updateVariantDb, selectBestVariantFromDb, loadVariantsFromDb, Variant } from './variant-engine'
 import { buildEmbeddingContext } from './embeddings'
 import fs from 'fs'
 
@@ -577,6 +577,13 @@ async function executeVariant(variant: Variant, spaceId: string, stageName: stri
       step.status = 'COMPLETED'
       step.grade = Math.min(100, Math.max(0, Math.floor(response.tokensUsed / 10)))
       
+      // Persist step result to DB
+      await updateVariantStepDb(step.id, {
+        result: response.content,
+        grade: step.grade,
+        status: 'COMPLETED',
+      })
+      
       await prisma.experiment.create({
         data: {
           spaceId: space.id,
@@ -611,6 +618,13 @@ async function executeVariant(variant: Variant, spaceId: string, stageName: stri
   variant.grade = graded.grade
   variant.feedback = graded.feedback
   variant.status = 'COMPLETED'
+
+  // Persist variant grade to DB
+  await updateVariantDb(variant.id, {
+    grade: graded.grade,
+    feedback: graded.feedback,
+    status: 'COMPLETED',
+  })
 
   return variant
 }
@@ -1052,7 +1066,7 @@ export async function generateStageVariants(
   )
 
   // Save to database
-  await saveVariantsToDatabase(spaceId, stageId, variants)
+  await saveVariantsToDatabase(spaceId, stageId, stage.name, variants, space.currentCycle)
 
   // Update execution state
   const state = getExecutionState(spaceId)

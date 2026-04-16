@@ -88,8 +88,47 @@ model Space {
   currentCycle    Int          @default(1)
   experiments     Experiment[]
   breakthroughs   Breakthrough[]
+  variants        Variant[]
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
+}
+
+model Variant {
+  id           String        @id @default(uuid())
+  spaceId      String
+  space        Space         @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  stageId      String
+  stageName    String
+  cycleNumber  Int           @default(1)
+  name         String
+  description  String?
+  grade        Float?
+  feedback     String?
+  userRating   String?       // thumbs_up or thumbs_down
+  isSelected   Boolean       @default(false)
+  order        Int           @default(0)
+  status       String        @default("PENDING") // PENDING, RUNNING, COMPLETED, FAILED
+  steps        VariantStep[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+}
+
+model VariantStep {
+  id          String   @id @default(uuid())
+  variantId   String
+  variant     Variant  @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  order      Int      @default(0)
+  result     String?
+  grade      Float?
+  feedback   String?
+  userRating String?  // thumbs_up or thumbs_down
+  status     String   @default("PENDING") // PENDING, RUNNING, COMPLETED, SKIPPED, FAILED
+  isAuto     Boolean  @default(true)
+  autoConfig String?  // JSON string for autoConfig
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 }
 
 model Experiment {
