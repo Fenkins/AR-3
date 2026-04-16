@@ -311,7 +311,8 @@ Feedback: [detailed feedback]
 Learnings: [key insights]
 Recommendation: [suggestion]`
 
-  const systemPrompt = gradingAgent.systemPrompt || 'You are an expert research grading agent. Evaluate variants rigorously and provide constructive feedback.'
+  const defaultGradingPrompt = 'You are an expert research grading agent. Evaluate variants rigorously and provide constructive feedback. Focus on the quality of actual results produced, not on the presence of reasoning. Score based on: scientific merit, concrete output quality, reproducibility, and relevance to the research goal.'
+  const systemPrompt = gradingAgent.systemPrompt || defaultGradingPrompt
 
   const response = await callAI(agentConfig, [
     { role: 'system', content: systemPrompt },

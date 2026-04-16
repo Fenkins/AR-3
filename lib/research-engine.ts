@@ -412,7 +412,7 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
       cost: response.cost,
       status: 'COMPLETED',
       cycleNumber: currentCycle,
-      result: response.content,
+      result: stripThinkingTags(response.content),
       metrics: JSON.stringify({
         stageId: currentStage.id,
         stageName: currentStage.name,
@@ -420,6 +420,12 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
       }),
     },
   })
+
+  // Quality gate: if stripped result is suspiciously empty, log a warning
+  const strippedResult = stripThinkingTags(response.content)
+  if (strippedResult.length < 100) {
+    debugLog(`[executeResearchCycle] WARNING: Result for ${currentStage.name} is only ${strippedResult.length} chars after stripping. Content preview: ${strippedResult.substring(0, 100)}`)
+  }
 
   // Update space
   await prisma.space.update({
@@ -567,9 +573,10 @@ async function executeVariant(variant: Variant, spaceId: string, stageName: stri
     if (step.status === 'COMPLETED') continue
 
     const useGpu = (space as any).useGpu ?? false
+    const variantDefaultPrompt = `You are executing variant "${variant.name}" of stage "${stageName}". Produce concrete results — no <thought> tags. Focus on actual output, findings, and deliverables.`
     const variantSystemPrompt = agent?.gpuPromptVariant && useGpu
       ? agent.gpuPromptVariant
-      : (agent?.systemPrompt || `You are executing variant "${variant.name}" of stage "${stageName}".`)
+      : (agent?.systemPrompt || variantDefaultPrompt)
 
     const messages: AIMessage[] = [
       { role: 'system', content: variantSystemPrompt },
@@ -721,8 +728,10 @@ Research Goal: ${space.initialPrompt}
 
 Execute your stage tasks thoroughly.`
 
-  // Use agent's custom system prompt if set, otherwise default
-  const systemPrompt = agent?.systemPrompt || 'You are an autonomous research agent. Be creative, thorough, and scientific.'
+  // Use agent's custom system prompt if set, otherwise results-focused default
+  // Explicitly tell agent to avoid thinking tags in final output
+  const defaultSystemPrompt = 'You are an expert research scientist. Your role is to produce actionable research results — not to describe your thinking process.\n\nIMPORTANT RULES:\n1. NEVER use <thought> or <think> tags in your output — they are not part of your deliverable\n2. Focus on concrete findings, code, data, and conclusions\n3. When reporting results, write as if communicating to a colleague who needs the facts\n4. Be direct and concise — prioritize substance over explanation\n5. If you would include a thought in your final output, remove it and keep only the useful content\n\nYour output will be parsed automatically — include only meaningful content.'
+  const systemPrompt = agent?.systemPrompt || defaultSystemPrompt
 
   return [
     { role: 'system', content: systemPrompt },
@@ -736,7 +745,10 @@ async function processEvaluationResults(spaceId: string, content: string) {
   const goldNuggetMatch = content.match(/(gold nugget|breakthrough|major discovery)/i)
 
   if (breakthroughMatch || goldNuggetMatch) {
-    const confidence = confidenceMatch ? parseFloat(confidenceMatch[1]) : 0.7
+    // Require meaningful confidence (>60%) to auto-verify; below that, leave unverified for human review
+    const confidence = confidenceMatch ? parseFloat(confidenceMatch[1]) : 0.5
+    const minConfidenceForAutoVerify = 0.6
+    const isVerified = confidence >= minConfidenceForAutoVerify
 
     await prisma.breakthrough.create({
       data: {
@@ -745,9 +757,10 @@ async function processEvaluationResults(spaceId: string, content: string) {
         description: stripThinkingTags(content).substring(0, 2000),
         category: 'EVALUATION',
         confidence,
-        verified: confidence > 0.8,
+        verified: isVerified,
       },
     })
+    debugLog(`[processEvaluationResults] Breakthrough ${isVerified ? 'auto-verified' : 'created unverified'} with confidence ${confidence}`)
   }
 }
 
@@ -923,6 +936,7 @@ export function startBackgroundLoop(spaceId: string): void {
       try {
         await executeResearchCycle(spaceId, currentStageId)
         consecutiveErrors = 0
+        debugLog(`[startBackgroundLoop] Cycle completed successfully for ${currentStage?.name}`)
       } catch (err: any) {
         consecutiveErrors++
         const isTimeout = err.message?.includes('timeout')
