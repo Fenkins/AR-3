@@ -1146,6 +1146,7 @@ function AdminView() {
   const [activeTab, setActiveTab] = useState('users')
   const [users, setUsers] = useState<any[]>([])
   const [config, setConfig] = useState<any>({})
+  const [gpuConfig, setGPUConfig] = useState<any>({ maxConcurrent: 1, jobTimeout: 300 })
   const [loading, setLoading] = useState(true)
   const token = typeof window !== 'undefined' ? localStorage.getItem('research_token') : null
 
@@ -1168,8 +1169,39 @@ function AdminView() {
     setLoading(false)
   }
 
+  const fetchGPUConfig = async () => {
+    try {
+      const res = await fetch('/api/jobs/gpu?action=config', {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setGPUConfig(data.config)
+      }
+    } catch (e) {
+      console.error('Failed to fetch GPU config:', e)
+    }
+  }
+
+  const handleUpdateGPUConfig = async (key: string, value: string) => {
+    const updates = { [key]: parseInt(value, 10) }
+    const res = await fetch('/api/jobs/gpu', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(updates),
+    })
+    if (res.ok) {
+      const data = await res.json()
+      setGPUConfig(data.config)
+    }
+  }
+
   useEffect(() => {
     fetchData()
+    fetchGPUConfig()
   }, [])
 
   const handleUpdateConfig = async (key: string, value: string) => {
@@ -1330,6 +1362,61 @@ function AdminView() {
                 />
                 <div className="w-11 h-6 bg-dark-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600"></div>
               </label>
+            </div>
+          </div>
+
+          <div className="bg-dark-900 rounded-lg p-6 border border-dark-700">
+            <h3 className="text-lg font-semibold mb-4">GPU Settings</h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium mb-2">Max Concurrent GPU Jobs</label>
+                <div className="flex items-center gap-4">
+                  <input
+                    type="range"
+                    min="1"
+                    max="8"
+                    value={gpuConfig.maxConcurrent || 1}
+                    onChange={(e) => handleUpdateGPUConfig('maxConcurrent', e.target.value)}
+                    className="flex-1"
+                  />
+                  <span className="text-lg font-mono w-8">{gpuConfig.maxConcurrent || 1}</span>
+                </div>
+                <p className="text-xs text-dark-400 mt-1">
+                  Increase for RTX 4090 (24GB) or multi-GPU setups. RTX 3060: 1-2 recommended.
+                </p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-2">Job Timeout (seconds)</label>
+                <div className="flex items-center gap-4">
+                  <input
+                    type="range"
+                    min="60"
+                    max="600"
+                    step="30"
+                    value={gpuConfig.jobTimeout || 300}
+                    onChange={(e) => handleUpdateGPUConfig('jobTimeout', e.target.value)}
+                    className="flex-1"
+                  />
+                  <span className="text-lg font-mono w-12">{gpuConfig.jobTimeout || 300}s</span>
+                </div>
+                <p className="text-xs text-dark-400 mt-1">
+                  Kill GPU jobs that run longer than this. 5 minutes is default.
+                </p>
+              </div>
+              <div className="pt-2 border-t border-dark-700">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="font-medium text-sm">GPU Worker Status</div>
+                    <div className="text-xs text-dark-400 mt-1">Shows current GPU config on the worker</div>
+                  </div>
+                  <button
+                    onClick={fetchGPUConfig}
+                    className="px-3 py-1 bg-dark-700 hover:bg-dark-600 rounded text-sm transition-colors"
+                  >
+                    Refresh
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>

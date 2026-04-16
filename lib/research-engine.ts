@@ -310,6 +310,7 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             spaceId,
+            spaceName: space.name,
             stageName: currentStage.name,
             prompt: response.content,  // LLM's GPU command instructions
             context: JSON.stringify({ previousExperiments: previousExperiments.slice(0, 5) }),

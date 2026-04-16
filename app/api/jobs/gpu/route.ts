@@ -7,6 +7,27 @@ import path from 'path'
 // File-based job queue (stored in /tmp/gpu_jobs.json on the Vast.ai instance)
 const JOB_QUEUE_FILE = '/tmp/gpu_jobs.json'
 const JOB_RESULTS_FILE = '/tmp/gpu_results.json'
+const GPU_CONFIG_FILE = '/tmp/gpu_config.json'
+
+interface GPUConfig {
+  maxConcurrent: number
+  jobTimeout: number
+}
+
+function getGPUConfig(): GPUConfig {
+  try {
+    if (!fs.existsSync(GPU_CONFIG_FILE)) {
+      return { maxConcurrent: 1, jobTimeout: 300 }
+    }
+    return JSON.parse(fs.readFileSync(GPU_CONFIG_FILE, 'utf-8'))
+  } catch {
+    return { maxConcurrent: 1, jobTimeout: 300 }
+  }
+}
+
+function writeGPUConfig(config: GPUConfig) {
+  fs.writeFileSync(GPU_CONFIG_FILE, JSON.stringify(config, null, 2))
+}
 
 interface GPUJob {
   jobId: string
@@ -49,7 +70,7 @@ function writeResults(results: Record<string, GPUResult>) {
   fs.writeFileSync(JOB_RESULTS_FILE, JSON.stringify(results, null, 2))
 }
 
-// GET: poll for job result
+// GET: poll for job result OR get GPU config
 export async function GET(request: NextRequest) {
   // Skip auth for internal server-side calls (no auth header = internal)
   const authHeader = request.headers.get('authorization')
@@ -59,6 +80,12 @@ export async function GET(request: NextRequest) {
   }
 
   const { searchParams } = new URL(request.url)
+  const action = searchParams.get('action')
+
+  if (action === 'config') {
+    return NextResponse.json({ config: getGPUConfig() })
+  }
+
   const jobId = searchParams.get('jobId')
 
   if (!jobId) {
@@ -117,6 +144,42 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ jobId, status: 'pending', message: 'GPU job queued' })
   } catch (error) {
     console.error('[GPU Jobs API] Error:', error)
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+  }
+}
+
+// PUT: update GPU config (admin only)
+export async function PUT(request: NextRequest) {
+  const authHeader = request.headers.get('authorization')
+  if (!authHeader) {
+    return NextResponse.json({ error: 'Authentication required' }, { status: 401 })
+  }
+  
+  const auth = await authMiddleware(request)
+  if ('json' in auth) return auth
+  
+  if (auth.user.role !== 'ADMIN') {
+    return NextResponse.json({ error: 'Admin access required' }, { status: 403 })
+  }
+
+  try {
+    const body = await request.json()
+    const { maxConcurrent, jobTimeout } = body
+
+    const config = getGPUConfig()
+    
+    if (maxConcurrent !== undefined) {
+      config.maxConcurrent = Math.max(1, Math.min(16, parseInt(maxConcurrent, 10) || 1))
+    }
+    if (jobTimeout !== undefined) {
+      config.jobTimeout = Math.max(30, Math.min(3600, parseInt(jobTimeout, 10) || 300))
+    }
+
+    writeGPUConfig(config)
+
+    return NextResponse.json({ config, message: 'GPU config updated' })
+  } catch (error) {
+    console.error('[GPU Config API] Error:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
