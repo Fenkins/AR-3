@@ -219,6 +219,9 @@ export function updateExecutionState(spaceId: string, updates: Partial<SpaceExec
   const existing = executionStates.get(spaceId)
   if (existing) {
     executionStates.set(spaceId, { ...existing, ...updates, lastUpdated: new Date() })
+  } else if (updates.spaceId) {
+    // Create new state if it doesn't exist (e.g., after server restart)
+    executionStates.set(spaceId, { lastUpdated: new Date(), ...updates } as SpaceExecutionState)
   }
 }
 
