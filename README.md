@@ -1,4 +1,4 @@
-# AR-2 Research Platform
+# AR-3 Research Platform
 
 **Autonomous Research Platform with Stage-Based Workflow, Variants, and Multi-Agent Orchestration**
 
@@ -7,7 +7,7 @@
 
 ## Overview
 
-AR-1 is an interactive research platform that enables autonomous agent-driven software invention and discovery. It features a dynamic stage-based workflow with variant exploration, intelligent grading, and user feedback integration.
+AR-3 is an interactive research platform that enables autonomous agent-driven software invention and discovery. It features a dynamic stage-based workflow with variant exploration, intelligent grading, and user feedback integration.
 
 ## ✨ Features
 
