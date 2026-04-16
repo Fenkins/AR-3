@@ -42,6 +42,10 @@ export async function GET(
         breakthroughs: {
           orderBy: { createdAt: 'desc' },
         },
+        variants: {
+          include: { steps: { orderBy: { order: 'asc' } } },
+          orderBy: [{ cycleNumber: 'desc' }, { order: 'asc' }],
+        },
       },
     })
 
