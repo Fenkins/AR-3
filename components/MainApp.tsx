@@ -566,6 +566,9 @@ function SpaceDetailModalNew({ space, onClose, onUpdate }: { space: any; onClose
   const [expandedExperiment, setExpandedExperiment] = useState<any>(null)
   const [expandedCycles, setExpandedCycles] = useState<Set<number>>(new Set())
   const [expandedStages, setExpandedStages] = useState<Set<string>>(new Set())
+  const [expandedVariants, setExpandedVariants] = useState<Set<string>>(new Set())
+  const [editingFeedback, setEditingFeedback] = useState<Record<string, string>>({})
+  const [ratingLoading, setRatingLoading] = useState<string | null>(null)
 
   const fetchSpaceDetail = async () => {
     const response = await fetch(`/api/spaces/${space.id}`, {
@@ -573,6 +576,38 @@ function SpaceDetailModalNew({ space, onClose, onUpdate }: { space: any; onClose
     })
     const data = await response.json()
     setSpaceDetail(data.space)
+  }
+
+  const handleVariantRate = async (variantId: string, rating: 'thumbs_up' | 'thumbs_down') => {
+    setRatingLoading(variantId)
+    try {
+      const res = await fetch(`/api/variants/${variantId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: 'rate', userRating: rating }),
+      })
+      if (res.ok) {
+        await fetchSpaceDetail()
+      }
+    } finally {
+      setRatingLoading(null)
+    }
+  }
+
+  const handleVariantFeedbackUpdate = async (variantId: string) => {
+    const feedback = editingFeedback[variantId]
+    if (feedback === undefined) return
+    try {
+      const res = await fetch(`/api/variants/${variantId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: 'feedback', feedback }),
+      })
+      if (res.ok) {
+        await fetchSpaceDetail()
+        setEditingFeedback(prev => { const s = {...prev}; delete s[variantId]; return s })
+      }
+    } catch {}
   }
 
   useEffect(() => {
@@ -660,6 +695,181 @@ function SpaceDetailModalNew({ space, onClose, onUpdate }: { space: any; onClose
                 </div>
               </div>
             )}
+
+            {/* Variants Panel */}
+            {spaceDetail.variants && spaceDetail.variants.length > 0 && (() => {
+              // Group variants by stage
+              const byStage: Record<string, any[]> = {}
+              for (const v of spaceDetail.variants) {
+                const key = v.stageName || 'UNKNOWN'
+                if (!byStage[key]) byStage[key] = []
+                byStage[key].push(v)
+              }
+              // Get current cycle or most recent
+              const currentCycle = spaceDetail.currentCycle || Math.max(...spaceDetail.variants.map((v: any) => v.cycleNumber || 1), 1)
+              const currentStageVariants = byStage[spaceDetail.currentPhase] || []
+              
+              return (
+                <div className="mt-6">
+                  <h4 className="text-lg font-semibold mb-3">Variants</h4>
+                  
+                  {/* Current stage variants */}
+                  {currentStageVariants.length > 0 && (
+                    <div className="mb-4">
+                      <p className="text-sm text-dark-400 mb-2">{currentStageVariants.length} variant{currentStageVariants.length !== 1 ? 's' : ''} for current stage ({spaceDetail.currentPhase})</p>
+                      <div className="space-y-3">
+                        {currentStageVariants.map((variant: any) => {
+                          const isExpanded = expandedVariants.has(variant.id)
+                          const isEditing = editingFeedback[variant.id] !== undefined
+                          return (
+                            <div key={variant.id} className="bg-dark-800 rounded border border-dark-700 overflow-hidden">
+                              {/* Variant header */}
+                              <div className="flex items-center justify-between p-3">
+                                <div className="flex items-center gap-3">
+                                  <div className="flex items-center gap-1">
+                                    <button
+                                      onClick={() => handleVariantRate(variant.id, 'thumbs_up')}
+                                      disabled={ratingLoading === variant.id}
+                                      className={`p-1.5 rounded transition-colors ${variant.userRating === 'thumbs_up' ? 'bg-green-600 text-white' : 'bg-dark-700 text-dark-400 hover:text-green-400 hover:bg-dark-600'}`}
+                                      title="Thumbs up"
+                                    >
+                                      👍
+                                    </button>
+                                    <button
+                                      onClick={() => handleVariantRate(variant.id, 'thumbs_down')}
+                                      disabled={ratingLoading === variant.id}
+                                      className={`p-1.5 rounded transition-colors ${variant.userRating === 'thumbs_down' ? 'bg-red-600 text-white' : 'bg-dark-700 text-dark-400 hover:text-red-400 hover:bg-dark-600'}`}
+                                      title="Thumbs down"
+                                    >
+                                      👎
+                                    </button>
+                                  </div>
+                                  <div>
+                                    <span className="font-medium">{variant.name || variant.stageName}</span>
+                                    <span className="text-xs text-dark-400 ml-2">Grade: {variant.grade != null ? variant.grade.toFixed(1) : '—'}</span>
+                                    <span className="text-xs text-dark-500 ml-2">{variant.steps?.length || 0} steps</span>
+                                    {variant.isSelected && (
+                                      <span className="ml-2 text-xs bg-primary-900/50 text-primary-400 px-2 py-0.5 rounded">Selected</span>
+                                    )}
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  {variant.feedback && (
+                                    <span className="text-xs text-dark-400 max-w-32 truncate">{variant.feedback}</span>
+                                  )}
+                                  <button
+                                    onClick={() => setExpandedVariants(prev => { const s = new Set(prev); s.has(variant.id) ? s.delete(variant.id) : s.add(variant.id); return s; })}
+                                    className="text-dark-400 hover:text-white text-sm"
+                                  >
+                                    {isExpanded ? '−' : '+'}
+                                  </button>
+                                </div>
+                              </div>
+                              
+                              {/* Variant detail (steps, feedback) */}
+                              {isExpanded && (
+                                <div className="border-t border-dark-700 p-3 bg-dark-900">
+                                  {/* Feedback editor */}
+                                  <div className="mb-3">
+                                    <label className="text-xs text-dark-400 block mb-1">Feedback</label>
+                                    {isEditing ? (
+                                      <div className="flex gap-2">
+                                        <input
+                                          type="text"
+                                          className="flex-1 bg-dark-800 border border-dark-600 rounded px-3 py-1.5 text-sm"
+                                          value={editingFeedback[variant.id]}
+                                          onChange={e => setEditingFeedback(prev => ({ ...prev, [variant.id]: e.target.value }))}
+                                          placeholder="Enter feedback..."
+                                        />
+                                        <button
+                                          onClick={() => handleVariantFeedbackUpdate(variant.id)}
+                                          className="px-3 py-1.5 bg-primary-600 hover:bg-primary-500 rounded text-sm"
+                                        >
+                                          Save
+                                        </button>
+                                        <button
+                                          onClick={() => setEditingFeedback(prev => { const s = {...prev}; delete s[variant.id]; return s })}
+                                          className="px-3 py-1.5 bg-dark-700 hover:bg-dark-600 rounded text-sm"
+                                        >
+                                          Cancel
+                                        </button>
+                                      </div>
+                                    ) : (
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-sm text-dark-300 flex-1">{variant.feedback || 'No feedback yet'}</span>
+                                        <button
+                                          onClick={() => setEditingFeedback(prev => ({ ...prev, [variant.id]: variant.feedback || '' }))}
+                                          className="text-xs text-primary-400 hover:text-primary-300"
+                                        >
+                                          Edit
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+                                  
+                                  {/* Steps */}
+                                  {variant.steps && variant.steps.length > 0 && (
+                                    <div>
+                                      <label className="text-xs text-dark-400 block mb-1">Steps</label>
+                                      <div className="space-y-2">
+                                        {variant.steps.map((step: any) => (
+                                          <div key={step.id} className="bg-dark-800 rounded p-2 border border-dark-700">
+                                            <div className="flex items-center justify-between">
+                                              <span className="text-sm font-medium">{step.name}</span>
+                                              <span className={`text-xs px-2 py-0.5 rounded ${step.status === 'COMPLETED' ? 'bg-green-900/50 text-green-400' : step.status === 'FAILED' ? 'bg-red-900/50 text-red-400' : 'bg-dark-700 text-dark-400'}`}>
+                                                {step.status}
+                                              </span>
+                                            </div>
+                                            {step.grade != null && (
+                                              <div className="text-xs text-dark-400 mt-1">Grade: {step.grade.toFixed(1)}</div>
+                                            )}
+                                            {step.feedback && (
+                                              <div className="text-xs text-dark-500 mt-1">{step.feedback}</div>
+                                            )}
+                                            {step.result && (
+                                              <div className="text-xs text-dark-500 mt-1 font-mono max-h-16 overflow-y-auto">{step.result.slice(0, 200)}</div>
+                                            )}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Other cycles' variants collapsed by default */}
+                  {Object.entries(byStage).filter(([stage]) => stage !== spaceDetail.currentPhase).map(([stage, variants]) => (
+                    <div key={stage} className="mt-3">
+                      <div
+                        className="flex items-center justify-between cursor-pointer hover:text-primary-400 p-2 rounded bg-dark-800/50"
+                        onClick={() => setExpandedStages(prev => { const s = new Set(prev); const k = `variant-${stage}`; s.has(k) ? s.delete(k) : s.add(k); return s; })}
+                      >
+                        <span className="text-sm font-medium">{stage} — {variants.length} variant{(variants as any).length !== 1 ? 's' : ''}</span>
+                        <button className="text-dark-400 hover:text-white text-sm">
+                          {expandedStages.has(`variant-${stage}`) ? '−' : '+'}
+                        </button>
+                      </div>
+                      {expandedStages.has(`variant-${stage}`) && (
+                        <div className="mt-2 pl-4 space-y-2">
+                          {(variants as any[]).map((variant: any) => (
+                            <div key={variant.id} className="text-xs text-dark-400 bg-dark-900 rounded p-2">
+                              <span className="font-medium">Cycle {variant.cycleNumber}:</span> {variant.name || variant.stageName} (Grade: {variant.grade != null ? variant.grade.toFixed(1) : '—'})
+                              {variant.userRating && <span className="ml-2">{variant.userRating === 'thumbs_up' ? '👍' : '👎'}</span>}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )
+            })()}
 
             {/* Execution History: Cycles → Stages → Experiments */}
             {spaceDetail.experiments && spaceDetail.experiments.length > 0 && (() => {
