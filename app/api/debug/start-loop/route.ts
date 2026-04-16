@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { authMiddleware } from '../../middleware'
+import { authMiddleware } from '@/app/api/middleware'
 import { startBackgroundLoop } from '@/lib/research-engine'
 
 export async function PUT(request: NextRequest) {
