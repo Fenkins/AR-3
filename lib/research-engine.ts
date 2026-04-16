@@ -694,7 +694,7 @@ async function processEvaluationResults(spaceId: string, content: string) {
       data: {
         spaceId,
         title: extractTitle(content),
-        description: content.substring(0, 1000),
+        description: stripThinkingTags(content).substring(0, 2000),
         category: 'EVALUATION',
         confidence,
         verified: confidence > 0.8,
@@ -703,12 +703,28 @@ async function processEvaluationResults(spaceId: string, content: string) {
   }
 }
 
+function stripThinkingTags(text: string): string {
+  // Remove thinking/reasoning tags from MiniMax and similar models
+  // MiniMax uses Chinese characters: <think> (think) and </think> (finish thought)
+  return text
+    .replace(/<thought>[\s\S]*?<\/thought>/gi, '')
+    .replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, '')
+    .replace(/\u8ba8\u8bba[\s\S]*?\u7ed3\u675f/gi, '')  // 讨论...结束 (discuss...finish)
+    .replace(/\u300c[\s\S]*?\u300d/g, '') // Remove quoted content
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 function extractTitle(content: string): string {
-  const titleMatch = content.match(/^(?:Title:|Finding:|Breakthrough:)\s*(.+)$/im)
+  // Strip thinking tags first so they don't pollute the title
+  const clean = stripThinkingTags(content)
+  const titleMatch = clean.match(/^(?:Title:|Finding:|Breakthrough:|##\s*)(.+)$/im)
   if (titleMatch) {
     return titleMatch[1].trim().substring(0, 200)
   }
-  return content.split('\n')[0].substring(0, 200) || 'New Finding'
+  // Use first meaningful non-empty line
+  const lines = clean.split('\n').map(l => l.trim()).filter(l => l.length > 10)
+  return lines[0]?.substring(0, 200) || 'New Finding'
 }
 
 export async function startSpace(spaceId: string) {

@@ -354,7 +354,7 @@ function SpacesView() {
               <StatusBadge status={space.status} />
             </div>
             <p className="text-dark-400 text-sm mb-4 line-clamp-2">
-              {space.description || 'No description'}
+              {space.initialPrompt ? space.initialPrompt.substring(0, 120) + '...' : 'No prompt'}
             </p>
             <div className="space-y-2 text-sm">
               <div className="flex justify-between">
@@ -562,6 +562,8 @@ function SpaceDetailModalNew({ space, onClose, onUpdate }: { space: any; onClose
   const token = localStorage.getItem('research_token')
   const [spaceDetail, setSpaceDetail] = useState(space)
   const [showOldView, setShowOldView] = useState(false)
+  const [expandedBreakthrough, setExpandedBreakthrough] = useState<any>(null)
+  const [expandedExperiment, setExpandedExperiment] = useState<any>(null)
 
   const fetchSpaceDetail = async () => {
     const response = await fetch(`/api/spaces/${space.id}`, {
@@ -647,11 +649,66 @@ function SpaceDetailModalNew({ space, onClose, onUpdate }: { space: any; onClose
                 <h4 className="text-lg font-semibold mb-3">Breakthroughs</h4>
                 <div className="space-y-3">
                   {spaceDetail.breakthroughs.map((b: any) => (
-                    <div key={b.id} className="bg-dark-800 rounded p-4 border-l-4 border-yellow-500">
+                    <div key={b.id} className="bg-dark-800 rounded p-4 border-l-4 border-yellow-500 cursor-pointer hover:bg-dark-700" onClick={() => setExpandedBreakthrough(b)}>
                       <h5 className="font-medium">{b.title}</h5>
-                      <p className="text-sm text-dark-400 mt-2">Confidence: {(b.confidence * 100).toFixed(0)}%</p>
+                      <p className="text-sm text-dark-400 mt-1">Confidence: {(b.confidence * 100).toFixed(0)}% | {b.verified ? '✓ Verified' : 'Pending'}</p>
+                      <p className="text-xs text-dark-500 mt-1">Click to view details</p>
                     </div>
                   ))}
+                </div>
+              </div>
+            )}
+
+            {/* Experiments */}
+            {spaceDetail.experiments && spaceDetail.experiments.length > 0 && (
+              <div className="mt-6">
+                <h4 className="text-lg font-semibold mb-3">Recent Experiments</h4>
+                <div className="space-y-2">
+                  {spaceDetail.experiments.slice(0, 20).map((exp: any) => (
+                    <div key={exp.id} className="bg-dark-800 rounded p-3 border border-dark-700 cursor-pointer hover:border-primary-500" onClick={() => setExpandedExperiment(exp)}>
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-medium">{exp.phase}</span>
+                        <span className="text-xs text-dark-500">{exp.tokensUsed} tokens</span>
+                      </div>
+                      <p className="text-xs text-dark-400 mt-1">Click to view full response</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Breakthrough Detail Modal */}
+            {expandedBreakthrough && (
+              <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" onClick={() => setExpandedBreakthrough(null)}>
+                <div className="bg-dark-900 rounded-lg p-6 max-w-2xl w-full max-h-[80vh] overflow-y-auto border border-dark-700" onClick={e => e.stopPropagation()}>
+                  <div className="flex items-start justify-between mb-4">
+                    <h3 className="text-xl font-bold">{expandedBreakthrough.title}</h3>
+                    <button onClick={() => setExpandedBreakthrough(null)} className="text-dark-400 hover:text-white text-2xl">&times;</button>
+                  </div>
+                  <div className="text-sm text-dark-400 mb-4">
+                    Confidence: {(expandedBreakthrough.confidence * 100).toFixed(0)}% | {expandedBreakthrough.verified ? '✓ Verified' : 'Pending'} | {expandedBreakthrough.category}
+                  </div>
+                  <div className="text-sm text-dark-200 whitespace-pre-wrap overflow-wrap-break">
+                    {expandedBreakthrough.description || 'No description available'}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Experiment Detail Modal */}
+            {expandedExperiment && (
+              <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" onClick={() => setExpandedExperiment(null)}>
+                <div className="bg-dark-900 rounded-lg p-6 max-w-3xl w-full max-h-[80vh] overflow-y-auto border border-dark-700" onClick={e => e.stopPropagation()}>
+                  <div className="flex items-start justify-between mb-4">
+                    <div>
+                      <h3 className="text-xl font-bold">{expandedExperiment.phase}</h3>
+                      <p className="text-sm text-dark-400 mt-1">{expandedExperiment.tokensUsed} tokens | Cost: ${expandedExperiment.cost?.toFixed(4)}</p>
+                    </div>
+                    <button onClick={() => setExpandedExperiment(null)} className="text-dark-400 hover:text-white text-2xl">&times;</button>
+                  </div>
+                  <div className="text-sm text-dark-200 whitespace-pre-wrap overflow-wrap-break">
+                    {expandedExperiment.response || 'No response yet'}
+                  </div>
                 </div>
               </div>
             )}
