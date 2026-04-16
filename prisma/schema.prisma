@@ -84,6 +84,7 @@ model Space {
   totalTokens     Int          @default(0)
   totalCost       Float        @default(0)
   useEmbeddings   Boolean      @default(false)
+  useGpu         Boolean      @default(false)
   experiments     Experiment[]
   breakthroughs   Breakthrough[]
   createdAt       DateTime     @default(now())

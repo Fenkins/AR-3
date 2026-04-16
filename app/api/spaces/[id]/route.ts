@@ -189,6 +189,18 @@ export async function PUT(
           return NextResponse.json({ error: error.message }, { status: 500 })
         }
 
+      case 'update_settings': {
+        const { useGpu, useEmbeddings } = body
+        const updateData: any = {}
+        if (typeof useGpu === 'boolean') updateData.useGpu = useGpu
+        if (typeof useEmbeddings === 'boolean') updateData.useEmbeddings = useEmbeddings
+        const updated = await prisma.space.update({
+          where: { id: params.id },
+          data: updateData,
+        })
+        return NextResponse.json({ success: true, space: updated })
+      }
+
       default:
         return NextResponse.json({ error: `Unknown action: ${action}` }, { status: 400 })
     }

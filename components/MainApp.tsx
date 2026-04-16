@@ -418,6 +418,7 @@ function CreateSpaceModal({ onClose, onSuccess }: { onClose: () => void; onSucce
   const [description, setDescription] = useState('')
   const [initialPrompt, setInitialPrompt] = useState('')
   const [useEmbeddings, setUseEmbeddings] = useState(false)
+  const [useGpu, setUseGpu] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const token = localStorage.getItem('research_token')
@@ -434,7 +435,7 @@ function CreateSpaceModal({ onClose, onSuccess }: { onClose: () => void; onSucce
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ name, description, initialPrompt, useEmbeddings }),
+        body: JSON.stringify({ name, description, initialPrompt, useEmbeddings, useGpu }),
       })
 
       if (!response.ok) {
@@ -516,6 +517,21 @@ function CreateSpaceModal({ onClose, onSuccess }: { onClose: () => void; onSucce
               <div>
                 <span className="font-medium">Enable Semantic Search</span>
                 <p className="text-sm text-dark-400">Use embeddings to find relevant context from prior experiments</p>
+              </div>
+            </label>
+          </div>
+
+          <div className="mb-6">
+            <label className="flex items-center gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={useGpu}
+                onChange={(e) => setUseGpu(e.target.checked)}
+                className="w-5 h-5 rounded border-dark-600 bg-dark-800 text-primary-600 focus:ring-primary-500"
+              />
+              <div>
+                <span className="font-medium">Enable GPU Acceleration</span>
+                <p className="text-sm text-dark-400">Use GPU-optimized prompts for Implementation and Testing stages (RTX 3060)</p>
               </div>
             </label>
           </div>

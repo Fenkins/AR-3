@@ -19,6 +19,7 @@ export interface ResearchStage {
   order: number
   isActive: boolean
   gpuEnabled?: boolean  // if true, route to GPU worker instead of LLM API
+  gpuPrompt?: string  // GPU-optimized prompt variant (used when space.useGpu === true)
   status?: 'pending' | 'running' | 'completed' | 'failed'
   numVariants?: number | 'auto'
   stepsPerVariant?: number | 'auto'
@@ -97,7 +98,17 @@ Be specific and practical in your planning.`,
   {
     name: 'Implementation',
     description: 'Execute the implementation based on plan',
-    prompt: `Your primary output MUST be a JSON object with a GPU command. Format:
+    prompt: `Implement the solution based on the planning stage output.
+
+Your tasks:
+1. Execute the implementation plan
+2. Write code, configure systems, or create artifacts
+3. Address technical challenges as they arise
+4. Incorporate all previous stage feedback
+5. Produce a viable, working implementation
+
+Be specific and technical. Produce concrete deliverables.`,
+    gpuPrompt: `Your primary output MUST be a JSON object with a GPU command. Format:
 {"action": "run_python", "code": "YOUR_PYTHON_CODE"}
 
 The GPU worker will execute this Python code on an NVIDIA RTX 3060 GPU with torch installed.
@@ -120,7 +131,17 @@ Focus on PROOFS OF CONCEPT. Show that the concept works.`,
   {
     name: 'Testing',
     description: 'Test implementation and determine viability',
-    prompt: `Your primary output MUST be a JSON object with a GPU command if your tests need GPU. Format:
+    prompt: `Test the implementation thoroughly.
+
+Your tasks:
+1. Run tests and validate the implementation
+2. Identify issues, bugs, or weaknesses
+3. Determine if implementation passes quality bar
+4. Document what went wrong if it failed
+5. Provide clear verdict: PASS or FAIL with reasoning
+
+Be critical but fair.`,
+    gpuPrompt: `Your primary output MUST be a JSON object with a GPU command if your tests need GPU. Format:
 {"action": "run_python", "code": "YOUR_TEST_CODE"}
 
 The GPU worker will execute this on an NVIDIA RTX 3060 GPU with torch.
@@ -302,9 +323,10 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
     response = await callAI(agentConfig, messages)
     debugLog(`[executeResearchCycle] AI call succeeded, tokens: ${response.tokensUsed}, cost: ${response.cost}`)
 
-    // If stage has gpuEnabled, also submit to GPU worker based on LLM's response
+    // If stage has gpuEnabled AND space has useGpu enabled, submit to GPU worker
     // The LLM's response text contains GPU commands in structured format
-    if (currentStage.gpuEnabled) {
+    const useGpu = (space as any).useGpu ?? false
+    if (currentStage.gpuEnabled && useGpu) {
       debugLog(`[executeResearchCycle] GPU-enabled stage, submitting LLM output to GPU worker`)
       try {
         const gpuResponse = await fetch(`${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/api/jobs/gpu`, {
@@ -641,7 +663,11 @@ async function generateStagePrompt(space: any, stage: ResearchStage, previousExp
     }
   }
 
-  const fullPrompt = `${stage.prompt}${contextFromPrevious}${embeddingContext}
+  // Pick prompt variant: gpuPrompt if GPU enabled on space, otherwise regular prompt
+  const useGpu = (space as any).useGpu ?? false
+  const activePrompt = (useGpu && stage.gpuPrompt) ? stage.gpuPrompt : stage.prompt
+
+  const fullPrompt = `${activePrompt}${contextFromPrevious}${embeddingContext}
 
 Research Goal: ${space.initialPrompt}
 
