@@ -100,18 +100,19 @@ Be specific and practical in your planning.`,
     prompt: `Your primary output MUST be a JSON object with a GPU command. Format:
 {"action": "run_python", "code": "YOUR_PYTHON_CODE"}
 
-The GPU worker will execute this Python code on an NVIDIA RTX 3060 GPU. Write self-contained Python code using torch that runs independently.
+The GPU worker will execute this Python code on an NVIDIA RTX 3060 GPU with torch installed.
 
-Example: {"action": "run_python", "code": "import torch; x = torch.randn(100, 100, device='cuda'); print('CUDA:', torch.cuda.is_available(), 'GPU:', torch.cuda.get_device_name(0)); print('Result:', x.sum().item())"}
+CRITICAL: The 'code' field must contain ONLY valid Python code - no markdown, no explanations, no comments outside the code. The code must be self-contained and runnable.
 
-CONTEXT: Implement the solution based on the planning stage output.
-- Execute the implementation plan
-- Write code, configure systems, or create artifacts
-- Address technical challenges as they arise
-- Incorporate all previous stage feedback
-- Produce a viable, working implementation
+Example: {"action": "run_python", "code": "import torch; import numpy as np; x = torch.randn(100, 100, device='cuda'); print('CUDA:', torch.cuda.is_available()); print('Result:', x.sum().item())"}
 
-Be specific and technical in your code. The code you output will be executed on GPU.`,
+Your implementation tasks:
+1. Build a PROTOTYPE demonstrating the research concept
+2. Use torch for tensor operations — use .cuda() to move tensors to GPU
+3. Include print statements showing: what you're testing, input shapes, output results
+4. Make code DEBUGGABLE — if it fails, print output should help diagnose why
+
+Focus on PROOFS OF CONCEPT. Show that the concept works.`,
     order: 3,
     isActive: true,
     gpuEnabled: true,  // GPU needed for model training / compute-intensive work
@@ -122,18 +123,19 @@ Be specific and technical in your code. The code you output will be executed on 
     prompt: `Your primary output MUST be a JSON object with a GPU command if your tests need GPU. Format:
 {"action": "run_python", "code": "YOUR_TEST_CODE"}
 
-The GPU worker will execute this on an NVIDIA RTX 3060 GPU.
+The GPU worker will execute this on an NVIDIA RTX 3060 GPU with torch.
 
-Example: {"action": "run_python", "code": "import torch; model = torch.nn.Linear(10, 10).cuda(); x = torch.randn(1, 10, device='cuda'); y = model(x); print('Output:', y.shape, y.device)"}
+CRITICAL: The 'code' field must contain ONLY valid Python code - no markdown, no explanations. The code must be self-contained and runnable.
 
-CONTEXT: Test the implementation thoroughly.
-- Run tests and validate the implementation
-- Identify issues, bugs, or weaknesses
-- Determine if implementation passes quality bar
-- Document what went wrong if it failed
-- Provide clear verdict: PASS or FAIL with reasoning
+Example: {"action": "run_python", "code": "import torch; import numpy as np; x1 = torch.randn(64, 128, device='cuda'); x2 = torch.randn(64, 128, device='cuda'); cosine = torch.nn.functional.cosine_similarity(x1, x2, dim=1); print('Mean similarity:', cosine.mean().item(), 'Std:', cosine.std().item())"}
 
-Be critical but fair. Output JSON GPU commands only if your tests actually need GPU execution.`,
+Your testing tasks:
+1. Run QUANTITATIVE experiments testing the hypothesis
+2. Measure specific things: accuracy, convergence, collaboration quality, vector alignment, etc.
+3. Include clear METRICS in your print statements
+4. State your VERDICT at the end: PASS (hypothesis supported) or FAIL (hypothesis not supported)
+
+Be rigorous. Use statistics over multiple runs. Output JSON GPU commands only for tests that actually need the GPU.`,
     order: 4,
     isActive: true,
     gpuEnabled: true,  // GPU needed for inference on trained models

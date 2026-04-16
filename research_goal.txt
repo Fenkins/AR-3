@@ -1,0 +1,25 @@
+# ODE Multi-Model Latent Space Research - Research Goal
+
+## Core Research Question
+How can multiple models of the SAME EXACT KIND, TYPE, AND SIZE work together at inference time to get a significantly better response right off the bat, without using reasoning approaches?
+
+## Approach
+Instead of reasoning/workflow approaches, focus on **dynamically adjusting vectors within latent space** during inference using an ODE-like approach.
+
+## Key Ideas to Explore
+1. Derive the source vector and observe where it goes / what shape it traces
+2. Spot the same vector across multiple models and adjust weights within one model by comparing with vectors from another model ("learning at inference")
+3. Other novel techniques for inference-time collaboration
+
+## Technical Goals
+- Scale reasoning/refinement effort during inference itself
+- Enable the system to learn at the same time during inference
+- Support combining hundreds of models (like a corpus callosum)
+- Use diffusion text models such as LLADA and DreamLM dLLMs
+
+## What NOT to Use
+- No reasoning approaches (ReAct, chain-of-thought, etc.)
+- No multi-turn refinement waiting for full workflow completion
+
+## Success Criteria
+A system where multiple identical models dynamically share and adjust latent vectors at inference time to produce superior outputs compared to any single model working alone.
