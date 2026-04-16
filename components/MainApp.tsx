@@ -564,6 +564,8 @@ function SpaceDetailModalNew({ space, onClose, onUpdate }: { space: any; onClose
   const [showOldView, setShowOldView] = useState(false)
   const [expandedBreakthrough, setExpandedBreakthrough] = useState<any>(null)
   const [expandedExperiment, setExpandedExperiment] = useState<any>(null)
+  const [expandedCycles, setExpandedCycles] = useState<Set<number>>(new Set())
+  const [expandedStages, setExpandedStages] = useState<Set<string>>(new Set())
 
   const fetchSpaceDetail = async () => {
     const response = await fetch(`/api/spaces/${space.id}`, {
@@ -659,23 +661,130 @@ function SpaceDetailModalNew({ space, onClose, onUpdate }: { space: any; onClose
               </div>
             )}
 
-            {/* Experiments */}
-            {spaceDetail.experiments && spaceDetail.experiments.length > 0 && (
-              <div className="mt-6">
-                <h4 className="text-lg font-semibold mb-3">Recent Experiments</h4>
-                <div className="space-y-2">
-                  {spaceDetail.experiments.slice(0, 20).map((exp: any) => (
-                    <div key={exp.id} className="bg-dark-800 rounded p-3 border border-dark-700 cursor-pointer hover:border-primary-500" onClick={() => setExpandedExperiment(exp)}>
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm font-medium">{exp.phase}</span>
-                        <span className="text-xs text-dark-500">{exp.tokensUsed} tokens</span>
-                      </div>
-                      <p className="text-xs text-dark-400 mt-1">Click to view full response</p>
-                    </div>
-                  ))}
+            {/* Execution History: Cycles → Stages → Experiments */}
+            {spaceDetail.experiments && spaceDetail.experiments.length > 0 && (() => {
+              const STAGE_ORDER = ['INVESTIGATION', 'PROPOSITION', 'PLANNING', 'IMPLEMENTATION', 'TESTING', 'VERIFICATION', 'EVALUATION']
+              const byCycle: Record<number, Record<string, any[]>> = {}
+              for (const exp of spaceDetail.experiments) {
+                const cyc = exp.cycleNumber || 1
+                if (!byCycle[cyc]) byCycle[cyc] = {}
+                const ph = exp.phase || 'UNKNOWN'
+                if (!byCycle[cyc][ph]) byCycle[cyc][ph] = []
+                byCycle[cyc][ph].push(exp)
+              }
+              const cycles = Object.keys(byCycle).map(Number).sort((a, b) => b - a)
+              const totalCycles = Math.max(...cycles, 1)
+              const displayCycles = cycles.slice(0, 10)
+
+              return (
+                <div className="mt-6">
+                  <div className="flex items-center justify-between mb-3">
+                    <h4 className="text-lg font-semibold">Execution History</h4>
+                    <span className="text-xs text-dark-400">Cycle {spaceDetail.currentCycle} of {totalCycles}</span>
+                  </div>
+                  <div className="space-y-2">
+                    {displayCycles.map(cycleNum => {
+                      const cycleStages = byCycle[cycleNum]
+                      const stageCount = Object.keys(cycleStages).length
+                      const expCount = Object.values(cycleStages).flat().length
+                      return (
+                        <div key={cycleNum} className="bg-dark-800 rounded border border-dark-700">
+                          <div
+                            className="flex items-center justify-between p-3 cursor-pointer hover:bg-dark-700 rounded"
+                            onClick={() => setExpandedCycles(prev => { const s = new Set(prev); s.has(cycleNum) ? s.delete(cycleNum) : s.add(cycleNum); return s; })}
+                          >
+                            <div>
+                              <span className="font-medium text-primary-400">Cycle {cycleNum}</span>
+                              <span className="text-xs text-dark-400 ml-3">{stageCount} stages, {expCount} experiments</span>
+                            </div>
+                            <button className="text-dark-400 hover:text-white text-lg">
+                              {expandedCycles.has(cycleNum) ? '−' : '+'}
+                            </button>
+                          </div>
+                          {expandedCycles.has(cycleNum) && (
+                            <div className="px-3 pb-3 border-t border-dark-700">
+                              {STAGE_ORDER.filter(stage => cycleStages[stage]?.length > 0).map(stage => {
+                                const stageExps = cycleStages[stage]
+                                return (
+                                  <div key={stage} className="mt-3">
+                                    <div
+                                      className="flex items-center justify-between cursor-pointer hover:text-primary-400"
+                                      onClick={() => setExpandedStages(prev => { const s = new Set(prev); s.has(`${cycleNum}-${stage}`) ? s.delete(`${cycleNum}-${stage}`) : s.add(`${cycleNum}-${stage}`); return s; })}
+                                    >
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-sm font-medium">{stage}</span>
+                                        <span className="text-xs text-dark-500">{stageExps.length} exp{stageExps.length !== 1 ? 's' : ''}</span>
+                                      </div>
+                                      <button className="text-dark-400 hover:text-white text-sm">
+                                        {expandedStages.has(`${cycleNum}-${stage}`) ? '−' : '+'}
+                                      </button>
+                                    </div>
+                                    {expandedStages.has(`${cycleNum}-${stage}`) && (
+                                      <div className="mt-2 pl-4 border-l border-dark-600 space-y-2">
+                                        {stageExps.map((exp: any) => (
+                                          <div
+                                            key={exp.id}
+                                            className="bg-dark-900 rounded p-2 border border-dark-700 cursor-pointer hover:border-primary-500"
+                                            onClick={() => setExpandedExperiment(exp)}
+                                          >
+                                            <div className="flex items-center justify-between">
+                                              <span className="text-xs font-medium">{exp.phase}</span>
+                                              <span className="text-xs text-dark-500">{exp.tokensUsed.toLocaleString()} tokens</span>
+                                            </div>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                )
+                              })}
+                              {Object.keys(cycleStages).filter(s => !STAGE_ORDER.includes(s)).map(stage => {
+                                const stageExps = cycleStages[stage]
+                                return (
+                                  <div key={stage} className="mt-3">
+                                    <div
+                                      className="flex items-center justify-between cursor-pointer hover:text-primary-400"
+                                      onClick={() => setExpandedStages(prev => { const s = new Set(prev); s.has(`${cycleNum}-${stage}`) ? s.delete(`${cycleNum}-${stage}`) : s.add(`${cycleNum}-${stage}`); return s; })}
+                                    >
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-sm font-medium text-yellow-400">{stage}</span>
+                                        <span className="text-xs text-dark-500">{stageExps.length} exp{stageExps.length !== 1 ? 's' : ''}</span>
+                                      </div>
+                                      <button className="text-dark-400 hover:text-white text-sm">
+                                        {expandedStages.has(`${cycleNum}-${stage}`) ? '−' : '+'}
+                                      </button>
+                                    </div>
+                                    {expandedStages.has(`${cycleNum}-${stage}`) && (
+                                      <div className="mt-2 pl-4 border-l border-dark-600 space-y-2">
+                                        {stageExps.map((exp: any) => (
+                                          <div
+                                            key={exp.id}
+                                            className="bg-dark-900 rounded p-2 border border-dark-700 cursor-pointer hover:border-primary-500"
+                                            onClick={() => setExpandedExperiment(exp)}
+                                          >
+                                            <div className="flex items-center justify-between">
+                                              <span className="text-xs font-medium">{exp.phase}</span>
+                                              <span className="text-xs text-dark-500">{exp.tokensUsed.toLocaleString()} tokens</span>
+                                            </div>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                    {displayCycles.length === 0 && (
+                      <p className="text-dark-400 text-sm text-center py-4">No experiments yet</p>
+                    )}
+                  </div>
                 </div>
-              </div>
-            )}
+              )
+            })()}
 
             {/* Breakthrough Detail Modal */}
             {expandedBreakthrough && (

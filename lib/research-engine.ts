@@ -41,6 +41,7 @@ export interface SpaceExecutionState {
   lastErrorType?: 'TIMEOUT' | 'RATE_LIMIT' | 'API_ERROR' | 'OTHER'
   retryCount: number
   retryCountByStage: Record<string, number>  // track retries per stage
+  currentCycle: number  // track which cycle number we're on (increments when we wrap from Evaluation back to Investigation
 }
 
 export const DEFAULT_STAGES: Omit<ResearchStage, 'id'>[] = [
@@ -287,6 +288,7 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
 
   // Check if we have pending variants to execute instead
   const state = getExecutionState(spaceId)
+  const currentCycle = state?.currentCycle ?? 1
   if (state && state.variants && state.variants.length > 0) {
     const pendingVariant = state.variants.find(v => v.stageId === currentStage.id && v.status === 'PENDING')
     if (pendingVariant) {
@@ -409,10 +411,12 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
       tokensUsed: response.tokensUsed,
       cost: response.cost,
       status: 'COMPLETED',
+      cycleNumber: currentCycle,
       result: response.content,
       metrics: JSON.stringify({
         stageId: currentStage.id,
         stageName: currentStage.name,
+        cycleNumber: currentCycle,
       }),
     },
   })
@@ -430,10 +434,25 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
 
   // Update execution state
   const nextStageId = getNextStageId(stages, currentStage.id)
+  
+  // Check if we just completed Evaluation (last stage) — this means a full cycle completed
+  // Next stage will be Investigation (first stage), so increment cycle counter
+  let newCycle = currentCycle
+  if (currentStage.name === 'Evaluation') {
+    newCycle = currentCycle + 1
+    debugLog(`[executeResearchCycle] Cycle ${currentCycle} completed, starting cycle ${newCycle}`)
+    // Persist cycle to DB
+    await prisma.space.update({
+      where: { id: spaceId },
+      data: { currentCycle: newCycle },
+    })
+  }
+
   updateExecutionState(spaceId, {
     currentStageId: nextStageId,
     currentPhase: currentStage.name,
     lastUpdated: new Date(),
+    currentCycle: newCycle,
   })
 
   // Check for breakthroughs
@@ -753,6 +772,12 @@ export async function startSpace(spaceId: string) {
     lastUpdated: new Date(),
     retryCount: 0,
     retryCountByStage: {},
+    currentCycle: 1,
+  })
+
+  await prisma.space.update({
+    where: { id: spaceId },
+    data: { currentCycle: 1 },
   })
 
   // Execute first cycle immediately
@@ -942,6 +967,7 @@ export async function resumeSpace(spaceId: string) {
     lastUpdated: new Date(),
     retryCount: 0,
     retryCountByStage: {},
+    currentCycle: (space as any).currentCycle || 1,
   })
 
   await prisma.space.update({
@@ -1197,6 +1223,7 @@ Keep your response concise (3-5 sentences).`
     lastUpdated: new Date(),
     retryCount: 0,
     retryCountByStage: {},
+    currentCycle: 1,
   })
 
   // Pre-allocate variants and steps for all recommended stages - IN PARALLEL
