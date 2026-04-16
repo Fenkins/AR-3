@@ -10,6 +10,8 @@ interface Agent {
   role: string
   order: number
   isActive: boolean
+  systemPrompt?: string | null
+  gpuPromptVariant?: string | null
   serviceProvider: {
     id: string
     provider: string
@@ -42,11 +44,8 @@ export default function Agents() {
   const [loading, setLoading] = useState(true)
   const [showPrePopulateModal, setShowPrePopulateModal] = useState(false)
   const [prePopProvider, setPrePopProvider] = useState<string>('')
-  const [prePopApiKey, setPrePopApiKey] = useState<string>('')
-  const [prePopModels, setPrePopModels] = useState<string[]>([])
-  const [prePopSelectedModel, setPrePopSelectedModel] = useState<string>('')
-  const [prePopFetchingModels, setPrePopFetchingModels] = useState(false)
-  const [prePopLoading, setPrePopLoading] = useState(false)
+  const [expandedPromptAgent, setExpandedPromptAgent] = useState<string | null>(null)
+  const [editingPrompt, setEditingPrompt] = useState<{ systemPrompt?: string; gpuPromptVariant?: string } | null>(null)
 
   const handleDelete = async (id: string) => {
     if (!confirm('Delete this agent?')) return
@@ -214,12 +213,85 @@ export default function Agents() {
                           Edit
                         </button>
                         <button
+                          onClick={() => {
+                            setExpandedPromptAgent(expandedPromptAgent === agent.id ? null : agent.id)
+                            setEditingPrompt({ systemPrompt: agent.systemPrompt || '', gpuPromptVariant: agent.gpuPromptVariant || '' })
+                          }}
+                          className={`px-3 py-1.5 rounded text-sm transition-colors ${expandedPromptAgent === agent.id ? 'bg-primary-600 text-white' : 'bg-dark-700 hover:bg-dark-600'}`}
+                        >
+                          Prompts
+                        </button>
+                        <button
                           onClick={() => handleDelete(agent.id)}
                           className="px-3 py-1.5 bg-red-600/20 hover:bg-red-600/30 text-red-300 rounded text-sm transition-colors"
                         >
                           ✕
                         </button>
                       </div>
+                      
+                      {/* Prompt editor (expanded) */}
+                      {expandedPromptAgent === agent.id && editingPrompt && (
+                        <div className="mt-3 pt-3 border-t border-dark-600">
+                          <div className="mb-3">
+                            <label className="text-xs text-dark-400 block mb-1">System Prompt (default)</label>
+                            <textarea
+                              className="w-full bg-dark-900 border border-dark-600 rounded p-2 text-sm font-mono"
+                              rows={4}
+                              value={editingPrompt.systemPrompt}
+                              onChange={e => setEditingPrompt(p => p ? { ...p, systemPrompt: e.target.value } : null)}
+                              placeholder="Enter custom system prompt for this agent..."
+                            />
+                            <p className="text-xs text-dark-500 mt-1">Overrides the hardcoded stage prompt. Leave blank to use default.</p>
+                          </div>
+                          <div className="mb-3">
+                            <label className="text-xs text-dark-400 block mb-1">GPU Mode Prompt Variant</label>
+                            <textarea
+                              className="w-full bg-dark-900 border border-dark-600 rounded p-2 text-sm font-mono"
+                              rows={4}
+                              value={editingPrompt.gpuPromptVariant}
+                              onChange={e => setEditingPrompt(p => p ? { ...p, gpuPromptVariant: e.target.value } : null)}
+                              placeholder="Enter prompt for GPU execution mode..."
+                            />
+                            <p className="text-xs text-dark-500 mt-1">Used when this agent runs with useGpu=true. Leave blank to use system prompt.</p>
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={async () => {
+                                try {
+                                  const token = localStorage.getItem('research_token')
+                                  const res = await fetch(`/api/agents/${agent.id}`, {
+                                    method: 'PUT',
+                                    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                                    body: JSON.stringify({
+                                      systemPrompt: editingPrompt.systemPrompt || null,
+                                      gpuPromptVariant: editingPrompt.gpuPromptVariant || null,
+                                    }),
+                                  })
+                                  if (res.ok) {
+                                    fetchData()
+                                    setExpandedPromptAgent(null)
+                                    setEditingPrompt(null)
+                                  }
+                                } catch (err) {
+                                  console.error('Failed to save prompts:', err)
+                                }
+                              }}
+                              className="px-4 py-1.5 bg-primary-600 hover:bg-primary-500 rounded text-sm"
+                            >
+                              Save Prompts
+                            </button>
+                            <button
+                              onClick={() => {
+                                setExpandedPromptAgent(null)
+                                setEditingPrompt(null)
+                              }}
+                              className="px-4 py-1.5 bg-dark-700 hover:bg-dark-600 rounded text-sm"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>

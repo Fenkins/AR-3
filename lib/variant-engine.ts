@@ -311,7 +311,10 @@ Feedback: [detailed feedback]
 Learnings: [key insights]
 Recommendation: [suggestion]`
 
+  const systemPrompt = gradingAgent.systemPrompt || 'You are an expert research grading agent. Evaluate variants rigorously and provide constructive feedback.'
+
   const response = await callAI(agentConfig, [
+    { role: 'system', content: systemPrompt },
     { role: 'user', content: prompt },
   ])
 

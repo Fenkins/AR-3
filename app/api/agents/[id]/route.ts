@@ -55,6 +55,8 @@ export async function PUT(
         role: body.role,
         order: body.order,
         isActive: body.isActive !== undefined ? body.isActive : true,
+        systemPrompt: body.systemPrompt !== undefined ? body.systemPrompt : undefined,
+        gpuPromptVariant: body.gpuPromptVariant !== undefined ? body.gpuPromptVariant : undefined,
       },
       include: {
         serviceProvider: {

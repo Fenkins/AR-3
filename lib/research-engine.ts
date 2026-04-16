@@ -316,7 +316,7 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
 
   // Get context from previous experiments
   const previousExperiments = space.experiments.slice(0, 10)
-  const messages = await generateStagePrompt(space, currentStage, previousExperiments)
+  const messages = await generateStagePrompt(space, currentStage, previousExperiments, agent)
 
   debugLog(`[executeResearchCycle] Calling AI for stage: ${currentStage.name}`)
   debugLog(`[executeResearchCycle] Agent: ${agent?.name} (${agent?.role}), Provider: ${serviceProvider?.provider}`)
@@ -566,8 +566,13 @@ async function executeVariant(variant: Variant, spaceId: string, stageName: stri
   for (const step of variant.steps) {
     if (step.status === 'COMPLETED') continue
 
+    const useGpu = (space as any).useGpu ?? false
+    const variantSystemPrompt = agent?.gpuPromptVariant && useGpu
+      ? agent.gpuPromptVariant
+      : (agent?.systemPrompt || `You are executing variant "${variant.name}" of stage "${stageName}".`)
+
     const messages: AIMessage[] = [
-      { role: 'system', content: `You are executing variant "${variant.name}" of stage "${stageName}".` },
+      { role: 'system', content: variantSystemPrompt },
       { role: 'user', content: `${step.description}\n\nResearch Goal: ${space.initialPrompt}\n\nExecute this step and provide results.` },
     ]
 
@@ -674,7 +679,7 @@ function getNextStageId(stages: ResearchStage[], currentId: string): string {
   return stages[currentIndex + 1].id
 }
 
-async function generateStagePrompt(space: any, stage: ResearchStage, previousExperiments: any[]): Promise<AIMessage[]> {
+async function generateStagePrompt(space: any, stage: ResearchStage, previousExperiments: any[], agent?: any): Promise<AIMessage[]> {
   let contextFromPrevious = ''
   if (previousExperiments.length > 0) {
     contextFromPrevious = `\n\nContext from Previous Work:\n${
@@ -699,9 +704,16 @@ async function generateStagePrompt(space: any, stage: ResearchStage, previousExp
     }
   }
 
-  // Pick prompt variant: gpuPrompt if GPU enabled on space, otherwise regular prompt
+  // Pick prompt variant: gpuPromptVariant from agent > stage.gpuPrompt > stage.prompt
   const useGpu = (space as any).useGpu ?? false
-  const activePrompt = (useGpu && stage.gpuPrompt) ? stage.gpuPrompt : stage.prompt
+  let activePrompt = stage.prompt
+  if (useGpu) {
+    if (agent?.gpuPromptVariant) {
+      activePrompt = agent.gpuPromptVariant
+    } else if (stage.gpuPrompt) {
+      activePrompt = stage.gpuPrompt
+    }
+  }
 
   const fullPrompt = `${activePrompt}${contextFromPrevious}${embeddingContext}
 
@@ -709,8 +721,11 @@ Research Goal: ${space.initialPrompt}
 
 Execute your stage tasks thoroughly.`
 
+  // Use agent's custom system prompt if set, otherwise default
+  const systemPrompt = agent?.systemPrompt || 'You are an autonomous research agent. Be creative, thorough, and scientific.'
+
   return [
-    { role: 'system', content: 'You are an autonomous research agent. Be creative, thorough, and scientific.' },
+    { role: 'system', content: systemPrompt },
     { role: 'user', content: fullPrompt },
   ]
 }

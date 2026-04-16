@@ -68,6 +68,8 @@ model Agent {
   role               String
   order              Int              @default(0)
   isActive           Boolean          @default(true)
+  systemPrompt       String?          // Custom system prompt (overrides hardcoded stage prompt)
+  gpuPromptVariant   String?          // Separate prompt variant when useGpu=true
   createdAt          DateTime         @default(now())
   updatedAt          DateTime         @updatedAt
 }
