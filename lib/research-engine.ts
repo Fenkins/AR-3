@@ -892,11 +892,46 @@ export async function pauseSpace(spaceId: string) {
 }
 
 export async function resumeSpace(spaceId: string) {
-  updateExecutionState(spaceId, { isRunning: true })
+  // Reconstruct execution state from database since in-memory state was lost on restart
+  const space = await prisma.space.findFirst({
+    where: { id: spaceId },
+    include: { experiments: { orderBy: { createdAt: 'desc' }, take: 50 } },
+  })
+  if (!space) throw new Error('Space not found')
+
+  let stages: any[] = []
+  try {
+    const metadata = JSON.parse(space.description || '{}')
+    stages = metadata.stages || []
+  } catch {}
+
+  if (stages.length === 0) {
+    stages = DEFAULT_STAGES.map((s, i) => ({ ...s, id: `stage_${i}` }))
+  }
+
+  // Find current stage from execution or default to first
+  const currentStage = stages[0]
+  const currentStageId = currentStage?.id || 'stage_0'
+
+  updateExecutionState(spaceId, {
+    spaceId,
+    isRunning: true,
+    currentStageId,
+    currentPhase: currentStage?.name || 'Investigation',
+    variants: [],
+    experiments: space.experiments,
+    lastUpdated: new Date(),
+    retryCount: 0,
+    retryCountByStage: {},
+  })
+
   await prisma.space.update({
     where: { id: spaceId },
     data: { status: 'RUNNING' },
   })
+
+  // Restart background loop
+  startBackgroundLoop(spaceId)
 }
 
 export async function stopSpace(spaceId: string) {
