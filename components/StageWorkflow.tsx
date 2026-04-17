@@ -157,10 +157,17 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
     }
   }, [spaceId, token])
 
-  // Initial fetch — runs once on mount (stages changes = setup complete, not a loop trigger)
+  // Initial fetch
   useEffect(() => {
     fetchSpaceData()
   }, [fetchSpaceData])
+
+  // Re-fetch when user switches stage tabs (currentStageIndex changes)
+  useEffect(() => {
+    if (setupComplete) {
+      fetchSpaceData(false)
+    }
+  }, [currentStageIndex])
 
   // Polling for updates when running
   useEffect(() => {

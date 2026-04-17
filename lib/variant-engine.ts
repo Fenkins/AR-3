@@ -196,8 +196,18 @@ step_12: <imperative sentence>
 step_13: <imperative sentence>
 step_14: <imperative sentence>
 step_15: <imperative sentence>
+step_16: <imperative sentence>
+step_17: <imperative sentence>
+step_18: <imperative sentence>
+step_19: <imperative sentence>
+step_20: <imperative sentence>
+step_21: <imperative sentence>
+step_22: <imperative sentence>
+step_23: <imperative sentence>
+step_24: <imperative sentence>
+step_25: <imperative sentence>
 
-CRITICAL: Replace ALL angle-bracket placeholders with real content. Each step must be a concrete action sentence relevant to "${initialPrompt}".`
+CRITICAL: You MUST generate AT LEAST ${numStepsTarget} steps. Replace ALL step placeholders with real content. Each step must be a concrete action sentence relevant to "${initialPrompt}". Do not stop before step_25.`
 
       let response: AIResponse
       try {
