@@ -669,7 +669,7 @@ async function executeVariant(variant: Variant, spaceId: string, stageName: stri
 
     const messages: AIMessage[] = [
       { role: 'system', content: variantSystemPrompt },
-      { role: 'user', content: `${step.description}\n\nResearch Goal: ${space.initialPrompt}\n\nExecute this step and provide results.` },
+      { role: 'user', content: `Step: ${step.description}\n\nResearch Goal: ${space.initialPrompt}\n\nExecute this step and provide concrete results. Be concise — focus on findings and deliverables.` },
     ]
 
     try {

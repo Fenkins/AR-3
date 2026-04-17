@@ -133,6 +133,7 @@ async function callMiniMax(config: AIConfig, messages: AIMessage[]): Promise<AIR
     completion = await openai.chat.completions.create({
       model: config.model,
       messages: messages.map(m => ({ role: m.role, content: m.content })),
+      max_tokens: 4000,  // Cap response to keep context window manageable
       temperature: 0.7,
       stream: false,
     })
