@@ -101,11 +101,12 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
       
       if (data.space) {
         setSpace(data.space)
-        // Check if setup is complete
-        if (data.stages && data.stages.length > 0) {
+        // Setup is complete if we have stages OR if setupStatus is COMPLETED/FAILED
+        const setupDone = !!(data.stages?.length || ['COMPLETED','FAILED'].includes(data.space.setupStatus))
+        if (setupDone) setSetupComplete(true)
+        
+        if (data.stages?.length > 0) {
           setStages(data.stages)
-          setSetupComplete(true)
-          
           // Find current stage index
           if (data.execution?.currentStageId) {
             const idx = data.stages.findIndex((s: Stage) => s.id === data.execution.currentStageId)
@@ -144,7 +145,7 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
     }
   }, [spaceId, token, currentStageIndex, stages])
 
-  // Initial fetch
+  // Initial fetch — runs once on mount (stages changes = setup complete, not a loop trigger)
   useEffect(() => {
     fetchSpaceData()
   }, [fetchSpaceData])
