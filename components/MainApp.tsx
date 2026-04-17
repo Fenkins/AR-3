@@ -1604,7 +1604,7 @@ function AdminView() {
   const [activeTab, setActiveTab] = useState('users')
   const [users, setUsers] = useState<any[]>([])
   const [config, setConfig] = useState<any>({})
-  const [gpuConfig, setGPUConfig] = useState<any>({ maxConcurrent: 1, jobTimeout: 300 })
+  const [gpuConfig, setGPUConfig] = useState<any>({ maxConcurrent: 1, jobTimeout: 3600 })
   const [loading, setLoading] = useState(true)
   const token = typeof window !== 'undefined' ? localStorage.getItem('research_token') : null
 
@@ -1844,21 +1844,27 @@ function AdminView() {
                 </p>
               </div>
               <div>
-                <label className="block text-sm font-medium mb-2">Job Timeout (seconds)</label>
+                <label className="block text-sm font-medium mb-2">Job Timeout</label>
                 <div className="flex items-center gap-4">
                   <input
                     type="range"
-                    min="60"
-                    max="600"
-                    step="30"
-                    value={gpuConfig.jobTimeout || 300}
-                    onChange={(e) => handleUpdateGPUConfig('jobTimeout', e.target.value)}
+                    min="1"
+                    max="24"
+                    step="1"
+                    value={Math.min(24, Math.max(1, Math.round((gpuConfig.jobTimeout || 3600) / 3600)))}
+                    onChange={(e) => {
+                      const hours = parseInt(e.target.value)
+                      const seconds = hours * 3600 // 1-24 hours mapped to seconds
+                      handleUpdateGPUConfig('jobTimeout', String(seconds))
+                    }}
                     className="flex-1"
                   />
-                  <span className="text-lg font-mono w-12">{gpuConfig.jobTimeout || 300}s</span>
+                  <span className="text-lg font-mono w-20 text-right">
+                    {(gpuConfig.jobTimeout || 3600) >= 86400 ? 'Unlimited' : `${Math.round((gpuConfig.jobTimeout || 3600) / 3600)}h`}
+                  </span>
                 </div>
                 <p className="text-xs text-dark-400 mt-1">
-                  Kill GPU jobs that run longer than this. 5 minutes is default.
+                  Max runtime per GPU job. 1h is default; 24h = Unlimited.
                 </p>
               </div>
               <div className="pt-2 border-t border-dark-700">
