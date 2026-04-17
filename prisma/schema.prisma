@@ -91,6 +91,8 @@ model Space {
   setupStatus     String?      // 'PENDING', 'RUNNING', 'COMPLETED', 'FAILED' — set during thinking_setup
   setupError      String?      // Last error encountered during thinking_setup
   setupStep       String?      // Human-readable step description for UI progress
+  defaultNumVariants Int         @default(3)   // Default variants per stage
+  defaultStepsPerVariant Int    @default(25)  // Default steps per variant
   experiments     Experiment[]
   breakthroughs   Breakthrough[]
   variants        Variant[]

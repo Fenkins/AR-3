@@ -26,7 +26,7 @@ interface Variant {
   userRating?: string
   isSelected: boolean
   order: number
-  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED'
+  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'PENDING_REVIEW'
 }
 
 interface Step {
@@ -35,7 +35,7 @@ interface Step {
   description: string
   order: number
   isAuto: boolean
-  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED'
+  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'PENDING_REVIEW'
   result?: string
   grade?: number
   userRating?: string
@@ -1062,6 +1062,11 @@ function VariantsModal({ variants, onSelect, onExecute, selectedVariantId, onClo
               >
                 <div className="flex items-start justify-between mb-2">
                   <h5 className="font-medium">{variant.name}</h5>
+                  {(variant.status === 'PENDING_REVIEW' || variant.name.includes('pending review')) && (
+                    <span className="px-2 py-0.5 text-xs rounded bg-yellow-500/20 text-yellow-300">
+                      pending
+                    </span>
+                  )}
                   {variant.grade && (
                     <span className={`px-2 py-0.5 text-xs rounded ${
                       variant.grade >= 80 ? 'bg-green-500/20 text-green-300' :
@@ -1072,15 +1077,16 @@ function VariantsModal({ variants, onSelect, onExecute, selectedVariantId, onClo
                     </span>
                   )}
                 </div>
-                <p className="text-sm text-dark-400 mb-2">{variant.description}</p>
+                <p className={`text-sm mb-2 ${variant.status === 'PENDING_REVIEW' ? 'text-yellow-400' : 'text-dark-400'}`}>{variant.description}</p>
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-dark-500">{variant.steps.length} steps</span>
                   <span className={`px-2 py-0.5 text-xs rounded capitalize ${
                     variant.status === 'COMPLETED' ? 'bg-green-500/20 text-green-300' :
                     variant.status === 'RUNNING' ? 'bg-yellow-500/20 text-yellow-300' :
+                    variant.status === 'PENDING_REVIEW' ? 'bg-yellow-500/20 text-yellow-300' :
                     'bg-dark-700 text-dark-400'
                   }`}>
-                    {variant.status.toLowerCase()}
+                    {variant.status === 'PENDING_REVIEW' ? 'pending review' : variant.status.toLowerCase()}
                   </span>
                 </div>
               </div>
@@ -1120,13 +1126,14 @@ function VariantsModal({ variants, onSelect, onExecute, selectedVariantId, onClo
                           <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold ${
                             step.status === 'COMPLETED' ? 'bg-green-500/20 text-green-400' :
                             step.status === 'RUNNING' ? 'bg-yellow-500/20 text-yellow-400' :
+                            step.status === 'PENDING_REVIEW' ? 'bg-yellow-500/20 text-yellow-400' :
                             'bg-dark-700 text-dark-400'
                           }`}>
                             {step.status === 'COMPLETED' ? '✓' : idx + 1}
                           </div>
                           <div className="flex-1">
-                            <p className="font-medium">{step.name}</p>
-                            <p className="text-xs text-dark-400">{step.description}</p>
+                            <p className="font-medium">{step.status === 'PENDING_REVIEW' ? `⚠ ${step.name}` : step.name}</p>
+                            <p className={`text-xs ${step.status === 'PENDING_REVIEW' ? 'text-yellow-400' : 'text-dark-400'}`}>{step.description}</p>
                             {step.result && (
                               <p className="text-xs text-dark-300 mt-2 font-mono line-clamp-3">{step.result}</p>
                             )}

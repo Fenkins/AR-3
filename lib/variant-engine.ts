@@ -20,7 +20,7 @@ export interface Variant {
   userRating?: string
   isSelected: boolean
   order: number
-  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED'
+  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'PENDING_REVIEW'
   createdAt: Date
 }
 
@@ -36,7 +36,7 @@ export interface Step {
     maxSteps: number
     targetQuality: number
   }
-  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'SKIPPED' | 'FAILED'
+  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'SKIPPED' | 'FAILED' | 'PENDING_REVIEW'
   result?: string
   grade?: number
   feedback?: string
@@ -131,56 +131,86 @@ Respond with just a number between 2-5.`
 
   // Generate variant descriptions
   const variants: Variant[] = []
+  const maxRetries = 2
+  const numStepsTarget = typeof stageConfig.stepsPerVariant === 'number' ? stageConfig.stepsPerVariant : 25
+
   for (let i = 0; i < numVariants; i++) {
-    const variantPrompt = `
+    let name = `Variant ${i + 1}`
+    let description = 'Exploration variant'
+    let steps: Step[] = []
+    let qualityFailed = false
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const attemptLabel = attempt === 0 ? '' : ` (retry ${attempt})`
+      const variantPrompt = `
+You are generating a research variant for the following goal:
 Research Goal: ${initialPrompt}
 Stage: ${stageConfig.name}
-Variant ${i + 1} of ${numVariants}
+Variant ${i + 1} of ${numVariants}${attemptLabel}
 
-Generate a unique approach/variant for this stage.
-Each variant should explore a different angle or methodology.
+Generate a UNIQUE and MEANINGFUL variant approach. This must be substantive and specific to the research goal above.
 
-Provide:
-1. Variant name (short, descriptive)
-2. Description (what this variant explores)
-3. List of steps to execute (3-7 steps)
-
-Format:
-Name: [variant name]
-Description: [description]
+Required output format (follow EXACTLY):
+Name: [A specific, descriptive name for this variant — 5-15 words]
+Description: [A 2-3 sentence description of what this variant explores and why it is different from other approaches — be specific to: "${initialPrompt}"]
 Steps:
-1. [step 1]
-2. [step 2]
-...`
+1. [Concrete, research-specific step — what exactly to investigate, find, or produce]
+2. [Concrete step — specific actions, data sources, or analysis methods]
+3. [Concrete step — expected outputs and how they relate to the research goal]
+[Continue with more specific, non-trivial steps — aim for at least 10-15 steps total]
 
-    const response = await callAI(agentConfig, [
-      { role: 'user', content: variantPrompt },
-    ])
+IMPORTANT: Each step must be specific and meaningful. Do NOT use generic phrases like "Ok.", "Analyze results", "Document findings". Each step must be directly relevant to: "${initialPrompt}"`
 
-    // Parse response - robust parsing with fallbacks
-    const nameMatch = response.content.match(/Name:\s*(.+?)(?:\n|$)/i)
-    const descMatch = response.content.match(/Description:\s*([\s\S]+?)(?:\n\n|\nSteps:|$)/i)
-    const stepsMatch = response.content.match(/Steps:\s*([\s\S]+)/i)
+      const response = await callAI(agentConfig, [
+        { role: 'user', content: variantPrompt },
+      ])
 
-    const name = nameMatch ? nameMatch[1].trim() : `Variant ${i + 1}`
-    const description = descMatch ? descMatch[1].trim() : 'Exploration variant'
+      // Parse response
+      const nameMatch = response.content.match(/Name:\s*(.+?)(?:\n|$)/i)
+      const descMatch = response.content.match(/Description:\s*([\s\S]+?)(?:\n\n|\nSteps:|$)/i)
+      const stepsMatch = response.content.match(/Steps:\s*([\s\S]+)/i)
 
-    // Parse steps - robust with multiple fallback strategies
-    let steps: Step[] = []
-    if (stepsMatch && stepsMatch[1].trim()) {
-      const stepLines = stepsMatch[1].split('\n').filter(l => l.trim())
-      steps = stepLines.map((line, idx) => {
-        const stepText = line.replace(/^\d+[\.\)]\s*/, '').trim()
-        return {
+      const parsedName = nameMatch ? nameMatch[1].trim() : ''
+      const parsedDesc = descMatch ? descMatch[1].trim() : ''
+
+      // Quality validation
+      const nameOk = parsedName.length >= 5 && parsedName.length <= 80 && !/^(variant|step|ok|undefined|null)$/i.test(parsedName)
+      const descOk = parsedDesc.length >= 20
+      const stepsOk = stepsMatch && stepsMatch[1].trim().length > 50
+
+      if (nameOk && descOk && stepsOk) {
+        name = parsedName
+        description = parsedDesc
+        // Parse steps
+        const stepLines = stepsMatch![1].split('\n').filter(l => l.trim() && l.trim().length > 3)
+        steps = stepLines.slice(0, numStepsTarget).map((line, idx) => ({
           id: `step_${Date.now()}_${i}_${idx}`,
           variantId: '',
-          name: stepText.substring(0, 60) || `Step ${idx + 1}`,
-          description: stepText,
+          name: line.replace(/^\d+[\.\)]\s*/, '').trim().substring(0, 80) || `Step ${idx + 1}`,
+          description: line.replace(/^\d+[\.\)]\s*/, '').trim(),
           order: idx,
-          isAuto: true,
+          isAuto: false,
           status: 'PENDING',
+        }))
+        break // quality OK, move on
+      } else {
+        debugLog(`[generateVariants] Variant ${i + 1} quality check failed (attempt ${attempt + 1}): nameOk=${nameOk} descOk=${descOk} stepsOk=${stepsOk}, content="${response.content.substring(0, 100)}"`)
+        if (attempt === maxRetries) {
+          // Mark as pending review
+          qualityFailed = true
+          name = `Variant ${i + 1} (pending review)`
+          description = parsedDesc || 'Variant requires review — generated content was below quality threshold'
+          steps = Array.from({ length: Math.min(numStepsTarget, 5) }, (_, idx) => ({
+            id: `step_${Date.now()}_${i}_${idx}`,
+            variantId: '',
+            name: `Step ${idx + 1} — processing pending`,
+            description: 'Step content pending — quality check failed during generation',
+            order: idx,
+            isAuto: true,
+            status: 'PENDING_REVIEW',
+          }))
         }
-      })
+      }
     }
 
     // Fallback: if no steps parsed, generate default steps based on stage
@@ -206,31 +236,20 @@ Steps:
       }))
     }
 
-    // If auto mode for steps, configure range
-    const numSteps = stageConfig.stepsPerVariant
-    if (numSteps === 'auto') {
-      steps.forEach(step => {
-        step.isAuto = true
-        step.autoConfig = {
-          minSteps: stageConfig.stepConfig?.minSteps || 3,
-          maxSteps: stageConfig.stepConfig?.maxSteps || 7,
-          targetQuality: 80,
-        }
-      })
-    } else {
-      // Ensure we have at least numSteps
-      while (steps.length < (numSteps as number)) {
+    // Pad to target number of steps if needed (only when quality was good)
+    if (!qualityFailed) {
+      while (steps.length < numStepsTarget) {
         steps.push({
           id: `step_${Date.now()}_${i}_${steps.length}`,
           variantId: '',
-          name: `Additional step ${steps.length + 1}`,
+          name: `Step ${steps.length + 1} — additional exploration`,
           description: `Additional exploration for variant ${i + 1}`,
           order: steps.length,
           isAuto: true,
           status: 'PENDING',
         })
       }
-      steps = steps.slice(0, numSteps as number)
+      steps = steps.slice(0, numStepsTarget)
       steps.forEach(step => {
         step.isAuto = false
       })
@@ -244,7 +263,7 @@ Steps:
       steps,
       isSelected: false,
       order: i,
-      status: 'PENDING',
+      status: qualityFailed ? 'PENDING_REVIEW' : 'PENDING',
       createdAt: new Date(),
     })
   }

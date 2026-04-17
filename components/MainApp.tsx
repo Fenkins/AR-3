@@ -453,6 +453,8 @@ function CreateSpaceModal({ onClose, onSuccess }: { onClose: () => void; onSucce
   const [initialPrompt, setInitialPrompt] = useState('')
   const [useEmbeddings, setUseEmbeddings] = useState(false)
   const [useGpu, setUseGpu] = useState(false)
+  const [numVariants, setNumVariants] = useState(3)
+  const [stepsPerVariant, setStepsPerVariant] = useState(25)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const token = localStorage.getItem('research_token')
@@ -469,7 +471,7 @@ function CreateSpaceModal({ onClose, onSuccess }: { onClose: () => void; onSucce
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ name, description, initialPrompt, useEmbeddings, useGpu }),
+        body: JSON.stringify({ name, description, initialPrompt, useEmbeddings, useGpu, numVariants, stepsPerVariant }),
       })
 
       if (!response.ok) {
@@ -539,6 +541,36 @@ function CreateSpaceModal({ onClose, onSuccess }: { onClose: () => void; onSucce
             </p>
           </div>
 
+
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-dark-300 mb-2">
+              Default Variants Per Stage
+            </label>
+            <input
+              type="number"
+              min={1}
+              max={10}
+              value={numVariants}
+              onChange={(e) => setNumVariants(Math.max(1, parseInt(e.target.value) || 1))}
+              className="w-full px-4 py-2 bg-dark-800 border border-dark-600 rounded-lg focus:ring-2 focus:ring-primary-500"
+            />
+            <p className="text-sm text-dark-400 mt-1">How many variants to generate per stage (default: 3)</p>
+          </div>
+
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-dark-300 mb-2">
+              Steps Per Variant
+            </label>
+            <input
+              type="number"
+              min={3}
+              max={100}
+              value={stepsPerVariant}
+              onChange={(e) => setStepsPerVariant(Math.max(3, parseInt(e.target.value) || 25))}
+              className="w-full px-4 py-2 bg-dark-800 border border-dark-600 rounded-lg focus:ring-2 focus:ring-primary-500"
+            />
+            <p className="text-sm text-dark-400 mt-1">Minimum steps per variant (default: 25)</p>
+          </div>
 
           <div className="mb-6">
             <label className="flex items-center gap-3 cursor-pointer">
