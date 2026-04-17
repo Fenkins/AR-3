@@ -114,20 +114,46 @@ Be specific and technical. Produce concrete deliverables.`,
 
 The GPU worker will execute this Python code on an NVIDIA RTX 3060 GPU with torch installed.
 
-CRITICAL: The 'code' field must contain ONLY valid Python code - no markdown, no explanations, no comments outside the code. The code must be self-contained and runnable.
+CRITICAL RULES — VIOLATING ANY OF THESE WILL CAUSE RUNTIME FAILURES:
+1. ALWAYS use .cuda() or device='cuda' — NEVER leave tensors on CPU when operating on GPU tensors
+2. NEVER call .item() on a tensor with more than 1 element — use .sum().item(), .mean().item(), or .tolist() instead
+3. Use torch.device('cuda') explicitly and move ALL tensors to the same device
+4. Wrap EVERY operation in try/except and print the actual tensor shapes/devices on failure
+5. Always print input shapes at the start of each major step so failures are diagnosable
 
-Example: {"action": "run_python", "code": "import torch; import numpy as np; x = torch.randn(100, 100, device='cuda'); print('CUDA:', torch.cuda.is_available()); print('Result:', x.sum().item())"}
+ROBUST CODE TEMPLATE:
+import torch
+import numpy as np
+
+device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+print(f'Device: {device}')
+
+# Create dummy inputs ON THE GPU
+x = torch.randn(BATCH, HIDDEN, device=device)
+print(f'Input shape: {x.shape}')
+
+try:
+    # Your operations here — ALL on GPU
+    result = your_function(x)
+    print(f'Result shape: {result.shape}')
+    # For scalar extraction:
+    print(f'Scalar value: {result.sum().item():.4f}')
+except Exception as e:
+    print(f'ERROR: {e}')
+    print(f'x.device: {x.device}, x.shape: {x.shape}')
+    raise
 
 Your implementation tasks:
 1. Build a PROTOTYPE demonstrating the research concept
-2. Use torch for tensor operations — use .cuda() to move tensors to GPU
-3. Include print statements showing: what you're testing, input shapes, output results
-4. Make code DEBUGGABLE — if it fails, print output should help diagnose why
+2. Use ONLY torch tensors on CUDA — no numpy arrays for tensor operations
+3. Include print statements at EVERY step showing: what you're testing, tensor shapes, tensor devices, scalar results
+4. Make code DEBUGGABLE — if it fails, the print output must make it obvious why
 
-Focus on PROOFS OF CONCEPT. Show that the concept works.`,
+Focus on PROOFS OF CONCEPT. Show that the concept works. Use 4 variants to explore different implementation approaches.`,
     order: 3,
     isActive: true,
     gpuEnabled: true,  // GPU needed for model training / compute-intensive work
+    numVariants: 4,  // More variants = more chances for viable code
   },
   {
     name: 'Testing',
@@ -147,9 +173,33 @@ Be critical but fair.`,
 
 The GPU worker will execute this on an NVIDIA RTX 3060 GPU with torch.
 
-CRITICAL: The 'code' field must contain ONLY valid Python code - no markdown, no explanations. The code must be self-contained and runnable.
+CRITICAL RULES — VIOLATING ANY OF THESE WILL CAUSE RUNTIME FAILURES:
+1. ALWAYS move ALL tensors to CUDA — use .cuda() or device='cuda' consistently
+2. NEVER call .item() on tensors with >1 element — use .sum().item(), .mean().item(), or .tolist()
+3. All tensors in an expression must be on the same device — check with tensor.device
+4. Wrap operations in try/except and print tensor shapes/devices on failure
+5. Print ALL intermediate values so failures are traceable
 
-Example: {"action": "run_python", "code": "import torch; import numpy as np; x1 = torch.randn(64, 128, device='cuda'); x2 = torch.randn(64, 128, device='cuda'); cosine = torch.nn.functional.cosine_similarity(x1, x2, dim=1); print('Mean similarity:', cosine.mean().item(), 'Std:', cosine.std().item())"}
+ROBUST TEST CODE TEMPLATE:
+import torch
+import numpy as np
+
+device = torch.device('cuda')
+print(f'Testing on: {device}')
+
+try:
+    # Your test code here
+    x = torch.randn(N, H, device=device)
+    print(f'Tensor shape: {x.shape}, device: {x.device}')
+    
+    # Example: test a diffusion model or consensus mechanism
+    result = your_test(x)
+    print(f'Result: {result}')
+    print(f'Verdict: PASS' if result > threshold else 'Verdict: FAIL')
+except Exception as e:
+    print(f'ERROR: {e}')
+    print(f'Device debug: {[t.device for t in locals().values() if isinstance(t, torch.Tensor)]}')
+    raise
 
 Your testing tasks:
 1. Run QUANTITATIVE experiments testing the hypothesis
@@ -157,10 +207,11 @@ Your testing tasks:
 3. Include clear METRICS in your print statements
 4. State your VERDICT at the end: PASS (hypothesis supported) or FAIL (hypothesis not supported)
 
-Be rigorous. Use statistics over multiple runs. Output JSON GPU commands only for tests that actually need the GPU.`,
+Be rigorous. Use statistics over multiple runs. Output JSON GPU commands only for tests that need the GPU.`,
     order: 4,
     isActive: true,
     gpuEnabled: true,  // GPU needed for inference on trained models
+    numVariants: 4,  // More variants = more chances for thorough testing
   },
   {
     name: 'Verification',
@@ -289,6 +340,29 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
   // Check if we have pending variants to execute instead
   const state = getExecutionState(spaceId)
   const currentCycle = state?.currentCycle ?? 1
+
+  // Generate variants for this stage if none exist yet (integrated into main pipeline)
+  if (state) {
+    const stageVariants = state.variants.filter(v => v.stageId === currentStage.id)
+    if (stageVariants.length === 0) {
+      debugLog(`[executeResearchCycle] No variants for stage ${currentStage.name}, generating...`)
+      try {
+        const numVariants = currentStage.numVariants 
+          ?? (currentStage.gpuEnabled ? 4 : 'auto')
+        const stepsPerVariant = currentStage.stepsPerVariant ?? 'auto'
+        await generateStageVariants(spaceId, currentStage.id, numVariants, stepsPerVariant)
+        // Reload state to get newly generated variants
+        const newState = getExecutionState(spaceId)
+        if (newState) {
+          Object.assign(state, newState)
+        }
+        debugLog(`[executeResearchCycle] Variant generation complete for ${currentStage.name}`)
+      } catch (err: any) {
+        debugLog(`[executeResearchCycle] Variant generation failed for ${currentStage.name}: ${err.message} — proceeding without variants`)
+      }
+    }
+  }
+
   if (state && state.variants && state.variants.length > 0) {
     const pendingVariant = state.variants.find(v => v.stageId === currentStage.id && v.status === 'PENDING')
     if (pendingVariant) {
