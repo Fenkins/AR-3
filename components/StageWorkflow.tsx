@@ -107,14 +107,14 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
           setSetupComplete(true)
         } else {
           // Setup still running (setupStatus is RUNNING or null) — poll until it completes
-          console.log('[StageWorkflow] Setup not complete yet, setupStatus:', data.space.setupStatus, 'stages:', data.stages?.length)
-          // Re-fetch after 3s if still loading
-          setTimeout(() => {
-            if (!setupComplete) {
+          // Only show loading if we don't already have stages
+          if (!data.stages?.length) {
+            console.log('[StageWorkflow] Setup not complete yet, setupStatus:', data.space.setupStatus, 'stages:', data.stages?.length)
+            setTimeout(() => {
               console.log('[StageWorkflow] Re-fetching to check setup progress...')
-              fetchSpaceData()
-            }
-          }, 3000)
+              fetchSpaceData(false)
+            }, 3000)
+          }
         }
         
         if (data.stages?.length > 0) {
@@ -155,7 +155,7 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
     } finally {
       if (showLoading) setLoading(false)
     }
-  }, [spaceId, token, currentStageIndex, stages])
+  }, [spaceId, token])
 
   // Initial fetch — runs once on mount (stages changes = setup complete, not a loop trigger)
   useEffect(() => {
