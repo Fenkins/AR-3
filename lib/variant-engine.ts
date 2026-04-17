@@ -183,11 +183,11 @@ IMPORTANT: Replace ALL placeholders above with real content. Each step must be s
         { role: 'user', content: variantPrompt },
       ])
 
-      // Parse response — support both old format (Name:/Description:/Steps:) and new format with CACHE_DOWNLOADS
-      const nameMatch = response.content.match(/VARIANT_NAME:\s*(.+?)(?:\n|$)/i)
-      const descMatch = response.content.match(/VARIANT_DESCRIPTION:\s*([\s\S]+?)(?:\nCACHE_DOWNLOADS:|\nSTEPS:|\n\n|$)/i)
+      // Parse response — support both new format (VARIANT_NAME/VARIANT_DESCRIPTION/CACHE_DOWNLOADS/STEPS) and legacy format (Name/Description/Steps)
+      const nameMatch = response.content.match(/VARIANT_NAME:\s*(.+?)(?:\n|$)/i) || response.content.match(/^Name:\s*(.+?)(?:\n|$)/im)
+      const descMatch = response.content.match(/VARIANT_DESCRIPTION:\s*([\s\S]+?)(?:\nCACHE_DOWNLOADS:|\nSTEPS:|\n\n|$)/i) || response.content.match(/Description:\s*([\s\S]+?)(?:\n\n|\nSteps:|\n\n|$)/i)
       const cacheMatch = response.content.match(/CACHE_DOWNLOADS:\s*([\s\S]+?)(?:\nSTEPS:|$)/i)
-      const stepsMatch = response.content.match(/STEPS:\s*([\s\S]+)/i)
+      const stepsMatch = response.content.match(/STEPS:\s*([\s\S]+)/i) || response.content.match(/Steps:\s*([\s\S]+)/i)
 
       // Parse cache downloads
       cacheDownloads = []
@@ -207,13 +207,13 @@ IMPORTANT: Replace ALL placeholders above with real content. Each step must be s
       const parsedName = nameMatch ? nameMatch[1].trim() : ''
       const parsedDesc = descMatch ? descMatch[1].trim() : ''
 
-      // Quality validation — reject leftover placeholders or generic junk
-      const hasBrackets = /<[^>]+>|\[[^\]]+\]/.test(parsedName) || /<[^>]+>|\[[^\]]+\]/.test(parsedDesc) || /<[^>]+>|\[[^\]]+\]/.test(stepsMatch?.[1] || '')
-      const isGenericName = /^(variant|step|ok|undefined|null|a specific|a 2-3|continue|write|placeholder|example|sample)$/i.test(parsedName)
-      const nameOk = parsedName.length >= 8 && parsedName.length <= 80 && !hasBrackets && !isGenericName
-      const descOk = parsedDesc.length >= 30 && !hasBrackets && !/<write|continue|placeholder/i.test(parsedDesc)
+      // Quality validation — reject obvious placeholder text but be lenient on format
+      const hasPlaceholderBrackets = /<(write|placeholder|example|[xyz]+)>/i.test(parsedName) || /<(write|placeholder|example|[xyz]+)>/i.test(parsedDesc)
+      const isGenericName = /^(variant|step|ok|undefined|null|\[.*\]|a specific|a 2-3)$/i.test(parsedName)
+      const nameOk = parsedName.length >= 5 && parsedName.length <= 80 && !hasPlaceholderBrackets && !isGenericName
+      const descOk = parsedDesc.length >= 20
       const stepsRaw = stepsMatch?.[1] || ''
-      const stepsOk = stepsRaw.length > 100 && !/<write|continue|placeholder|example/i.test(stepsRaw) && !/\[step \d+\]/i.test(stepsRaw)
+      const stepsOk = stepsRaw.length > 50 && !/^\[?(write|placeholder|example|continue|ok|null|undefined)\]?$/i.test(stepsRaw.trim())
 
       if (nameOk && descOk && stepsOk) {
         name = parsedName
