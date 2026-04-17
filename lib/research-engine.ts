@@ -1630,7 +1630,7 @@ export function runThinkingSetupBackground(spaceId: string): void {
           { role: 'system', content: 'You are a research planning assistant. Be concise and practical.' },
           { role: 'user', content: `Analyze this research goal and recommend stages: ${space.initialPrompt}` },
         ])
-        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('AI call timeout (2 min)')), 120000))
+        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('AI call timeout (5 min)')), 300000))
         response = await Promise.race([aiPromise, timeoutPromise])
       } catch (aiErr: any) {
         debugLog(`[runThinkingSetup] AI call failed at step ${step}: ${aiErr.message}`)
