@@ -159,51 +159,48 @@ Respond with just a number between 2-5.`
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       const attemptLabel = attempt === 0 ? '' : ` (retry ${attempt})`
-      // Exponential backoff: 60s, 120s, 240s between attempts
       if (attempt > 0) {
         const backoffMs = 60000 * Math.pow(2, attempt - 1)
         debugLog(`[generateVariants] Variant ${i + 1} backing off ${backoffMs}ms before retry ${attempt}`)
         await sleep(backoffMs)
       }
 
+      // Structured prompt: use section markers to prevent header duplication
       const variantPrompt = `
-You are a research planning assistant. Generate a detailed research plan for the goal below.
+You are a research planning assistant. Generate a detailed research plan.
 
 RESEARCH GOAL: ${initialPrompt}
 STAGE: ${stageConfig.name}
 VARIANT NUMBER: ${i + 1} of ${numVariants}
 
-CRITICAL — MODEL CACHE: Before generating steps, identify any models, datasets, or large files needed for IMPLEMENTATION, TESTING, or VERIFICATION of this variant. List them in the first 1-2 steps using the CACHE_DOWNLOAD format below.
+IMPORTANT: Follow this EXACT format. Write ONLY the sections below. Do NOT repeat headers. Do NOT include anything outside the marked sections.
 
-Respond ONLY with the following exact format. Do not include any explanatory text before or after.
+## METADATA
+name: <2-4 word specific name for this variant, be concrete and specific to the research goal above>
+description: <2-3 sentences describing what this variant explores and why it differs from other approaches>
+downloads: <HuggingFace or GitHub URLs for models/datasets needed, or "none">
 
-VARIANT_NAME: <write a short descriptive name, 5-15 words, specific to the research goal above>
-VARIANT_DESCRIPTION: <write 2-3 sentences describing what this variant explores and why it differs from other approaches. Be specific to the research goal.>
-CACHE_DOWNLOADS:
-- <model_or_file_name> | <huggingface_url_or_download_link> | <what_this_file_is_used_for>
-(If no downloads needed, write: NONE)
-STEPS:
-1. <write a concrete, specific step relevant to the research goal>
-2. <write a concrete, specific step with distinct actions or analysis>
-3. <write a concrete, specific step with expected outputs>
-4. <write a concrete, specific step>
-5. <write a concrete, specific step>
-6. <write a concrete, specific step>
-7. <write a concrete, specific step>
-8. <write a concrete, specific step>
-9. <write a concrete, specific step>
-10. <write a concrete, specific step>
-11. <write a concrete, specific step>
-12. <write a concrete, specific step>
-13. <write a concrete, specific step>
-14. <write a concrete, specific step>
-15. <write a concrete, specific step>
+## STEPS
+step_1: <imperative sentence — specific action with concrete goal>
+step_2: <imperative sentence — distinct action or analysis>
+step_3: <imperative sentence — include expected output or result>
+step_4: <imperative sentence>
+step_5: <imperative sentence>
+step_6: <imperative sentence>
+step_7: <imperative sentence>
+step_8: <imperative sentence>
+step_9: <imperative sentence>
+step_10: <imperative sentence>
+step_11: <imperative sentence>
+step_12: <imperative sentence>
+step_13: <imperative sentence>
+step_14: <imperative sentence>
+step_15: <imperative sentence>
 
-IMPORTANT: Replace ALL placeholders above with real content. Each step must be specific, non-generic, and directly relevant to "${initialPrompt}". Do NOT write placeholder text like "<write a step>" or "Continue with more steps". Do NOT write generic steps like "Download and install dependencies" without specifying actual URLs.`
+CRITICAL: Replace ALL angle-bracket placeholders with real content. Each step must be a concrete action sentence relevant to "${initialPrompt}".`
 
       let response: AIResponse
       try {
-        // 5 minute timeout per attempt
         response = await withTimeout(
           callAI(agentConfig, [{ role: 'user', content: variantPrompt }]),
           300000,
@@ -212,72 +209,82 @@ IMPORTANT: Replace ALL placeholders above with real content. Each step must be s
       } catch (err: any) {
         const isTimeout = err.message?.includes('Timeout')
         debugLog(`[generateVariants] Variant ${i + 1} ${isTimeout ? 'timed out' : 'failed'} (attempt ${attempt + 1}/${maxRetries + 1}): ${err.message}`)
-        if (attempt === maxRetries) {
-          qualityFailed = true
-        }
+        if (attempt === maxRetries) qualityFailed = true
         continue
       }
 
-      // Parse response — support both new format (VARIANT_NAME/VARIANT_DESCRIPTION/CACHE_DOWNLOADS/STEPS) and legacy format (Name/Description/Steps)
-      const nameMatch = response.content.match(/VARIANT_NAME:\s*(.+?)(?:\n|$)/i) || response.content.match(/^Name:\s*(.+?)(?:\n|$)/im)
-      const descMatch = response.content.match(/VARIANT_DESCRIPTION:\s*([\s\S]+?)(?:\nCACHE_DOWNLOADS:|\nSTEPS:|\n\n|$)/i) || response.content.match(/Description:\s*([\s\S]+?)(?:\n\n|\nSteps:|\n\n|$)/i)
-      const cacheMatch = response.content.match(/CACHE_DOWNLOADS:\s*([\s\S]+?)(?:\nSTEPS:|$)/i)
-      const stepsMatch = response.content.match(/STEPS:\s*([\s\S]+)/i) || response.content.match(/Steps:\s*([\s\S]+)/i)
+      const content = response.content
 
-      // Parse cache downloads
-      cacheDownloads = []
-      if (cacheMatch) {
-        const cacheSection = cacheMatch[1].trim()
-        if (!/^none$/i.test(cacheSection)) {
-          const lines = cacheSection.split('\n').filter(l => l.trim().startsWith('- '))
-          for (const line of lines) {
-            const parts = line.substring(2).split('|').map(p => p.trim())
-            if (parts.length >= 3) {
-              cacheDownloads.push({ fileName: parts[0], downloadUrl: parts[1], description: parts[2] })
-            }
+      // Parse name
+      const nameMatch = content.match(/^name:\s*(.+)$/im) || content.match(/VARIANT_NAME:\s*(.+?)(?:\n|$)/i)
+      const parsedName = nameMatch ? nameMatch[1].trim() : ''
+
+      // Parse description
+      const descMatch = content.match(/^description:\s*([\s\S]+?)(?:^downloads:|^## |^step_|_metadata)/im)
+      const parsedDesc = descMatch ? descMatch[1].trim() : ''
+
+      // Parse downloads
+      const dlMatch = content.match(/^downloads:\s*([\s\S]+?)(?:^## STEPS|^step_|_steps)/im)
+      if (dlMatch) {
+        const dlText = dlMatch[1].trim()
+        if (!/^none$/i.test(dlText)) {
+          const urls = Array.from(dlText.matchAll(/(https?:\/\/[^\s\n,]+)/g), (m: RegExpMatchArray) => m[1])
+          for (const url of urls.slice(0, 5)) {
+            const label = url.split('/').pop() || url
+            cacheDownloads.push({ fileName: label, downloadUrl: url, description: label })
           }
         }
       }
 
-      const parsedName = nameMatch ? nameMatch[1].trim() : ''
-      const parsedDesc = descMatch ? descMatch[1].trim() : ''
+      // Parse step_N lines
+      const stepMap = new Map<number, string>()
+      for (const m of Array.from(content.matchAll(/^step_(\d+):\s*(.+)$/gm))) {
+        const n = parseInt(m[1])
+        const txt = m[2].trim()
+        // Only keep the last occurrence of each step number
+        stepMap.set(n, txt)
+      }
+      const parsedSteps = Array.from(stepMap.entries())
+        .sort((a, b) => a[0] - b[0])
+        .map(([, text]) => text)
 
-      // Quality validation — reject obvious placeholder text but be lenient on format
+      // Quality checks
       const hasPlaceholderBrackets = /<(write|placeholder|example|[xyz]+)>/i.test(parsedName) || /<(write|placeholder|example|[xyz]+)>/i.test(parsedDesc)
-      const isGenericName = /^(variant|step|ok|undefined|null|\[.*\]|a specific|a 2-3)$/i.test(parsedName)
+      const isGenericName = /^(variant|step|ok|undefined|null|\[.*\]|a specific|a 2-3|additional exploration)$/i.test(parsedName)
       const nameOk = parsedName.length >= 5 && parsedName.length <= 80 && !hasPlaceholderBrackets && !isGenericName
       const descOk = parsedDesc.length >= 20
-      const stepsRaw = stepsMatch?.[1] || ''
-      const stepsOk = stepsRaw.length > 50 && !/^\[?(write|placeholder|example|continue|ok|null|undefined)\]?$/i.test(stepsRaw.trim())
+
+      // Step quality: require >= 5 real steps, no placeholders, no duplicated header artifacts
+      const badStepPatterns = /^(write|placeholder|example|continue|additional exploration|null|undefined|step \d|<)/i
+      const validSteps = parsedSteps.filter(s => s.length > 10 && !badStepPatterns.test(s))
+      const stepsOk = validSteps.length >= 5
+
+      debugLog(`[generateVariants] Variant ${i + 1} attempt ${attempt + 1}: nameOk=${nameOk}(${parsedName.substring(0,25)}), descOk=${descOk}, stepsOk=${stepsOk}(${validSteps.length} valid of ${parsedSteps.length} parsed)`)
 
       if (nameOk && descOk && stepsOk) {
         name = parsedName
         description = parsedDesc
-        // Parse steps
-        const rawSteps = stepsMatch ? stepsMatch[1] : ''
-        const stepLines = rawSteps.split('\n').filter(l => l.trim() && l.trim().length > 3)
-        steps = stepLines.slice(0, numStepsTarget).map((line, idx) => ({
+        steps = validSteps.slice(0, numStepsTarget).map((text, idx) => ({
           id: `step_${Date.now()}_${i}_${idx}`,
           variantId: '',
-          name: line.replace(/^\d+[\.\)]\s*/, '').trim().substring(0, 80) || `Step ${idx + 1}`,
-          description: line.replace(/^\d+[\.\)]\s*/, '').trim(),
+          name: text.substring(0, 80),
+          description: text,
           order: idx,
           isAuto: false,
           status: 'PENDING',
         }))
-        break // quality OK, move on
+        break
       } else {
-        debugLog(`[generateVariants] Variant ${i + 1} quality check failed (attempt ${attempt + 1}): nameOk=${nameOk} descOk=${descOk} stepsOk=${stepsOk}, content="${response.content.substring(0, 100)}"`)
+        debugLog(`[generateVariants] Variant ${i + 1} failed quality: content preview="${content.substring(0, 150).replace(/\n/g, ' ')}"`)
         if (attempt === maxRetries) {
-          // Mark as pending review
           qualityFailed = true
-          name = `Variant ${i + 1} (pending review)`
-          description = parsedDesc || 'Variant requires review — generated content was below quality threshold'
-          steps = Array.from({ length: Math.min(numStepsTarget, 5) }, (_, idx) => ({
+          name = `Variant ${i + 1} (needs review)`
+          description = parsedDesc || 'Generated content did not meet quality bar — review required'
+          steps = validSteps.slice(0, numStepsTarget).map((text, idx) => ({
             id: `step_${Date.now()}_${i}_${idx}`,
             variantId: '',
-            name: `Step ${idx + 1} — processing pending`,
-            description: 'Step content pending — quality check failed during generation',
+            name: text.substring(0, 80) || `Step ${idx + 1}`,
+            description: text,
             order: idx,
             isAuto: true,
             status: 'PENDING_REVIEW',
@@ -286,18 +293,19 @@ IMPORTANT: Replace ALL placeholders above with real content. Each step must be s
       }
     }
 
-    // Fallback: if no steps parsed, generate default steps based on stage
+    // Fallback: if steps still empty after retries, use stage-specific defaults
     if (steps.length === 0) {
-      const defaultStepTemplates: Record<string, string[]> = {
-        'Investigation': ['Research background and context', 'Identify key concepts and relationships', 'Find gaps in existing approaches', 'Document findings', 'Prepare investigation summary'],
-        'Proposition': ['Synthesize investigation insights', 'Formulate hypothesis', 'Identify potential solutions', 'Evaluate novelty of approaches', 'Draft proposition statement'],
-        'Planning': ['Analyze requirements and constraints', 'Break down into actionable tasks', 'Define success criteria', 'Estimate resource needs', 'Create implementation timeline'],
-        'Implementation': ['Set up development environment', 'Implement core functionality', 'Add error handling', 'Test the implementation', 'Refine and optimize'],
-        'Testing': ['Design test cases', 'Execute test suite', 'Analyze test results', 'Document failures and issues', 'Prepare test report'],
-        'Verification': ['Review testing methodology', 'Verify reproducibility', 'Cross-check results', 'Validate assumptions', 'Confirm verification verdict'],
-        'Evaluation': ['Aggregate all stage results', 'Assess overall quality', 'Identify breakthrough potential', 'Rate confidence level', 'Prepare evaluation summary'],
+      const defaults: Record<string, string[]> = {
+        Investigation: ['Survey existing ODE and diffusion model literature', 'Identify gaps in multi-model latent approaches', 'Catalog available open-source implementations', 'Define evaluation metrics for latent synchronization', 'Outline experimental setup'],
+        Proposition: ['Synthesize findings from investigation', 'Formulate core hypothesis for this variant', 'Identify the most promising theoretical angle', 'Draft proposition narrative', 'Submit for review'],
+        Planning: ['Analyze requirements and resource constraints', 'Design implementation architecture', 'Sequence tasks by dependency', 'Define success criteria and baselines', 'Create implementation timeline'],
+        Implementation: ['Set up development environment', 'Implement core latent synchronization mechanism', 'Add GPU-accelerated diffusion sampling', 'Integrate multi-model coordination layer', 'Verify basic functionality'],
+        Testing: ['Design quantitative evaluation benchmarks', 'Run inference comparisons across model variants', 'Measure synchronization quality metrics', 'Document performance results', 'Identify failure modes'],
+        Verification: ['Reproduce key experimental results', 'Cross-check with alternative implementations', 'Validate against theoretical predictions', 'Confirm reproducibility of claims', 'Summarize verification findings'],
+        Evaluation: ['Aggregate results from all test variants', 'Assess novelty and breakthrough potential', 'Compare against published baselines', 'Rate overall quality and readiness', 'Prepare evaluation summary'],
       }
-      const templates = defaultStepTemplates[stageConfig.name] || ['Define approach', 'Execute investigation', 'Analyze results', 'Document findings', 'Prepare next steps']
+      const stageKey = stageConfig.name as keyof typeof defaults
+      const templates = defaults[stageKey] || ['Analyze requirements', 'Design approach', 'Execute plan', 'Evaluate results', 'Document findings']
       steps = templates.map((desc, idx) => ({
         id: `step_${Date.now()}_${i}_${idx}`,
         variantId: '',
@@ -309,23 +317,9 @@ IMPORTANT: Replace ALL placeholders above with real content. Each step must be s
       }))
     }
 
-    // Pad to target number of steps if needed (only when quality was good)
-    if (!qualityFailed) {
-      while (steps.length < numStepsTarget) {
-        steps.push({
-          id: `step_${Date.now()}_${i}_${steps.length}`,
-          variantId: '',
-          name: `Step ${steps.length + 1} — additional exploration`,
-          description: `Additional exploration for variant ${i + 1}`,
-          order: steps.length,
-          isAuto: true,
-          status: 'PENDING',
-        })
-      }
+    // Truncate to target step count
+    if (steps.length > numStepsTarget) {
       steps = steps.slice(0, numStepsTarget)
-      steps.forEach(step => {
-        step.isAuto = false
-      })
     }
 
     variants.push({
