@@ -1693,27 +1693,12 @@ export function runThinkingSetupBackground(spaceId: string): void {
         currentCycle: 1,
       })
 
-      // Pre-allocate variants for first 2 stages (not all 7 — faster startup)
-      step = 'preallocate_variants'
-      try {
-        const numVariants = space.defaultNumVariants || 3
-        const stepsPerVariant = space.defaultStepsPerVariant || 25
-        const stagesToPrealloc = recommendedStages.slice(0, 2)
-        await Promise.all(stagesToPrealloc.map(stage =>
-          generateStageVariants(spaceId, stage.id, numVariants, stepsPerVariant).catch(err => {
-            debugLog(`[runThinkingSetup] Variant pre-allocation failed for ${stage.name}: ${err.message}`)
-          })
-        ))
-      } catch (varErr: any) {
-        debugLog(`[runThinkingSetup] Variant pre-allocation error: ${varErr.message} — continuing anyway`)
-      }
-
-      // Start background loop
+      // Start background loop (generates variants on-demand, no pre-allocation needed)
       step = 'start_loop'
       startBackgroundLoop(spaceId)
 
-      debugLog(`[runThinkingSetup] COMPLETED successfully for space ${spaceId}`)
-      // Only mark COMPLETED after everything finishes
+      debugLog(`[runThinkingSetup] COMPLETED — background loop started, variants will generate on-demand`)
+      // Mark COMPLETED immediately — variants generate lazily on first stage execution
       await prisma.space.update({ where: { id: spaceId }, data: { setupStatus: 'COMPLETED', setupStep: null } })
 
     } catch (err: any) {
