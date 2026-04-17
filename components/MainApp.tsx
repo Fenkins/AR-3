@@ -1610,6 +1610,11 @@ function AdminView() {
   const [config, setConfig] = useState<any>({})
   const [gpuConfig, setGPUConfig] = useState<any>({ maxConcurrent: 1, jobTimeout: 3600 })
   const [loading, setLoading] = useState(true)
+  const [hfToken, setHfToken] = useState('')
+  const [hfTokenStatus, setHfTokenStatus] = useState<{hasToken: boolean; tokenPrefix: string | null}>({ hasToken: false, tokenPrefix: null })
+  const [hfTesting, setHfTesting] = useState(false)
+  const [hfSaving, setHfSaving] = useState(false)
+  const [hfTestResult, setHfTestResult] = useState<{success: boolean; message: string} | null>(null)
   const token = typeof window !== 'undefined' ? localStorage.getItem('research_token') : null
 
   const fetchData = async () => {
@@ -1661,9 +1666,83 @@ function AdminView() {
     }
   }
 
+  const fetchHfStatus = async () => {
+    try {
+      const res = await fetch('/api/admin/huggingface', {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setHfTokenStatus({ hasToken: data.hasToken, tokenPrefix: data.tokenPrefix })
+      }
+    } catch (e) {
+      console.error('Failed to fetch HF status:', e)
+    }
+  }
+
+  const handleTestHfToken = async () => {
+    if (!hfToken) return
+    setHfTesting(true)
+    setHfTestResult(null)
+    try {
+      const res = await fetch('/api/admin/huggingface', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ token: hfToken, action: 'test' }),
+      })
+      const data = await res.json()
+      if (data.valid) {
+        setHfTestResult({ success: true, message: `✓ Token valid for @${data.username}` })
+      } else {
+        setHfTestResult({ success: false, message: `✗ ${data.error}` })
+      }
+    } catch (e: any) {
+      setHfTestResult({ success: false, message: `✗ ${e.message}` })
+    } finally {
+      setHfTesting(false)
+    }
+  }
+
+  const handleSaveHfToken = async () => {
+    if (!hfToken) return
+    setHfSaving(true)
+    try {
+      const res = await fetch('/api/admin/huggingface', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ token: hfToken, action: 'save' }),
+      })
+      const data = await res.json()
+      if (res.ok) {
+        setHfTokenStatus({ hasToken: true, tokenPrefix: data.tokenPrefix })
+        setHfTestResult({ success: true, message: '✓ Token saved' })
+        setHfToken('')
+      } else {
+        setHfTestResult({ success: false, message: data.error || 'Failed to save' })
+      }
+    } catch (e: any) {
+      setHfTestResult({ success: false, message: e.message })
+    } finally {
+      setHfSaving(false)
+    }
+  }
+
+  const handleDeleteHfToken = async () => {
+    if (!confirm('Remove HuggingFace token?')) return
+    await fetch('/api/admin/huggingface', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ action: 'delete' }),
+    })
+    setHfTokenStatus({ hasToken: false, tokenPrefix: null })
+    setHfTestResult(null)
+    setHfToken('')
+  }
+
   useEffect(() => {
     fetchData()
     fetchGPUConfig()
+    fetchHfStatus()
   }, [])
 
   const handleUpdateConfig = async (key: string, value: string) => {
@@ -1886,6 +1965,67 @@ function AdminView() {
                 </div>
               </div>
             </div>
+          </div>
+
+          <div className="bg-dark-900 rounded-lg p-6 border border-dark-700">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold">🤗 HuggingFace</h3>
+              {hfTokenStatus.hasToken && (
+                <span className="px-2 py-1 text-xs rounded bg-green-500/20 text-green-300">
+                  ✓ Connected {hfTokenStatus.tokenPrefix}
+                </span>
+              )}
+            </div>
+            <p className="text-sm text-dark-400 mb-4">
+              Add a HuggingFace token to enable automatic downloads of gated models and datasets.
+              Get your token at{' '}
+              <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noopener noreferrer" className="text-primary-400 hover:underline">
+                huggingface.co/settings/tokens
+              </a>
+            </p>
+            <div className="mb-3">
+              <label className="block text-sm font-medium mb-2">HF Token</label>
+              <div className="flex gap-2">
+                <input
+                  type="password"
+                  value={hfToken}
+                  onChange={(e) => { setHfToken(e.target.value); setHfTestResult(null) }}
+                  placeholder={hfTokenStatus.hasToken ? '•••••••••••••••• (leave empty to keep saved)' : 'hf_...'}
+                  className="flex-1 px-4 py-2 bg-dark-800 border border-dark-600 rounded-lg focus:ring-2 focus:ring-primary-500"
+                />
+                <button
+                  onClick={handleTestHfToken}
+                  disabled={!hfToken || hfTesting}
+                  className="px-4 py-2 bg-dark-700 hover:bg-dark-600 disabled:opacity-50 rounded-lg font-medium transition-colors text-sm whitespace-nowrap"
+                >
+                  {hfTesting ? 'Testing...' : 'Test'}
+                </button>
+                <button
+                  onClick={handleSaveHfToken}
+                  disabled={!hfToken || hfSaving}
+                  className="px-4 py-2 bg-primary-600 hover:bg-primary-700 disabled:opacity-50 rounded-lg font-medium transition-colors text-sm whitespace-nowrap"
+                >
+                  {hfSaving ? 'Saving...' : 'Save'}
+                </button>
+              </div>
+            </div>
+            {hfTestResult && (
+              <div className={`p-3 rounded text-sm ${
+                hfTestResult.success
+                  ? 'bg-green-500/20 border border-green-500/50 text-green-300'
+                  : 'bg-red-500/20 border border-red-500/50 text-red-300'
+              }`}>
+                {hfTestResult.message}
+              </div>
+            )}
+            {hfTokenStatus.hasToken && (
+              <button
+                onClick={handleDeleteHfToken}
+                className="mt-3 px-3 py-1 text-xs text-red-400 hover:text-red-300 transition-colors"
+              >
+                Remove saved token
+              </button>
+            )}
           </div>
         </div>
       )}

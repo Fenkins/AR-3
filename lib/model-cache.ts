@@ -29,6 +29,18 @@ function getSpaceCacheDir(spaceId: string): string {
   return path.join(CACHE_BASE_DIR, spaceId)
 }
 
+/** Get HuggingFace token from SystemConfig (returns empty string if not set) */
+async function getHfToken(): Promise<string> {
+  try {
+    const config = await prisma.systemConfig.findUnique({
+      where: { key: 'huggingface_token' },
+    })
+    return config?.value || ''
+  } catch {
+    return ''
+  }
+}
+
 function ensureSpaceDir(spaceId: string): void {
   const dir = getSpaceCacheDir(spaceId)
   if (!fs.existsSync(dir)) {
@@ -46,10 +58,16 @@ export async function addToCache(options: AddCacheOptions): Promise<CacheEntry> 
   
   // If downloadUrl provided, download the file
   if (downloadUrl) {
-    // Use wget or curl to download
     const { execSync } = require('child_process')
     try {
-      execSync(`curl -L -o "${filePath}" "${downloadUrl}" 2>/dev/null`, { stdio: 'pipe' })
+      const isHfUrl = downloadUrl.includes('huggingface.co')
+      const hfToken = isHfUrl ? await getHfToken() : ''
+
+      // Build curl command with optional HF auth header
+      const authHeader = hfToken ? `-H "Authorization: Bearer ${hfToken}"` : ''
+      const cmd = `curl -L ${authHeader} -o "${filePath}" "${downloadUrl}" 2>/dev/null`
+      execSync(cmd, { stdio: 'pipe' })
+
       if (fs.existsSync(filePath)) {
         const stats = fs.statSync(filePath)
         fileSize = stats.size
