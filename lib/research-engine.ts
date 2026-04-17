@@ -1579,7 +1579,149 @@ export async function getSpaceStatus(spaceId: string) {
 }
 
 export function runThinkingSetupBackground(spaceId: string): void {
-  runThinkingSetup(spaceId).catch(err => {
-    console.error('[runThinkingSetupBackground] failed:', err.message);
-  });
+  // Fire-and-forget: run everything async, catch ALL errors, update space state in DB
+  ;(async () => {
+    let step = 'initialization'
+    try {
+      // Mark setup as running
+      step = 'mark_running'
+      await prisma.space.update({ where: { id: spaceId }, data: { setupStatus: 'RUNNING', setupError: null } })
+      
+      // Load space with agents/providers
+      step = 'load_space'
+      const space = await prisma.space.findUnique({
+        where: { id: spaceId },
+        include: { user: { include: { agents: { where: { isActive: true } }, serviceProviders: true } } },
+      })
+      if (!space) {
+        await prisma.space.update({ where: { id: spaceId }, data: { setupStatus: 'FAILED', setupError: 'Space not found' } })
+        return
+      }
+
+      // Find thinking agent
+      step = 'find_agent'
+      const thinkingAgent = space.user.agents
+        .filter(a => a.role === 'THINKING')
+        .sort((a, b) => a.order - b.order)[0]
+
+      if (!thinkingAgent) {
+        await prisma.space.update({ where: { id: spaceId }, data: { setupStatus: 'FAILED', setupError: 'No THINKING agent configured. Please create a Thinking Agent first.' } })
+        return
+      }
+
+      const serviceProvider = space.user.serviceProviders.find(sp => sp.id === thinkingAgent.serviceProviderId)
+      if (!serviceProvider) {
+        await prisma.space.update({ where: { id: spaceId }, data: { setupStatus: 'FAILED', setupError: 'Service provider not found for thinking agent' } })
+        return
+      }
+
+      const agentConfig: AIConfig = {
+        provider: serviceProvider.provider,
+        apiKey: serviceProvider.apiKey,
+        model: thinkingAgent.model,
+      }
+
+      // Call AI to analyze research goal — with timeout
+      step = 'call_ai'
+      let response: any
+      try {
+        const aiPromise = callAI(agentConfig, [
+          { role: 'system', content: 'You are a research planning assistant. Be concise and practical.' },
+          { role: 'user', content: `Analyze this research goal and recommend stages: ${space.initialPrompt}` },
+        ])
+        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('AI call timeout (2 min)')), 120000))
+        response = await Promise.race([aiPromise, timeoutPromise])
+      } catch (aiErr: any) {
+        debugLog(`[runThinkingSetup] AI call failed at step ${step}: ${aiErr.message}`)
+        await prisma.space.update({ where: { id: spaceId }, data: { setupStatus: 'FAILED', setupError: `AI call failed: ${aiErr.message}` } })
+        return
+      }
+
+      // Always use ALL DEFAULT_STAGES — don't trust AI recommendations
+      step = 'create_stages'
+      const recommendedStages = DEFAULT_STAGES.map((s, i) => ({ ...s, id: `stage_${i}` }))
+
+      // Create thinking setup experiment
+      step = 'create_experiment'
+      try {
+        await prisma.experiment.create({
+          data: {
+            spaceId: space.id,
+            phase: 'THINKING_SETUP',
+            agentId: thinkingAgent.id,
+            agentName: thinkingAgent.name,
+            prompt: space.initialPrompt,
+            response: response.content,
+            tokensUsed: response.tokensUsed || 0,
+            cost: response.cost || 0,
+            status: 'COMPLETED',
+            result: response.content,
+          },
+        })
+      } catch (expErr: any) {
+        debugLog(`[runThinkingSetup] Failed to create setup experiment: ${expErr.message} — continuing anyway`)
+      }
+
+      // Update space with stages and mark as RUNNING
+      step = 'update_space'
+      try {
+        await prisma.space.update({
+          where: { id: spaceId },
+          data: {
+            status: 'RUNNING',
+            currentPhase: 'Investigation',
+            description: JSON.stringify({ stages: recommendedStages }),
+            setupStatus: 'COMPLETED',
+          },
+        })
+      } catch (updateErr: any) {
+        debugLog(`[runThinkingSetup] Failed to update space: ${updateErr.message}`)
+        await prisma.space.update({ where: { id: spaceId }, data: { setupStatus: 'FAILED', setupError: `Failed to update space: ${updateErr.message}` } })
+        return
+      }
+
+      // Initialize execution state in memory
+      step = 'init_state'
+      executionStates.set(spaceId, {
+        spaceId,
+        isRunning: true,
+        isThinkingSetupRunning: true,
+        currentStageId: recommendedStages[0].id,
+        currentPhase: 'Investigation',
+        variants: [],
+        experiments: [],
+        lastUpdated: new Date(),
+        retryCount: 0,
+        retryCountByStage: {},
+        currentCycle: 1,
+      })
+
+      // Pre-allocate variants for first 2 stages (not all 7 — faster startup)
+      step = 'preallocate_variants'
+      try {
+        const stagesToPrealloc = recommendedStages.slice(0, 2)
+        await Promise.all(stagesToPrealloc.map(stage =>
+          generateStageVariants(spaceId, stage.id, 'auto', 'auto').catch(err => {
+            debugLog(`[runThinkingSetup] Variant pre-allocation failed for ${stage.name}: ${err.message}`)
+          })
+        ))
+      } catch (varErr: any) {
+        debugLog(`[runThinkingSetup] Variant pre-allocation error: ${varErr.message} — continuing anyway`)
+      }
+
+      // Start background loop
+      step = 'start_loop'
+      startBackgroundLoop(spaceId)
+
+      debugLog(`[runThinkingSetup] COMPLETED successfully for space ${spaceId}`)
+
+    } catch (err: any) {
+      debugLog(`[runThinkingSetupBackground] Unexpected error at step '${step}': ${err.message}`)
+      try {
+        await prisma.space.update({ where: { id: spaceId }, data: { setupStatus: 'FAILED', setupError: `Step '${step}': ${err.message}` } })
+      } catch (updateErr: any) {
+        console.error('[runThinkingSetupBackground] CRITICAL — could not update space status:', updateErr.message)
+      }
+    }
+  })()
 }

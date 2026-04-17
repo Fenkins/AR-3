@@ -88,6 +88,8 @@ model Space {
   useEmbeddings   Boolean      @default(false)
   useGpu         Boolean      @default(false)
   currentCycle    Int          @default(1)
+  setupStatus     String?      // 'PENDING', 'RUNNING', 'COMPLETED', 'FAILED' — set during thinking_setup
+  setupError      String?      // Last error encountered during thinking_setup
   experiments     Experiment[]
   breakthroughs   Breakthrough[]
   variants        Variant[]
