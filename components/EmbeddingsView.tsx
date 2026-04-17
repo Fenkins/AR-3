@@ -45,6 +45,7 @@ export default function EmbeddingsView() {
   const [providers, setProviders] = useState<any[]>([])
   const [showAddModal, setShowAddModal] = useState(false)
   const [editingProvider, setEditingProvider] = useState<any>(null)
+  const [preSelectedProviderType, setPreSelectedProviderType] = useState<string>('')
   const [loading, setLoading] = useState(true)
   const [testingProvider, setTestingProvider] = useState<any>(null)
   const [testResult, setTestResult] = useState<any>(null)
@@ -128,6 +129,7 @@ export default function EmbeddingsView() {
         <button
           onClick={() => {
             setEditingProvider(null)
+            setPreSelectedProviderType('')
             setShowAddModal(true)
           }}
           className="px-4 py-2 bg-primary-600 hover:bg-primary-700 rounded-lg font-medium transition-colors"
@@ -223,6 +225,7 @@ export default function EmbeddingsView() {
                 <button
                   onClick={() => {
                     setEditingProvider(null)
+                    setPreSelectedProviderType(key)
                     setShowAddModal(true)
                   }}
                   className="w-full py-3 px-4 border-2 border-dashed border-dark-600 hover:border-primary-500 rounded-lg text-dark-400 hover:text-primary-400 transition-colors font-medium"
@@ -310,13 +313,16 @@ export default function EmbeddingsView() {
       {showAddModal && (
         <EmbeddingModal
           provider={editingProvider}
+          preSelectedProviderType={preSelectedProviderType}
           onClose={() => {
             setShowAddModal(false)
             setEditingProvider(null)
+            setPreSelectedProviderType('')
           }}
           onSuccess={() => {
             setShowAddModal(false)
             setEditingProvider(null)
+            setPreSelectedProviderType('')
             fetchProviders()
           }}
         />
@@ -325,8 +331,8 @@ export default function EmbeddingsView() {
   )
 }
 
-function EmbeddingModal({ provider, onClose, onSuccess }: { provider: any; onClose: () => void; onSuccess: () => void }) {
-  const [providerType, setProviderType] = useState(provider?.provider || '')
+function EmbeddingModal({ provider, preSelectedProviderType, onClose, onSuccess }: { provider: any; preSelectedProviderType?: string; onClose: () => void; onSuccess: () => void }) {
+  const [providerType, setProviderType] = useState(provider?.provider || preSelectedProviderType || '')
   const [name, setName] = useState(provider?.name || '')
   const [apiKey, setApiKey] = useState('')
   const [apiEndpoint, setApiEndpoint] = useState(provider?.apiEndpoint || '')
@@ -341,10 +347,11 @@ function EmbeddingModal({ provider, onClose, onSuccess }: { provider: any; onClo
   const [testError, setTestError] = useState('')
   const token = localStorage.getItem('research_token')
 
-  const config = providerType ? EMBEDDING_PROVIDER_CONFIG[providerType] : null
+  const config = (providerType || preSelectedProviderType) ? EMBEDDING_PROVIDER_CONFIG[providerType || preSelectedProviderType] : null
 
   const handleFetchModels = async () => {
-    if (!providerType || !apiKey) {
+    const effectiveProviderType = providerType || preSelectedProviderType || ''
+    if (!effectiveProviderType || !apiKey) {
       setTestError('Provider and API key are required')
       return
     }
@@ -356,7 +363,7 @@ function EmbeddingModal({ provider, onClose, onSuccess }: { provider: any; onClo
       const res = await fetch('/api/embeddings/models', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ provider: providerType, apiKey }),
+        body: JSON.stringify({ provider: effectiveProviderType, apiKey }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Failed to fetch models')
@@ -385,7 +392,7 @@ function EmbeddingModal({ provider, onClose, onSuccess }: { provider: any; onClo
           Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
-          provider: providerType,
+          provider: providerType || preSelectedProviderType || '',
           name,
           apiKey: apiKey || undefined, // Only send if filled
           apiEndpoint: apiEndpoint || undefined,
@@ -495,7 +502,7 @@ function EmbeddingModal({ provider, onClose, onSuccess }: { provider: any; onClo
               <button
                 type="button"
                 onClick={handleFetchModels}
-                disabled={!providerType || !apiKey || fetchingModels}
+                disabled={!providerType && !preSelectedProviderType || !apiKey || fetchingModels}
                 className="mt-2 w-full py-2 px-4 bg-primary-600/20 hover:bg-primary-600/30 disabled:opacity-50 rounded-lg text-sm text-primary-400 transition-colors"
               >
                 {fetchingModels ? 'Testing API Key...' : 'Test API Key & Fetch Models'}
@@ -602,7 +609,7 @@ function EmbeddingModal({ provider, onClose, onSuccess }: { provider: any; onClo
             </button>
             <button
               type="submit"
-              disabled={loading || !providerType}
+              disabled={loading || (!providerType && !preSelectedProviderType)}
               className="flex-1 py-2 px-4 bg-primary-600 hover:bg-primary-700 disabled:bg-primary-600/50 rounded-lg font-medium transition-colors"
             >
               {loading ? 'Saving...' : (provider ? 'Update Provider' : 'Add Provider')}
