@@ -21,6 +21,7 @@ export interface Variant {
   isSelected: boolean
   order: number
   status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'PENDING_REVIEW'
+  cacheDownloads?: string | null
   createdAt: Date
 }
 
@@ -139,6 +140,7 @@ Respond with just a number between 2-5.`
     let description = 'Exploration variant'
     let steps: Step[] = []
     let qualityFailed = false
+    let cacheDownloads: Array<{fileName: string, downloadUrl: string, description: string}> = []
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       const attemptLabel = attempt === 0 ? '' : ` (retry ${attempt})`
@@ -149,10 +151,15 @@ RESEARCH GOAL: ${initialPrompt}
 STAGE: ${stageConfig.name}
 VARIANT NUMBER: ${i + 1} of ${numVariants}
 
+CRITICAL — MODEL CACHE: Before generating steps, identify any models, datasets, or large files needed for IMPLEMENTATION, TESTING, or VERIFICATION of this variant. List them in the first 1-2 steps using the CACHE_DOWNLOAD format below.
+
 Respond ONLY with the following exact format. Do not include any explanatory text before or after.
 
 VARIANT_NAME: <write a short descriptive name, 5-15 words, specific to the research goal above>
 VARIANT_DESCRIPTION: <write 2-3 sentences describing what this variant explores and why it differs from other approaches. Be specific to the research goal.>
+CACHE_DOWNLOADS:
+- <model_or_file_name> | <huggingface_url_or_download_link> | <what_this_file_is_used_for>
+(If no downloads needed, write: NONE)
 STEPS:
 1. <write a concrete, specific step relevant to the research goal>
 2. <write a concrete, specific step with distinct actions or analysis>
@@ -170,16 +177,32 @@ STEPS:
 14. <write a concrete, specific step>
 15. <write a concrete, specific step>
 
-IMPORTANT: Replace ALL placeholders above with real content. Each step must be specific, non-generic, and directly relevant to "${initialPrompt}". Do NOT write placeholder text like "<write a step>" or "Continue with more steps".`
+IMPORTANT: Replace ALL placeholders above with real content. Each step must be specific, non-generic, and directly relevant to "${initialPrompt}". Do NOT write placeholder text like "<write a step>" or "Continue with more steps". Do NOT write generic steps like "Download and install dependencies" without specifying actual URLs.`
 
       const response = await callAI(agentConfig, [
         { role: 'user', content: variantPrompt },
       ])
 
-      // Parse response
-      const nameMatch = response.content.match(/Name:\s*(.+?)(?:\n|$)/i)
-      const descMatch = response.content.match(/Description:\s*([\s\S]+?)(?:\n\n|\nSteps:|$)/i)
-      const stepsMatch = response.content.match(/Steps:\s*([\s\S]+)/i)
+      // Parse response — support both old format (Name:/Description:/Steps:) and new format with CACHE_DOWNLOADS
+      const nameMatch = response.content.match(/VARIANT_NAME:\s*(.+?)(?:\n|$)/i)
+      const descMatch = response.content.match(/VARIANT_DESCRIPTION:\s*([\s\S]+?)(?:\nCACHE_DOWNLOADS:|\nSTEPS:|\n\n|$)/i)
+      const cacheMatch = response.content.match(/CACHE_DOWNLOADS:\s*([\s\S]+?)(?:\nSTEPS:|$)/i)
+      const stepsMatch = response.content.match(/STEPS:\s*([\s\S]+)/i)
+
+      // Parse cache downloads
+      cacheDownloads = []
+      if (cacheMatch) {
+        const cacheSection = cacheMatch[1].trim()
+        if (!/^none$/i.test(cacheSection)) {
+          const lines = cacheSection.split('\n').filter(l => l.trim().startsWith('- '))
+          for (const line of lines) {
+            const parts = line.substring(2).split('|').map(p => p.trim())
+            if (parts.length >= 3) {
+              cacheDownloads.push({ fileName: parts[0], downloadUrl: parts[1], description: parts[2] })
+            }
+          }
+        }
+      }
 
       const parsedName = nameMatch ? nameMatch[1].trim() : ''
       const parsedDesc = descMatch ? descMatch[1].trim() : ''
@@ -279,6 +302,7 @@ IMPORTANT: Replace ALL placeholders above with real content. Each step must be s
       isSelected: false,
       order: i,
       status: qualityFailed ? 'PENDING_REVIEW' : 'PENDING',
+      cacheDownloads: cacheDownloads.length > 0 ? JSON.stringify(cacheDownloads) : null,
       createdAt: new Date(),
     })
   }
@@ -422,6 +446,7 @@ export async function saveVariantsToDatabase(
         isSelected: variant.isSelected,
         order: variant.order,
         status: variant.status,
+        cacheDownloads: variant.cacheDownloads || null,
         steps: {
           create: variant.steps.map(step => ({
             id: step.id,

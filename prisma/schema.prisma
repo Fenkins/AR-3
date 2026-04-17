@@ -96,6 +96,7 @@ model Space {
   experiments     Experiment[]
   breakthroughs   Breakthrough[]
   variants        Variant[]
+  modelCaches     ModelCache[]
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
 }
@@ -115,6 +116,7 @@ model Variant {
   isSelected   Boolean       @default(false)
   order        Int           @default(0)
   status       String        @default("PENDING") // PENDING, RUNNING, COMPLETED, FAILED, PENDING_REVIEW
+  cacheDownloads String?      // JSON: [{fileName, downloadUrl, description}]
   steps        VariantStep[]
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
@@ -182,4 +184,19 @@ model SystemConfig {
   value         String
   description   String?
   updatedAt     DateTime @updatedAt
+}
+
+model ModelCache {
+  id           String   @id @default(uuid())
+  spaceId      String
+  space        Space   @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  fileName     String
+  filePath     String   // Absolute path on disk
+  fileSize     Int       // Bytes
+  downloadUrl  String?  // Original URL (e.g. HuggingFace model repo)
+  checksum     String?  // SHA256 of downloaded file
+  description  String?  // What this file/model is for
+  createdAt    DateTime @default(now())
+
+  @@index([spaceId])
 }
