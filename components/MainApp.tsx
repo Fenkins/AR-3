@@ -408,8 +408,8 @@ function SpacesView() {
                 <span className="text-dark-200">{formatNumber(space.totalTokens)}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-dark-400">Cached Models:</span>
-                <span className="text-dark-200">{space._count?.modelCaches || 0}</span>
+                <span className="text-dark-400">Model Cache:</span>
+                <span className="text-dark-200">{space._count?.modelCaches || 0} items{space.cacheSize ? ` (${formatBytes(space.cacheSize)})` : ''}</span>
               </div>
             </div>
           </div>
@@ -1997,4 +1997,12 @@ function formatNumber(num: number): string {
     return (num / 1000).toFixed(1) + 'K'
   }
   return num.toString()
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`
 }

@@ -45,7 +45,21 @@ export async function GET(request: NextRequest) {
       orderBy: { updatedAt: 'desc' },
     })
 
-    return NextResponse.json({ spaces })
+    // Get cache sizes for all spaces (efficient single query)
+    const cacheSizesResult = await prisma.$queryRaw<Array<{ space_id: string; total_size: bigint }>>`
+      SELECT space_id, SUM(file_size) as total_size FROM ModelCache GROUP BY space_id
+    `
+    const cacheSizeMap: Record<string, number> = {}
+    for (const row of cacheSizesResult) {
+      cacheSizeMap[row.space_id] = Number(row.total_size)
+    }
+
+    const spacesWithCacheSize = spaces.map(space => ({
+      ...space,
+      cacheSize: cacheSizeMap[space.id] || 0,
+    }))
+
+    return NextResponse.json({ spaces: spacesWithCacheSize })
   } catch (error) {
     console.error('Error fetching spaces:', error)
     return NextResponse.json(
