@@ -1127,9 +1127,10 @@ export function startBackgroundLoop(spaceId: string): void {
         if (pendingVariant) {
           debugLog(`[startBackgroundLoop] Executing pending variant ${pendingVariant.name}`)
           try {
+            // Give variant execution much more time — it has 15 steps and each can take 30-60s
             await withTimeout(
               executeVariantCycle(spaceId, pendingVariant.id),
-              600000, // 10 min hard limit
+              1800000, // 30 min — variant step execution is slow
               'executeVariantCycle'
             )
             consecutiveErrors = 0
@@ -1142,12 +1143,12 @@ export function startBackgroundLoop(spaceId: string): void {
         }
       }
 
-      // Execute next cycle with a hard 10-minute timeout
+      // Execute next cycle with a hard timeout (30 min — variant execution with 15 steps takes time)
       debugLog(`[startBackgroundLoop] Executing cycle for stage ${currentStage?.name}`)
       try {
         await withTimeout(
           executeResearchCycle(spaceId, currentStageId),
-          600000, // 10 min hard limit
+          1800000, // 30 min — variant step execution is slow
           'executeResearchCycle'
         )
         consecutiveErrors = 0
