@@ -336,9 +336,38 @@ function EmbeddingModal({ provider, onClose, onSuccess }: { provider: any; onClo
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [showKey, setShowKey] = useState(false)
+  const [availableModels, setAvailableModels] = useState<string[]>([])
+  const [fetchingModels, setFetchingModels] = useState(false)
+  const [testError, setTestError] = useState('')
   const token = localStorage.getItem('research_token')
 
   const config = providerType ? EMBEDDING_PROVIDER_CONFIG[providerType] : null
+
+  const handleFetchModels = async () => {
+    if (!providerType || !apiKey) {
+      setTestError('Provider and API key are required')
+      return
+    }
+    setFetchingModels(true)
+    setTestError('')
+    setError('')
+    try {
+      const token = localStorage.getItem('research_token')
+      const res = await fetch('/api/embeddings/models', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ provider: providerType, apiKey }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed to fetch models')
+      setAvailableModels(data.models || [])
+      if (data.models.length > 0) setModel(data.models[0])
+    } catch (err: any) {
+      setTestError(err.message)
+    } finally {
+      setFetchingModels(false)
+    }
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -461,6 +490,23 @@ function EmbeddingModal({ provider, onClose, onSuccess }: { provider: any; onClo
                 {showKey ? 'Hide' : 'Show'}
               </button>
             </div>
+            {/* Test API Key & Fetch Models */}
+            {!provider && (
+              <button
+                type="button"
+                onClick={handleFetchModels}
+                disabled={!providerType || !apiKey || fetchingModels}
+                className="mt-2 w-full py-2 px-4 bg-primary-600/20 hover:bg-primary-600/30 disabled:opacity-50 rounded-lg text-sm text-primary-400 transition-colors"
+              >
+                {fetchingModels ? 'Testing API Key...' : 'Test API Key & Fetch Models'}
+              </button>
+            )}
+            {testError && (
+              <p className="text-xs text-red-400 mt-1">{testError}</p>
+            )}
+            {availableModels.length > 0 && (
+              <p className="text-xs text-green-400 mt-1">✓ API key valid — {availableModels.length} models available</p>
+            )}
           </div>
 
           {/* API Endpoint (for Azure) */}
@@ -484,14 +530,26 @@ function EmbeddingModal({ provider, onClose, onSuccess }: { provider: any; onClo
             <label className="block text-sm font-medium text-dark-300 mb-2">
               Model
             </label>
-            <input
-              type="text"
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              className="w-full px-4 py-2 bg-dark-800 border border-dark-600 rounded-lg focus:ring-2 focus:ring-primary-500"
-              placeholder={config?.defaultModel || 'model-name'}
-              required
-            />
+            {availableModels.length > 0 ? (
+              <select
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                className="w-full px-4 py-2 bg-dark-800 border border-dark-600 rounded-lg focus:ring-2 focus:ring-primary-500"
+              >
+                {availableModels.map((m) => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </select>
+            ) : (
+              <input
+                type="text"
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                className="w-full px-4 py-2 bg-dark-800 border border-dark-600 rounded-lg focus:ring-2 focus:ring-primary-500"
+                placeholder={config?.defaultModel || 'model-name'}
+                required
+              />
+            )}
             {config && (
               <p className="text-sm text-dark-400 mt-1">
                 Default: {config.defaultModel} — {config.supportsDimensions ? 'supports custom dimensions' : 'fixed dimensions'}

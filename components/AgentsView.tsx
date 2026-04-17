@@ -672,7 +672,7 @@ function PrePopulateModal({ serviceProviders, onClose, onSuccess }: {
       <div className="bg-dark-900 rounded-lg p-6 max-w-lg w-full border border-dark-700">
         <h3 className="text-2xl font-bold mb-6">⚡ Pre-populate Agents</h3>
 
-        <p className="text-dark-400 mb-4">Create a service provider and all 8 research agents at once.</p>
+        <p className="text-dark-400 mb-4">Create a service provider and all 9 research agents at once.</p>
 
 
         {error && (
@@ -746,7 +746,7 @@ function PrePopulateModal({ serviceProviders, onClose, onSuccess }: {
             <div className="mb-6 p-4 bg-dark-800 rounded-lg">
               <h4 className="font-medium mb-2">Agents to be created:</h4>
               <ul className="text-sm text-dark-300 space-y-1">
-                {['Thinking', 'Investigation', 'Proposition', 'Planning', 'Implementation', 'Testing', 'Verification', 'Evaluation'].map((name, i) => (
+                {['Thinking', 'Investigation', 'Proposition', 'Planning', 'Implementation', 'Testing', 'Verification', 'Evaluation', 'Grading'].map((name) => (
                   <li key={name}>• {name} Agent</li>
                 ))}
               </ul>
