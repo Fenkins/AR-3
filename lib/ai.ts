@@ -49,7 +49,7 @@ async function callOpenAI(config: AIConfig, messages: AIMessage[]): Promise<AIRe
   const tokensUsed = completion.usage?.total_tokens || 0
   const cost = estimateCost(config.provider, config.model, tokensUsed)
 
-  return { content, tokensUsed, cost }
+  return { content: stripThinkingTags(content), tokensUsed, cost }
 }
 
 async function callAnthropic(config: AIConfig, messages: AIMessage[]): Promise<AIResponse> {
@@ -149,6 +149,16 @@ async function callMiniMax(config: AIConfig, messages: AIMessage[]): Promise<AIR
   const cost = estimateCost(config.provider, config.model, tokensUsed)
 
   return { content, tokensUsed, cost }
+}
+
+function stripThinkingTags(text: string): string {
+  if (!text) return text
+  return text
+    .replace(/<(?:think|thought|thinking|reflect|introspect|reasoning|analysis|commentary|notes|scratchpad|memo|submission|working|observation|findings|details|result|output|step|summary|explain|interpretation)[^>]*>[\s\S]*?<\/(?:think|thought|thinking|reflect|introspect|reasoning|analysis|commentary|notes|scratchpad|memo|submission|working|observation|findings|details|result|output|step|summary|explain|interpretation)>/gi, '')
+    .replace(/<[^<>]+>([\s\S]*?)<\/[\w-]+>/gi, '$1')
+    .replace(/\[(?:t|q|r|n|c|d|p|fn|fd|cd|bd|md|rd|nd|pd|td)\]/gi, '')
+    .replace(/\s*\n{2,}\s*/g, '\n\n')
+    .trim()
 }
 
 function estimateCost(provider: string, model: string, tokens: number): number {
