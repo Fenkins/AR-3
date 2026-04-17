@@ -699,18 +699,31 @@ async function executeVariant(variant: Variant, spaceId: string, stageName: stri
     }
   }
 
-  // Grade the variant
-  const graded = await gradeVariant(variant, spaceId, stageName)
-  variant.grade = graded.grade
-  variant.feedback = graded.feedback
-  variant.status = 'COMPLETED'
+  // Grade the variant (fallback if no grading agent)
+  try {
+    const graded = await gradeVariant(variant, spaceId, stageName)
+    variant.grade = graded.grade
+    variant.feedback = graded.feedback
+    variant.status = 'COMPLETED'
 
-  // Persist variant grade to DB
-  await updateVariantDb(variant.id, {
-    grade: graded.grade,
-    feedback: graded.feedback,
-    status: 'COMPLETED',
-  })
+    // Persist variant grade to DB
+    await updateVariantDb(variant.id, {
+      grade: graded.grade,
+      feedback: graded.feedback,
+      status: 'COMPLETED',
+    })
+  } catch (gradeErr: any) {
+    debugLog(`[executeVariant] Grading failed (no grading agent?): ${gradeErr.message} — marking variant complete without grade`)
+    variant.grade = undefined
+    variant.feedback = 'Grading unavailable: ' + gradeErr.message
+    variant.status = 'COMPLETED'
+
+    await updateVariantDb(variant.id, {
+      grade: undefined,
+      feedback: 'Grading unavailable: ' + gradeErr.message,
+      status: 'COMPLETED',
+    })
+  }
 
   return variant
 }
