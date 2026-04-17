@@ -1,5 +1,5 @@
 import { prisma } from './prisma'
-import { callAI, AIConfig } from './ai'
+import { callAI, AIConfig, AIResponse } from './ai'
 import fs from 'fs'
 
 const logFile = '/tmp/ar1_debug.log'
@@ -7,6 +7,21 @@ function debugLog(...args: any[]) {
   const msg = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ')
   fs.appendFileSync(logFile, new Date().toISOString() + ' [VariantEngine] ' + msg + '\n')
   console.log('[VariantEngine]', ...args)
+}
+
+/** Wrap an async operation with a hard timeout */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`Timeout after ${ms}ms: ${label}`)), ms)
+    ),
+  ])
+}
+
+/** Sleep helper for retry backoff */
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
 }
 
 export interface Variant {
@@ -144,6 +159,13 @@ Respond with just a number between 2-5.`
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       const attemptLabel = attempt === 0 ? '' : ` (retry ${attempt})`
+      // Exponential backoff: 60s, 120s, 240s between attempts
+      if (attempt > 0) {
+        const backoffMs = 60000 * Math.pow(2, attempt - 1)
+        debugLog(`[generateVariants] Variant ${i + 1} backing off ${backoffMs}ms before retry ${attempt}`)
+        await sleep(backoffMs)
+      }
+
       const variantPrompt = `
 You are a research planning assistant. Generate a detailed research plan for the goal below.
 
@@ -179,9 +201,22 @@ STEPS:
 
 IMPORTANT: Replace ALL placeholders above with real content. Each step must be specific, non-generic, and directly relevant to "${initialPrompt}". Do NOT write placeholder text like "<write a step>" or "Continue with more steps". Do NOT write generic steps like "Download and install dependencies" without specifying actual URLs.`
 
-      const response = await callAI(agentConfig, [
-        { role: 'user', content: variantPrompt },
-      ])
+      let response: AIResponse
+      try {
+        // 5 minute timeout per attempt
+        response = await withTimeout(
+          callAI(agentConfig, [{ role: 'user', content: variantPrompt }]),
+          300000,
+          `variant ${i + 1} attempt ${attempt + 1}`
+        )
+      } catch (err: any) {
+        const isTimeout = err.message?.includes('Timeout')
+        debugLog(`[generateVariants] Variant ${i + 1} ${isTimeout ? 'timed out' : 'failed'} (attempt ${attempt + 1}/${maxRetries + 1}): ${err.message}`)
+        if (attempt === maxRetries) {
+          qualityFailed = true
+        }
+        continue
+      }
 
       // Parse response — support both new format (VARIANT_NAME/VARIANT_DESCRIPTION/CACHE_DOWNLOADS/STEPS) and legacy format (Name/Description/Steps)
       const nameMatch = response.content.match(/VARIANT_NAME:\s*(.+?)(?:\n|$)/i) || response.content.match(/^Name:\s*(.+?)(?:\n|$)/im)

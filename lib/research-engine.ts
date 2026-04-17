@@ -25,6 +25,21 @@ export interface ResearchStage {
   stepsPerVariant?: number | 'auto'
 }
 
+/** Wrap an async operation with a hard timeout */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`Timeout after ${ms}ms: ${label}`)), ms)
+    ),
+  ])
+}
+
+/** Sleep helper */
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
 export interface SpaceExecutionState {
   spaceId: string
   isRunning: boolean
@@ -1112,7 +1127,11 @@ export function startBackgroundLoop(spaceId: string): void {
         if (pendingVariant) {
           debugLog(`[startBackgroundLoop] Executing pending variant ${pendingVariant.name}`)
           try {
-            await executeVariantCycle(spaceId, pendingVariant.id)
+            await withTimeout(
+              executeVariantCycle(spaceId, pendingVariant.id),
+              600000, // 10 min hard limit
+              'executeVariantCycle'
+            )
             consecutiveErrors = 0
           } catch (err: any) {
             consecutiveErrors++
@@ -1123,16 +1142,20 @@ export function startBackgroundLoop(spaceId: string): void {
         }
       }
 
-      // Execute next cycle
+      // Execute next cycle with a hard 10-minute timeout
       debugLog(`[startBackgroundLoop] Executing cycle for stage ${currentStage?.name}`)
       try {
-        await executeResearchCycle(spaceId, currentStageId)
+        await withTimeout(
+          executeResearchCycle(spaceId, currentStageId),
+          600000, // 10 min hard limit
+          'executeResearchCycle'
+        )
         consecutiveErrors = 0
         debugLog(`[startBackgroundLoop] Cycle completed successfully for ${currentStage?.name}`)
       } catch (err: any) {
+        const isTimeout = err.message?.includes('Timeout') || err.message?.includes('timeout')
         consecutiveErrors++
-        const isTimeout = err.message?.includes('timeout')
-        debugLog(`[startBackgroundLoop] Cycle failed (${consecutiveErrors}/${maxConsecutiveErrors}): ${err.message}`)
+        debugLog(`[startBackgroundLoop] Cycle ${isTimeout ? 'timed out' : 'failed'} (${consecutiveErrors}/${maxConsecutiveErrors}): ${err.message}`)
 
         if (consecutiveErrors >= maxConsecutiveErrors) {
           updateExecutionState(spaceId, {
