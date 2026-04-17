@@ -38,6 +38,7 @@ export async function GET(request: NextRequest) {
           select: {
             experiments: true,
             breakthroughs: true,
+            modelCaches: true,
           },
         },
       },

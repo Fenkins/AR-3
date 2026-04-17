@@ -407,6 +407,10 @@ function SpacesView() {
                 <span className="text-dark-400">Tokens:</span>
                 <span className="text-dark-200">{formatNumber(space.totalTokens)}</span>
               </div>
+              <div className="flex justify-between">
+                <span className="text-dark-400">Cached Models:</span>
+                <span className="text-dark-200">{space._count?.modelCaches || 0}</span>
+              </div>
             </div>
           </div>
         ))}
