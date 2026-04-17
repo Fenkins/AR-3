@@ -271,12 +271,12 @@ export async function gradeVariant(
 
   if (!space) throw new Error('Space not found')
 
-  // Get grading/evaluation agent
+  // Get grading agent (GRADING role only — separate from EVALUATION which is for the stage)
   const gradingAgent = space.user.agents
-    .filter(a => ['EVALUATION', 'GRADING'].includes(a.role) && a.isActive)
+    .filter(a => a.role === 'GRADING' && a.isActive)
     .sort((a, b) => a.order - b.order)[0]
 
-  if (!gradingAgent) throw new Error('No grading agent configured')
+  if (!gradingAgent) throw new Error('No Grading Agent configured — please add a Grading Agent in the Agents panel')
 
   const serviceProvider = space.user.serviceProviders
     .find(sp => sp.id === gradingAgent.serviceProviderId)

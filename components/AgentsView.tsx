@@ -34,6 +34,7 @@ const AGENT_ROLES = [
   { value: 'TESTING', label: 'Testing Agent', icon: '🧪' },
   { value: 'VERIFICATION', label: 'Verification Agent', icon: '✓' },
   { value: 'EVALUATION', label: 'Evaluation Agent', icon: '⭐' },
+  { value: 'GRADING', label: 'Grading Agent', icon: '📝' },
 ]
 
 export default function Agents() {
@@ -632,6 +633,7 @@ function PrePopulateModal({ serviceProviders, onClose, onSuccess }: {
         { name: 'Testing Agent', role: 'TESTING', order: 5 },
         { name: 'Verification Agent', role: 'VERIFICATION', order: 6 },
         { name: 'Evaluation Agent', role: 'EVALUATION', order: 7 },
+        { name: 'Grading Agent', role: 'GRADING', order: 8 },
       ]
 
       for (const agent of agentsToCreate) {
