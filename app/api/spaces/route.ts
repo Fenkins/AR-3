@@ -45,13 +45,13 @@ export async function GET(request: NextRequest) {
       orderBy: { updatedAt: 'desc' },
     })
 
-    // Get cache sizes for all spaces (efficient single query)
-    const cacheSizesResult = await prisma.$queryRaw<Array<{ space_id: string; total_size: bigint }>>`
-      SELECT space_id, SUM(file_size) as total_size FROM ModelCache GROUP BY space_id
-    `
+    // Get cache sizes for all spaces
+    const allCaches = await prisma.modelCache.findMany({
+      select: { spaceId: true, fileSize: true },
+    })
     const cacheSizeMap: Record<string, number> = {}
-    for (const row of cacheSizesResult) {
-      cacheSizeMap[row.space_id] = Number(row.total_size)
+    for (const cache of allCaches) {
+      cacheSizeMap[cache.spaceId] = (cacheSizeMap[cache.spaceId] || 0) + Number(cache.fileSize)
     }
 
     const spacesWithCacheSize = spaces.map(space => ({
