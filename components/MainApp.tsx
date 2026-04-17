@@ -154,9 +154,11 @@ function DashboardView() {
 
   const fetchDashboard = async () => {
     const token = localStorage.getItem('research_token')
+    if (!token) { setLoading(false); return; }
     const response = await fetch('/api/dashboard', {
       headers: { Authorization: `Bearer ${token}` },
     })
+    if (!response.ok) { setLoading(false); return; }
     const data = await response.json()
     setStats(data)
     setLoading(false)
