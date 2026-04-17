@@ -172,7 +172,7 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
     setupStartTimeRef.current = Date.now()
 
     let pollCount = 0
-    const maxPolls = 150 // 150 * 2s = 5 min max wait
+    const maxPolls = 300 // 300 * 2s = 10 min max wait
 
     // Call API to START the thinking setup (fire-and-forget)
     try {
@@ -252,7 +252,7 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
         if (pollCount >= maxPolls) {
           clearInterval(pollInterval)
           setIsThinkingSetup(false)
-          alert('Setup timed out after 5 minutes. Please try again.')
+          alert('Setup timed out after 10 minutes. Please try again.')
         }
       } catch (err) {
         console.error('[ThinkingSetup] Poll error:', err)
