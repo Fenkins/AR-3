@@ -103,7 +103,19 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
         setSpace(data.space)
         // Setup is complete if we have stages OR if setupStatus is COMPLETED/FAILED
         const setupDone = !!(data.stages?.length || ['COMPLETED','FAILED'].includes(data.space.setupStatus))
-        if (setupDone) setSetupComplete(true)
+        if (setupDone) {
+          setSetupComplete(true)
+        } else {
+          // Setup still running (setupStatus is RUNNING or null) — poll until it completes
+          console.log('[StageWorkflow] Setup not complete yet, setupStatus:', data.space.setupStatus, 'stages:', data.stages?.length)
+          // Re-fetch after 3s if still loading
+          setTimeout(() => {
+            if (!setupComplete) {
+              console.log('[StageWorkflow] Re-fetching to check setup progress...')
+              fetchSpaceData()
+            }
+          }, 3000)
+        }
         
         if (data.stages?.length > 0) {
           setStages(data.stages)
