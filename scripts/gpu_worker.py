@@ -24,7 +24,7 @@ JOB_RESULTS_FILE = '/tmp/gpu_results.json'
 GPU_CONFIG_FILE = '/tmp/gpu_config.json'
 POLL_INTERVAL = 3  # seconds
 DEFAULT_MAX_CONCURRENT = 1
-DEFAULT_JOB_TIMEOUT = 300  # 5 minutes
+DEFAULT_JOB_TIMEOUT = 3600  # 1 hour default
 
 # Thread-safe lock for queue file operations
 queue_lock = threading.Lock()

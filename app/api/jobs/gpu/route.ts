@@ -17,11 +17,11 @@ interface GPUConfig {
 function getGPUConfig(): GPUConfig {
   try {
     if (!fs.existsSync(GPU_CONFIG_FILE)) {
-      return { maxConcurrent: 1, jobTimeout: 300 }
+      return { maxConcurrent: 1, jobTimeout: 3600 }
     }
     return JSON.parse(fs.readFileSync(GPU_CONFIG_FILE, 'utf-8'))
   } catch {
-    return { maxConcurrent: 1, jobTimeout: 300 }
+    return { maxConcurrent: 1, jobTimeout: 3600 }
   }
 }
 
@@ -172,7 +172,7 @@ export async function PUT(request: NextRequest) {
       config.maxConcurrent = Math.max(1, Math.min(16, parseInt(maxConcurrent, 10) || 1))
     }
     if (jobTimeout !== undefined) {
-      config.jobTimeout = Math.max(30, Math.min(3600, parseInt(jobTimeout, 10) || 300))
+      config.jobTimeout = Math.max(60, Math.min(86400, parseInt(jobTimeout, 10) || 3600))
     }
 
     writeGPUConfig(config)
