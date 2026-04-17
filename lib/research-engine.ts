@@ -1585,7 +1585,7 @@ export function runThinkingSetupBackground(spaceId: string): void {
     try {
       // Mark setup as running
       step = 'mark_running'
-      await prisma.space.update({ where: { id: spaceId }, data: { setupStatus: 'RUNNING', setupError: null } })
+      await prisma.space.update({ where: { id: spaceId }, data: { setupStatus: 'RUNNING', setupError: null, setupStep: 'Analyzing research goal...' } })
       
       // Load space with agents/providers
       step = 'load_space'
@@ -1594,24 +1594,25 @@ export function runThinkingSetupBackground(spaceId: string): void {
         include: { user: { include: { agents: { where: { isActive: true } }, serviceProviders: true } } },
       })
       if (!space) {
-        await prisma.space.update({ where: { id: spaceId }, data: { setupStatus: 'FAILED', setupError: 'Space not found' } })
+        await prisma.space.update({ where: { id: spaceId }, data: { setupStatus: 'FAILED', setupError: 'Space not found', setupStep: null } })
         return
       }
 
-      // Find thinking agent
+      // Find thinking agent + service provider
       step = 'find_agent'
+      await prisma.space.update({ where: { id: spaceId }, data: { setupStep: 'Configuring thinking agent...' } })
       const thinkingAgent = space.user.agents
         .filter(a => a.role === 'THINKING')
         .sort((a, b) => a.order - b.order)[0]
 
       if (!thinkingAgent) {
-        await prisma.space.update({ where: { id: spaceId }, data: { setupStatus: 'FAILED', setupError: 'No THINKING agent configured. Please create a Thinking Agent first.' } })
+        await prisma.space.update({ where: { id: spaceId }, data: { setupStatus: 'FAILED', setupError: 'No THINKING agent configured. Please create a Thinking Agent first.', setupStep: null } })
         return
       }
 
       const serviceProvider = space.user.serviceProviders.find(sp => sp.id === thinkingAgent.serviceProviderId)
       if (!serviceProvider) {
-        await prisma.space.update({ where: { id: spaceId }, data: { setupStatus: 'FAILED', setupError: 'Service provider not found for thinking agent' } })
+        await prisma.space.update({ where: { id: spaceId }, data: { setupStatus: 'FAILED', setupError: 'Service provider not found for thinking agent', setupStep: null } })
         return
       }
 
@@ -1633,7 +1634,7 @@ export function runThinkingSetupBackground(spaceId: string): void {
         response = await Promise.race([aiPromise, timeoutPromise])
       } catch (aiErr: any) {
         debugLog(`[runThinkingSetup] AI call failed at step ${step}: ${aiErr.message}`)
-        await prisma.space.update({ where: { id: spaceId }, data: { setupStatus: 'FAILED', setupError: `AI call failed: ${aiErr.message}` } })
+        await prisma.space.update({ where: { id: spaceId }, data: { setupStatus: 'FAILED', setupError: `AI call failed: ${aiErr.message}`, setupStep: null } })
         return
       }
 
@@ -1643,6 +1644,7 @@ export function runThinkingSetupBackground(spaceId: string): void {
 
       // Create thinking setup experiment
       step = 'create_experiment'
+      await prisma.space.update({ where: { id: spaceId }, data: { setupStep: 'Creating stage pipeline...' } })
       try {
         await prisma.experiment.create({
           data: {
@@ -1667,16 +1669,11 @@ export function runThinkingSetupBackground(spaceId: string): void {
       try {
         await prisma.space.update({
           where: { id: spaceId },
-          data: {
-            status: 'RUNNING',
-            currentPhase: 'Investigation',
-            description: JSON.stringify({ stages: recommendedStages }),
-            setupStatus: 'COMPLETED',
-          },
+          data: { status: 'RUNNING', currentPhase: 'Investigation', description: JSON.stringify({ stages: recommendedStages }), setupStep: 'Initializing research cycle...' },
         })
       } catch (updateErr: any) {
         debugLog(`[runThinkingSetup] Failed to update space: ${updateErr.message}`)
-        await prisma.space.update({ where: { id: spaceId }, data: { setupStatus: 'FAILED', setupError: `Failed to update space: ${updateErr.message}` } })
+        await prisma.space.update({ where: { id: spaceId }, data: { setupStatus: 'FAILED', setupError: `Failed to update space: ${updateErr.message}`, setupStep: null } })
         return
       }
 
@@ -1714,11 +1711,13 @@ export function runThinkingSetupBackground(spaceId: string): void {
       startBackgroundLoop(spaceId)
 
       debugLog(`[runThinkingSetup] COMPLETED successfully for space ${spaceId}`)
+      // Only mark COMPLETED after everything finishes
+      await prisma.space.update({ where: { id: spaceId }, data: { setupStatus: 'COMPLETED', setupStep: null } })
 
     } catch (err: any) {
       debugLog(`[runThinkingSetupBackground] Unexpected error at step '${step}': ${err.message}`)
       try {
-        await prisma.space.update({ where: { id: spaceId }, data: { setupStatus: 'FAILED', setupError: `Step '${step}': ${err.message}` } })
+        await prisma.space.update({ where: { id: spaceId }, data: { setupStatus: 'FAILED', setupError: `Step '${step}': ${err.message}`, setupStep: null } })
       } catch (updateErr: any) {
         console.error('[runThinkingSetupBackground] CRITICAL — could not update space status:', updateErr.message)
       }

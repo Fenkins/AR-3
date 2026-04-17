@@ -323,6 +323,24 @@ function SpacesView() {
     setLoading(false)
   }
 
+  const deleteSpaceById = async (spaceId: string) => {
+    try {
+      const res = await fetch(`/api/spaces/${spaceId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Delete failed' }))
+        alert(`Delete failed: ${err.error}`)
+        return
+      }
+      setSpaces(spaces => spaces.filter(s => s.id !== spaceId))
+      if (selectedSpace?.id === spaceId) setSelectedSpace(null)
+    } catch (err: any) {
+      alert(`Delete failed: ${err.message}`)
+    }
+  }
+
   useEffect(() => {
     fetchSpaces()
   }, [])
@@ -353,7 +371,21 @@ function SpacesView() {
           >
             <div className="flex items-start justify-between mb-4">
               <h3 className="text-xl font-semibold">{space.name}</h3>
-              <StatusBadge status={space.status} />
+              <div className="flex items-center gap-2">
+                <StatusBadge status={space.status} />
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    if (confirm(`Delete space "${space.name}"? This cannot be undone.`)) {
+                      deleteSpaceById(space.id)
+                    }
+                  }}
+                  className="w-6 h-6 flex items-center justify-center text-dark-500 hover:text-red-400 hover:bg-dark-800 rounded transition-colors text-sm"
+                  title="Delete space"
+                >
+                  ✕
+                </button>
+              </div>
             </div>
             <p className="text-dark-400 text-sm mb-4 line-clamp-2">
               {space.initialPrompt ? space.initialPrompt.substring(0, 120) + '...' : 'No prompt'}

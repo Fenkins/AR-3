@@ -157,26 +157,27 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
   }, [isRunning, setupComplete, fetchSpaceData])
 
   const setupSteps = [
-    { message: 'Analyzing research goal...', duration: 1500 },
-    { message: 'Configuring thinking agent...', duration: 1500 },
-    { message: 'Generating stage pipeline...', duration: 2000 },
-    { message: 'Starting first research cycle...', duration: 3000 },
+    'Analyzing research goal...',
+    'Configuring thinking agent...',
+    'Creating stage pipeline...',
+    'Initializing research cycle...',
+    'Pre-allocating variants...',
   ]
 
   const runThinkingSetup = async () => {
+    if (isThinkingSetup) return // Guard against double-click
     setIsThinkingSetup(true)
+    setSetupProgress(0)
+    setSetupMessage('Starting setup...')
     setupStartTimeRef.current = Date.now()
-    
-    // Animate through setup steps
-    for (let i = 0; i < setupSteps.length; i++) {
-      setSetupMessage(setupSteps[i].message)
-      setSetupProgress(((i + 1) / setupSteps.length) * 100)
-      await new Promise(r => setTimeout(r, setupSteps[i].duration))
-    }
 
+    let pollCount = 0
+    const maxPolls = 60 // 60 * 2s = 2 min max wait
+
+    // Call API to START the thinking setup (fire-and-forget)
     try {
       const response = await fetch(`/api/spaces/${spaceId}`, {
-        method: 'POST',
+        method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
@@ -186,33 +187,77 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
 
       const text = await response.text()
       let data
-      try { data = JSON.parse(text) } catch { throw new Error(`Server returned: ${text.substring(0, 150)}`) }
+      try { data = JSON.parse(text) } catch { throw new Error(`Server error: ${text.substring(0, 100)}`) }
 
       if (!response.ok) {
-        throw new Error(data.error || 'Setup failed')
+        throw new Error(data.error || `HTTP ${response.status}`)
       }
 
-      setSetupProgress(100)
-      setSetupMessage('Setup complete!')
-
-      // Refresh data
-      await fetchSpaceData()
-      
-      // Start auto-run if enabled
-      if (isAutoMode) {
-        setIsRunning(true)
-        setRunStatus('running')
-      }
-
-      setTimeout(() => {
-        setIsThinkingSetup(false)
-        setSetupComplete(true)
-      }, 1000)
+      console.log('[ThinkingSetup] Started, polling for status...')
     } catch (error: any) {
-      console.error('Thinking setup error:', error)
+      console.error('[ThinkingSetup] Failed to start:', error)
       setIsThinkingSetup(false)
-      alert(`Setup failed: ${error.message}`)
+      alert(`Setup failed to start: ${error.message}`)
+      return
     }
+
+    // Poll space status every 2s to get real progress from setupStep
+    const pollInterval = setInterval(async () => {
+      pollCount++
+      try {
+        const res = await fetch(`/api/spaces/${spaceId}`, {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        if (!res.ok) return
+        const spaceData = await res.json()
+        const space = spaceData.space || spaceData
+
+        // Update progress based on real backend state
+        if (space.setupStatus === 'COMPLETED') {
+          clearInterval(pollInterval)
+          setSetupProgress(100)
+          setSetupMessage('Setup complete!')
+          setIsThinkingSetup(false)
+          setSetupComplete(true)
+          await fetchSpaceData()
+          if (isAutoMode) {
+            setIsRunning(true)
+            setRunStatus('running')
+          }
+          return
+        }
+
+        if (space.setupStatus === 'FAILED') {
+          clearInterval(pollInterval)
+          setIsThinkingSetup(false)
+          alert(`Setup failed: ${space.setupError || 'Unknown error'}`)
+          return
+        }
+
+        // Update with real step from backend
+        if (space.setupStep) {
+          setSetupMessage(space.setupStep)
+        }
+
+        // Progress based on which step (out of 5)
+        const stepIndex = setupSteps.findIndex(s => space.setupStep?.includes(s.substring(0, 20)))
+        if (stepIndex >= 0) {
+          setSetupProgress(Math.min(((stepIndex + 1) / setupSteps.length) * 90, 90))
+        } else if (pollCount > 2) {
+          // Still waiting for first sign of life
+          setSetupProgress(Math.min((pollCount / maxPolls) * 90, 90))
+        }
+
+        if (pollCount >= maxPolls) {
+          clearInterval(pollInterval)
+          setIsThinkingSetup(false)
+          alert('Setup timed out after 2 minutes. Please try again.')
+        }
+      } catch (err) {
+        console.error('[ThinkingSetup] Poll error:', err)
+      }
+    }, 2000)
   }
 
   const runResearchCycle = async (numCycles = 1) => {
@@ -513,7 +558,7 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
                         {stepProgress ? '✓' : i + 1}
                       </div>
                       <span className={isActive ? 'animate-pulse' : ''}>
-                        {step.message}
+                        {step}
                       </span>
                     </div>
                   )
