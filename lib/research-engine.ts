@@ -1205,12 +1205,21 @@ export async function resumeSpace(spaceId: string) {
   const currentStage = stages[0]
   const currentStageId = currentStage?.id || 'stage_0'
 
+  // Load variants from DB
+  let variants: any[] = []
+  try {
+    variants = await loadVariantsFromDb(spaceId)
+    debugLog(`[resumeSpace] Loaded ${variants.length} variants from DB`)
+  } catch (err: any) {
+    debugLog(`[resumeSpace] Could not load variants from DB: ${err.message}`)
+  }
+
   updateExecutionState(spaceId, {
     spaceId,
     isRunning: true,
     currentStageId,
     currentPhase: currentStage?.name || 'Investigation',
-    variants: [],
+    variants,
     experiments: space.experiments,
     lastUpdated: new Date(),
     retryCount: 0,
