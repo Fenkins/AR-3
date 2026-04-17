@@ -143,23 +143,34 @@ Respond with just a number between 2-5.`
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       const attemptLabel = attempt === 0 ? '' : ` (retry ${attempt})`
       const variantPrompt = `
-You are generating a research variant for the following goal:
-Research Goal: ${initialPrompt}
-Stage: ${stageConfig.name}
-Variant ${i + 1} of ${numVariants}${attemptLabel}
+You are a research planning assistant. Generate a detailed research plan for the goal below.
 
-Generate a UNIQUE and MEANINGFUL variant approach. This must be substantive and specific to the research goal above.
+RESEARCH GOAL: ${initialPrompt}
+STAGE: ${stageConfig.name}
+VARIANT NUMBER: ${i + 1} of ${numVariants}
 
-Required output format (follow EXACTLY):
-Name: [A specific, descriptive name for this variant — 5-15 words]
-Description: [A 2-3 sentence description of what this variant explores and why it is different from other approaches — be specific to: "${initialPrompt}"]
-Steps:
-1. [Concrete, research-specific step — what exactly to investigate, find, or produce]
-2. [Concrete step — specific actions, data sources, or analysis methods]
-3. [Concrete step — expected outputs and how they relate to the research goal]
-[Continue with more specific, non-trivial steps — aim for at least 10-15 steps total]
+Respond ONLY with the following exact format. Do not include any explanatory text before or after.
 
-IMPORTANT: Each step must be specific and meaningful. Do NOT use generic phrases like "Ok.", "Analyze results", "Document findings". Each step must be directly relevant to: "${initialPrompt}"`
+VARIANT_NAME: <write a short descriptive name, 5-15 words, specific to the research goal above>
+VARIANT_DESCRIPTION: <write 2-3 sentences describing what this variant explores and why it differs from other approaches. Be specific to the research goal.>
+STEPS:
+1. <write a concrete, specific step relevant to the research goal>
+2. <write a concrete, specific step with distinct actions or analysis>
+3. <write a concrete, specific step with expected outputs>
+4. <write a concrete, specific step>
+5. <write a concrete, specific step>
+6. <write a concrete, specific step>
+7. <write a concrete, specific step>
+8. <write a concrete, specific step>
+9. <write a concrete, specific step>
+10. <write a concrete, specific step>
+11. <write a concrete, specific step>
+12. <write a concrete, specific step>
+13. <write a concrete, specific step>
+14. <write a concrete, specific step>
+15. <write a concrete, specific step>
+
+IMPORTANT: Replace ALL placeholders above with real content. Each step must be specific, non-generic, and directly relevant to "${initialPrompt}". Do NOT write placeholder text like "<write a step>" or "Continue with more steps".`
 
       const response = await callAI(agentConfig, [
         { role: 'user', content: variantPrompt },
@@ -173,16 +184,20 @@ IMPORTANT: Each step must be specific and meaningful. Do NOT use generic phrases
       const parsedName = nameMatch ? nameMatch[1].trim() : ''
       const parsedDesc = descMatch ? descMatch[1].trim() : ''
 
-      // Quality validation
-      const nameOk = parsedName.length >= 5 && parsedName.length <= 80 && !/^(variant|step|ok|undefined|null)$/i.test(parsedName)
-      const descOk = parsedDesc.length >= 20
-      const stepsOk = stepsMatch && stepsMatch[1].trim().length > 50
+      // Quality validation — reject leftover placeholders or generic junk
+      const hasBrackets = /<[^>]+>|\[[^\]]+\]/.test(parsedName) || /<[^>]+>|\[[^\]]+\]/.test(parsedDesc) || /<[^>]+>|\[[^\]]+\]/.test(stepsMatch?.[1] || '')
+      const isGenericName = /^(variant|step|ok|undefined|null|a specific|a 2-3|continue|write|placeholder|example|sample)$/i.test(parsedName)
+      const nameOk = parsedName.length >= 8 && parsedName.length <= 80 && !hasBrackets && !isGenericName
+      const descOk = parsedDesc.length >= 30 && !hasBrackets && !/<write|continue|placeholder/i.test(parsedDesc)
+      const stepsRaw = stepsMatch?.[1] || ''
+      const stepsOk = stepsRaw.length > 100 && !/<write|continue|placeholder|example/i.test(stepsRaw) && !/\[step \d+\]/i.test(stepsRaw)
 
       if (nameOk && descOk && stepsOk) {
         name = parsedName
         description = parsedDesc
         // Parse steps
-        const stepLines = stepsMatch![1].split('\n').filter(l => l.trim() && l.trim().length > 3)
+        const rawSteps = stepsMatch ? stepsMatch[1] : ''
+        const stepLines = rawSteps.split('\n').filter(l => l.trim() && l.trim().length > 3)
         steps = stepLines.slice(0, numStepsTarget).map((line, idx) => ({
           id: `step_${Date.now()}_${i}_${idx}`,
           variantId: '',
