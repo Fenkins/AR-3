@@ -573,6 +573,7 @@ function PrePopulateModal({ serviceProviders, onClose, onSuccess }: {
   const [apiKey, setApiKey] = useState('')
   const [models, setModels] = useState<string[]>([])
   const [selectedModel, setSelectedModel] = useState('')
+  const [agentOrder, setAgentOrder] = useState(0)
   const [fetchingModels, setFetchingModels] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -623,17 +624,17 @@ function PrePopulateModal({ serviceProviders, onClose, onSuccess }: {
       if (!providerRes.ok) throw new Error(providerData.error || 'Failed to create provider')
       const serviceProviderId = providerData.provider?.id || providerData.id
 
-      // Create all agents
+      // Create all agents — all get the same order value (priority among same-role agents)
       const agentsToCreate = [
-        { name: 'Thinking Agent', role: 'THINKING', order: 0 },
-        { name: 'Investigation Agent', role: 'INVESTIGATION', order: 1 },
-        { name: 'Proposition Agent', role: 'PROPOSITION', order: 2 },
-        { name: 'Planning Agent', role: 'PLANNING', order: 3 },
-        { name: 'Implementation Agent', role: 'IMPLEMENTATION', order: 4 },
-        { name: 'Testing Agent', role: 'TESTING', order: 5 },
-        { name: 'Verification Agent', role: 'VERIFICATION', order: 6 },
-        { name: 'Evaluation Agent', role: 'EVALUATION', order: 7 },
-        { name: 'Grading Agent', role: 'GRADING', order: 8 },
+        { name: 'Thinking Agent', role: 'THINKING' },
+        { name: 'Investigation Agent', role: 'INVESTIGATION' },
+        { name: 'Proposition Agent', role: 'PROPOSITION' },
+        { name: 'Planning Agent', role: 'PLANNING' },
+        { name: 'Implementation Agent', role: 'IMPLEMENTATION' },
+        { name: 'Testing Agent', role: 'TESTING' },
+        { name: 'Verification Agent', role: 'VERIFICATION' },
+        { name: 'Evaluation Agent', role: 'EVALUATION' },
+        { name: 'Grading Agent', role: 'GRADING' },
       ]
 
       for (const agent of agentsToCreate) {
@@ -645,7 +646,7 @@ function PrePopulateModal({ serviceProviders, onClose, onSuccess }: {
             serviceProviderId,
             model: selectedModel,
             role: agent.role,
-            order: agent.order,
+            order: agentOrder,
           }),
         })
       }
@@ -741,6 +742,22 @@ function PrePopulateModal({ serviceProviders, onClose, onSuccess }: {
                   <option key={m} value={m}>{m}</option>
                 ))}
               </select>
+            </div>
+
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-dark-300 mb-2">
+                Agent Order (Priority)
+              </label>
+              <input
+                type="number"
+                value={agentOrder}
+                onChange={(e) => setAgentOrder(parseInt(e.target.value) || 0)}
+                className="w-full px-4 py-2 bg-dark-800 border border-dark-600 rounded-lg focus:ring-2 focus:ring-primary-500"
+                placeholder="0"
+              />
+              <p className="text-xs text-dark-400 mt-1">
+                All agents get this order value. Lower = higher priority when multiple agents of the same role exist.
+              </p>
             </div>
 
             <div className="mb-6 p-4 bg-dark-800 rounded-lg">
