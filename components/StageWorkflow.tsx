@@ -61,6 +61,7 @@ interface StageWorkflowProps {
 
 export default function StageWorkflow({ spaceId, initialPrompt, onClose }: StageWorkflowProps) {
   const { token } = useAuth()
+  const [space, setSpace] = useState<any>(null)
   const [stages, setStages] = useState<Stage[]>([])
   const [currentStageIndex, setCurrentStageIndex] = useState(0)
   const [variants, setVariants] = useState<Variant[]>([])
@@ -99,6 +100,7 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
       try { data = JSON.parse(text) } catch { throw new Error(`Server returned: ${text.substring(0, 150)}`) }
       
       if (data.space) {
+        setSpace(data.space)
         // Check if setup is complete
         if (data.stages && data.stages.length > 0) {
           setStages(data.stages)
@@ -124,11 +126,15 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
           setBreakthroughs(data.breakthroughs)
         }
         
-        // Load variants from execution state or from database
-        if (data.execution?.variants && data.execution.variants.length > 0) {
-          setVariants(data.execution.variants)
-        } else if (data.space?.variants && data.space.variants.length > 0) {
-          setVariants(data.space.variants)
+        // Load variants for the CURRENTLY SELECTED stage (by UI index), not execution state's currentStageId
+        // Execution state holds ALL stages' variants; we filter to only the selected stage
+        const selectedStageId = stages[currentStageIndex]?.id || data.execution?.currentStageId || data.stages?.[0]?.id
+        const allVariants = data.execution?.variants || data.space?.variants || []
+        const stageVariants = allVariants.filter((v: any) => v.stageId === selectedStageId)
+        if (stageVariants.length > 0) {
+          setVariants(stageVariants)
+        } else {
+          setVariants([])
         }
       }
     } catch (error) {
@@ -136,7 +142,7 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
     } finally {
       if (showLoading) setLoading(false)
     }
-  }, [spaceId, token])
+  }, [spaceId, token, currentStageIndex, stages])
 
   // Initial fetch
   useEffect(() => {
@@ -395,8 +401,8 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
         body: JSON.stringify({
           action: 'generate_variants',
           stageId: currentStage.id,
-          numVariants: 3,
-          stepsPerVariant: 'auto',
+          numVariants: space?.defaultNumVariants ?? 3,
+          stepsPerVariant: space?.defaultStepsPerVariant ?? 25,
         }),
       })
 

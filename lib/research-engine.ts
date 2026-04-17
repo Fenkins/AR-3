@@ -362,9 +362,9 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
     if (stageVariants.length === 0) {
       debugLog(`[executeResearchCycle] No variants for stage ${currentStage.name}, generating...`)
       try {
-        const numVariants = currentStage.numVariants 
-          ?? (currentStage.gpuEnabled ? 4 : 'auto')
-        const stepsPerVariant = currentStage.stepsPerVariant ?? 'auto'
+        // Use space's configured defaults from creation, fall back to stage config
+        const numVariants = space.defaultNumVariants ?? currentStage.numVariants ?? 3
+        const stepsPerVariant = space.defaultStepsPerVariant ?? currentStage.stepsPerVariant ?? 25
         await generateStageVariants(spaceId, currentStage.id, numVariants, stepsPerVariant)
         // Reload state to get newly generated variants
         const newState = getExecutionState(spaceId)
@@ -1321,10 +1321,11 @@ export async function generateStageVariants(
   // Save to database
   await saveVariantsToDatabase(spaceId, stageId, stage.name, variants, space.currentCycle)
 
-  // Update execution state
+  // Update execution state — merge with existing variants from OTHER stages (don't wipe them)
   const state = getExecutionState(spaceId)
   if (state) {
-    updateExecutionState(spaceId, { variants })
+    const otherStageVariants = (state.variants || []).filter(v => v.stageId !== stageId)
+    updateExecutionState(spaceId, { variants: [...otherStageVariants, ...variants] })
   }
 
   return variants
