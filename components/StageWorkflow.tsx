@@ -124,9 +124,11 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
           setBreakthroughs(data.breakthroughs)
         }
         
-        // Load variants from experiments
+        // Load variants from execution state or from database
         if (data.execution?.variants && data.execution.variants.length > 0) {
           setVariants(data.execution.variants)
+        } else if (data.space?.variants && data.space.variants.length > 0) {
+          setVariants(data.space.variants)
         }
       }
     } catch (error) {
