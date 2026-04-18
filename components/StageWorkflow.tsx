@@ -165,20 +165,12 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
     } finally {
       if (showLoading) setLoading(false)
     }
-  }, [spaceId, token])
+  }, [spaceId, token, currentStageIndex])
 
   // Initial fetch
   useEffect(() => {
     fetchSpaceData()
   }, [fetchSpaceData])
-
-  // Re-fetch when user switches stage tabs (currentStageIndex changes)
-  useEffect(() => {
-    console.log('[DEBUG] currentStageIndex changed to ' + currentStageIndex + ', re-fetching...')
-    // Always fetch when tab changes — setupComplete is already true after initial mount,
-    // but we removed it from useCallback deps to avoid stale closure issues
-    fetchSpaceData(false)
-  }, [currentStageIndex, fetchSpaceData])
 
   // Polling for updates when running
   useEffect(() => {

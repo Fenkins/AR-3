@@ -63,10 +63,21 @@ export async function GET(
     // Get execution state
     const executionState = getExecutionState(params.id)
 
+    // Always load variants from DB to ensure fresh data, not stale in-memory state
+    const dbVariants = await prisma.variant.findMany({
+      where: { spaceId: params.id },
+      include: { steps: { orderBy: { order: 'asc' } } },
+      orderBy: [{ cycleNumber: 'desc' }, { order: 'asc' }],
+    })
+
+    // Merge DB variants with execution state variants
+    const executionVariants = executionState?.variants || []
+    const mergedVariants = dbVariants.length > 0 ? dbVariants : executionVariants
+
     return NextResponse.json({
       space,
       stages,
-      execution: executionState,
+      execution: { ...executionState, variants: mergedVariants },
       isRunning: executionState?.isRunning ?? (space.status === 'RUNNING'),
     })
   } catch (error) {
