@@ -22,16 +22,28 @@ if [ "$INSTANCES" -eq 0 ]; then
 fi
 
 # 2. Check if next-server is running locally
-if ! ps aux | grep -q "next-server" | grep -v grep; then
+NEXT_PID=$(ps aux | grep -v grep | grep "next-server" | awk '{print $2}' | head -1)
+if [ -z "$NEXT_PID" ]; then
     echo "[$(date)] WARNING: next-server not running! Restarting..." >> $LOG
     pkill -f "next-server" 2>/dev/null || true
+    sleep 2
     cd /opt/AR-3 && DATABASE_URL="file:./prisma/prisma/dev.db" nohup npm start > /tmp/nextjs.log 2>&1 &
     sleep 5
     echo "next-server restarted" >> $LOG
+else
+    # Server is running — verify it responds to requests
+    if ! curl -s -m 3 http://localhost:3000/ > /dev/null 2>&1; then
+        echo "[$(date)] next-server not responding! Force-restarting..." >> $LOG
+        kill -9 $NEXT_PID 2>/dev/null || true
+        sleep 2
+        cd /opt/AR-3 && DATABASE_URL="file:./prisma/prisma/dev.db" nohup npm start > /tmp/nextjs.log 2>&1 &
+        sleep 5
+    fi
 fi
 
 # 3. Check if GPU worker is running
-if ! ps aux | grep -q "gpu_worker" | grep -v grep; then
+GPU_PID=$(ps aux | grep -v grep | grep "gpu_worker" | awk '{print $2}' | head -1)
+if [ -z "$GPU_PID" ]; then
     echo "[$(date)] WARNING: gpu_worker not running! Restarting..." >> $LOG
     pkill -f "gpu_worker" 2>/dev/null || true
     nohup python3 /opt/AR-3/scripts/gpu_worker.py >> /tmp/gpu_worker.log 2>&1 &

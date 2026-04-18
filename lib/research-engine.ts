@@ -1,6 +1,6 @@
 import { prisma } from './prisma'
 import { callAI, AIConfig, AIMessage } from './ai'
-import { generateVariants, gradeVariant, selectBestVariant, saveVariantsToDatabase, updateVariantStepDb, updateVariantDb, selectBestVariantFromDb, loadVariantsFromDb, Variant } from './variant-engine'
+import { generateVariants, gradeVariant, selectBestVariant, saveVariantsToDatabase, updateVariantStepDb, updateVariantDb, selectBestVariantFromDb, loadVariantsFromDb, reEvaluateStepCount, Variant } from './variant-engine'
 import { buildEmbeddingContext } from './embeddings'
 import fs from 'fs'
 
@@ -829,9 +829,28 @@ Execute your stage tasks thoroughly.`
 }
 
 async function processEvaluationResults(spaceId: string, content: string) {
+  // Check for explicit negative verdicts FIRST — these override any positive mentions
+  const negativeVerdictPatterns = [
+    /NOT\s+A\s+BREAKTHROUGH/i,
+    /NOT\s+A\s+BREAKTHROUGH\s*—/i,
+    /INSUFFICIENT\s+EVIDENCE/i,
+    /does\s+not\s+constitute\s+a\s+breakthrough/i,
+    /no+ breakthroughs? detected/i,
+    /breakthrough:\s*no/i,
+    /verdict:\s*not a breakthrough/i,
+    /verdict:\s*rejected/i,
+    /false positive/i,
+    /not sufficient for breakthrough/i,
+  ]
+  const hasNegativeVerdict = negativeVerdictPatterns.some(p => p.test(content))
+  if (hasNegativeVerdict) {
+    debugLog(`[processEvaluationResults] Negative verdict detected — skipping breakthrough creation`)
+    return
+  }
+
   const confidenceMatch = content.match(/confidence[:\s]+([\d.]+)/i)
   const breakthroughMatch = content.match(/breakthrough[:\s]+(yes|true|definitely)/i)
-  const goldNuggetMatch = content.match(/(gold nugget|breakthrough|major discovery)/i)
+  const goldNuggetMatch = content.match(/(?:gold nugget|major discovery|significant breakthrough)/i)
 
   if (breakthroughMatch || goldNuggetMatch) {
     // Require meaningful confidence (>60%) to auto-verify; below that, leave unverified for human review
@@ -850,6 +869,49 @@ async function processEvaluationResults(spaceId: string, content: string) {
       },
     })
     debugLog(`[processEvaluationResults] Breakthrough ${isVerified ? 'auto-verified' : 'created unverified'} with confidence ${confidence}`)
+  }
+}
+
+/**
+ * Process cacheDownloads for a variant — fetch models/datasets referenced in the plan.
+ * Calls POST /api/model-cache for each download URL. Failures are non-fatal.
+ */
+async function processVariantCacheDownloads(variant: Variant, spaceId: string): Promise<void> {
+  if (!variant.cacheDownloads) return
+
+  let downloads: Array<{ fileName: string; downloadUrl: string; description: string }>
+  try {
+    downloads = JSON.parse(variant.cacheDownloads)
+  } catch {
+    debugLog(`[processVariantCacheDownloads] Failed to parse cacheDownloads for variant ${variant.id}`)
+    return
+  }
+
+  if (!Array.isArray(downloads) || downloads.length === 0) return
+
+  const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000'
+
+  for (const dl of downloads) {
+    if (!dl.downloadUrl || !dl.fileName) continue
+    try {
+      const res = await fetch(`${baseUrl}/api/model-cache`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          spaceId,
+          fileName: dl.fileName,
+          downloadUrl: dl.downloadUrl,
+          description: dl.description || dl.fileName,
+        }),
+      })
+      if (res.ok) {
+        debugLog(`[processVariantCacheDownloads] Downloaded: ${dl.fileName}`)
+      } else {
+        debugLog(`[processVariantCacheDownloads] Failed to download ${dl.fileName}: ${res.status} ${await res.text()}`)
+      }
+    } catch (err: any) {
+      debugLog(`[processVariantCacheDownloads] Error downloading ${dl.fileName}: ${err.message}`)
+    }
   }
 }
 
@@ -1121,16 +1183,17 @@ export function startBackgroundLoop(spaceId: string): void {
       const currentStageId = state.currentStageId || stages[0].id
       const currentStage = stages.find(s => s.id === currentStageId)
 
-      // Check if there are pending variants to execute
+      // Check if there are pending variants to execute for the current stage
       if (state.variants && state.variants.length > 0) {
-        const pendingVariant = state.variants.find(v => v.stageId === currentStageId && v.status === 'PENDING')
+        const currentStageVariants = state.variants.filter(v => v.stageId === currentStageId)
+        const pendingVariant = currentStageVariants.find(v => v.status === 'PENDING')
+        
         if (pendingVariant) {
           debugLog(`[startBackgroundLoop] Executing pending variant ${pendingVariant.name}`)
           try {
-            // Give variant execution much more time — it has 15 steps and each can take 30-60s
             await withTimeout(
               executeVariantCycle(spaceId, pendingVariant.id),
-              1800000, // 30 min — variant step execution is slow
+              1800000,
               'executeVariantCycle'
             )
             consecutiveErrors = 0
@@ -1140,6 +1203,47 @@ export function startBackgroundLoop(spaceId: string): void {
           }
           scheduleNext()
           return
+        }
+        
+        // No PENDING variants for current stage — check if ALL variants for this stage are done
+        // (all COMPLETED or non-existent). If so, advance to next stage and generate its variants.
+        if (currentStageVariants.length > 0) {
+          const allDone = currentStageVariants.every(v => v.status === 'COMPLETED' || v.status === 'FAILED')
+          if (allDone) {
+            debugLog(`[startBackgroundLoop] All variants for ${currentStage?.name} complete — advancing to next stage`)
+            const nextStageId = getNextStageId(stages, currentStageId)
+            const nextStage = stages.find(s => s.id === nextStageId)
+            
+            // Load space for config (defaultNumVariants, etc)
+            const spaceForConfig = await prisma.space.findUnique({ where: { id: spaceId } })
+            
+            // Persist stage advancement to DB
+            try {
+              await prisma.space.update({
+                where: { id: spaceId },
+                data: { currentPhase: nextStage?.name || 'Investigation' }
+              })
+            } catch {}
+            
+            // Update execution state to next stage
+            updateExecutionState(spaceId, {
+              currentStageId: nextStageId,
+              currentPhase: nextStage?.name || 'Investigation',
+            })
+            
+            // Generate variants for the new stage
+            try {
+              const numVariants = (spaceForConfig as any)?.defaultNumVariants ?? nextStage?.numVariants ?? 3
+              const stepsPerVariant = (spaceForConfig as any)?.defaultStepsPerVariant ?? nextStage?.stepsPerVariant ?? 25
+              debugLog(`[startBackgroundLoop] Generating ${numVariants} variants for ${nextStage?.name}`)
+              await generateStageVariants(spaceId, nextStageId, numVariants, stepsPerVariant)
+            } catch (err: any) {
+              debugLog(`[startBackgroundLoop] Failed to generate variants for next stage: ${err.message}`)
+            }
+            
+            scheduleNext()
+            return
+          }
         }
       }
 
@@ -1254,6 +1358,13 @@ export async function stopSpace(spaceId: string) {
     where: { id: spaceId },
     data: { status: 'STOPPED' },
   })
+  // Clean up GPU jobs for this space
+  try {
+    const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000'
+    await fetch(`${baseUrl}/api/jobs/gpu?spaceId=${spaceId}`, { method: 'DELETE' })
+  } catch (err) {
+    debugLog(`[stopSpace] Failed to clean GPU jobs: ${(err as Error).message}`)
+  }
 }
 
 export async function updateSpaceStages(spaceId: string, stages: ResearchStage[]) {
@@ -1303,11 +1414,11 @@ export async function generateStageVariants(
     .map(e => `[${e.phase}]: ${e.result?.substring(0, 300) || ''}`)
     .join('\n\n')
 
-  const stageConfig = {
+  const stageConfig: { id: string; name: string; numVariants: number | 'auto'; stepsPerVariant: number | 'auto' } = {
     id: stageId,
     name: stage.name,
-    numVariants,
-    stepsPerVariant,
+    numVariants: (space as any).numVariantsMode === 'auto' ? 'auto' : ((space as any).defaultNumVariants ?? numVariants),
+    stepsPerVariant: (space as any).stepsPerVariantMode === 'auto' ? 'auto' : ((space as any).defaultStepsPerVariant ?? stepsPerVariant),
   }
 
   // Generate real variants using AI
@@ -1346,6 +1457,9 @@ export async function executeVariantCycle(spaceId: string, variantId: string) {
   const stage = stages.find(s => s.id === variant.stageId)
   if (!stage) throw new Error('Stage not found')
 
+  // Process cache downloads (models/datasets) before execution begins
+  await processVariantCacheDownloads(variant, spaceId)
+
   // Execute the variant
   const executedVariant = await executeVariant(variant, spaceId, stage.name)
 
@@ -1364,6 +1478,41 @@ export async function executeVariantCycle(spaceId: string, variantId: string) {
         updateExecutionState(spaceId, { selectedVariantId: variantId })
       }
     } catch {}
+  }
+
+  // Auto-steps: if grading agent is in auto mode, re-evaluate step count for remaining pending variants
+  if (space.stepsPerVariantMode === 'auto') {
+    try {
+      const stageVariants = updatedVariants.filter(v => v.stageId === variant.stageId)
+      const pendingCount = stageVariants.filter(v => v.status === 'PENDING').length
+      if (pendingCount > 0) {
+        debugLog(`[executeVariantCycle] Auto-steps: ${pendingCount} pending variants in ${stage.name}, evaluating step count`)
+        const reEvaluated = await reEvaluateStepCount(spaceId, variant.stageId, executedVariant)
+        if (reEvaluated && reEvaluated !== space.defaultStepsPerVariant) {
+          debugLog(`[executeVariantCycle] Auto-steps: adjusting remaining variants from ${space.defaultStepsPerVariant} to ${reEvaluated} steps`)
+          // Update defaultStepsPerVariant for future variant generation in this stage
+          await prisma.space.update({
+            where: { id: spaceId },
+            data: { defaultStepsPerVariant: reEvaluated },
+          })
+          // Trim excess steps from pending variants
+          for (const v of stageVariants) {
+            if (v.status === 'PENDING' && v.steps.length > reEvaluated) {
+              const trimmed = v.steps.slice(0, reEvaluated)
+              v.steps = trimmed
+              // Persist trimmed steps to DB
+              for (const step of trimmed) {
+                await updateVariantStepDb(step.id, { status: 'PENDING' })
+              }
+              debugLog(`[executeVariantCycle] Trimmed variant ${v.name} to ${reEvaluated} steps`)
+            }
+          }
+          updateExecutionState(spaceId, { variants: updatedVariants })
+        }
+      }
+    } catch (err: any) {
+      debugLog(`[executeVariantCycle] Auto-steps evaluation failed: ${err.message}`)
+    }
   }
 
   return executedVariant

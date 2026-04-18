@@ -183,3 +183,22 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
+
+// DELETE: clear GPU jobs for a space (called when space is deleted/stopped)
+export async function DELETE(request: NextRequest) {
+  const spaceId = new URL(request.url).searchParams.get('spaceId')
+  if (!spaceId) {
+    return NextResponse.json({ error: 'spaceId required' }, { status: 400 })
+  }
+
+  const queue = readQueue()
+  const initialLen = queue.length
+  const remaining = queue.filter(j => j.spaceId !== spaceId)
+  const removed = initialLen - remaining.length
+
+  if (removed > 0) {
+    writeQueue(remaining)
+  }
+
+  return NextResponse.json({ removed, message: `Removed ${removed} GPU jobs for space ${spaceId}` })
+}

@@ -93,6 +93,8 @@ model Space {
   setupStep       String?      // Human-readable step description for UI progress
   defaultNumVariants Int         @default(3)   // Default variants per stage
   defaultStepsPerVariant Int    @default(25)  // Default steps per variant
+  numVariantsMode String     @default("fixed") // "fixed" = user-specified, "auto" = grading agent decides
+  stepsPerVariantMode String @default("fixed") // "fixed" = user-specified, "auto" = grading agent decides
   experiments     Experiment[]
   breakthroughs   Breakthrough[]
   variants        Variant[]

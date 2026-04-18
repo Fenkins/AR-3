@@ -425,6 +425,86 @@ Recommendation: [suggestion]`
   }
 }
 
+export async function reEvaluateStepCount(
+  spaceId: string,
+  stageId: string,
+  completedVariant: Variant
+): Promise<number | null> {
+  const space = await prisma.space.findUnique({
+    where: { id: spaceId },
+    include: {
+      user: {
+        include: {
+          agents: { where: { isActive: true } },
+          serviceProviders: true,
+        },
+      },
+    },
+  })
+
+  if (!space) return null
+
+  const gradingAgent = space.user.agents
+    .filter(a => a.role === 'GRADING' && a.isActive)
+    .sort((a, b) => a.order - b.order)[0]
+
+  if (!gradingAgent) return null
+
+  const serviceProvider = space.user.serviceProviders.find(sp => sp.id === gradingAgent.serviceProviderId)
+  if (!serviceProvider) return null
+
+  const agentConfig: AIConfig = {
+    provider: serviceProvider.provider,
+    apiKey: serviceProvider.apiKey,
+    model: gradingAgent.model,
+  }
+
+  const prompt = `
+You are an auto-step advisor for a research pipeline.
+
+Research Goal: ${space.initialPrompt}
+Stage: ${stageId} (completed variant)
+
+Completed Variant: ${completedVariant.name}
+Grade: ${completedVariant.grade || 'N/A'}
+Steps Completed: ${completedVariant.steps.filter(s => s.status === 'COMPLETED').length}/${completedVariant.steps.length}
+Feedback: ${completedVariant.feedback || 'None'}
+
+Results from completed steps:
+${completedVariant.steps.filter(s => s.status === 'COMPLETED').map(s => `- ${s.name}: ${(s.result || '').substring(0, 150)}`).join('\n')}
+
+Based on quality of results so far and remaining time/resources, should the remaining pending variants in this stage have MORE steps (complex task not fully explored), FEWER steps (quality plateauing, diminishing returns), or KEEP the same step count?
+
+Also consider: Was ${completedVariant.steps.length} steps the right amount, or should future variants use a different count?
+
+Respond with:
+RECOMMENDATION: [MORE / FEWER / SAME]
+RECOMMENDED_STEP_COUNT: [number between 5 and 50]`
+
+  try {
+    const response = await callAI(agentConfig, [
+      { role: 'system', content: 'You are a research optimization advisor. Analyze completed work and recommend step count adjustments for remaining variants in the stage.' },
+      { role: 'user', content: prompt },
+    ])
+
+    const recMatch = response.content.match(/RECOMMENDATION:\s*(MORE|FEWER|SAME)/i)
+    const countMatch = response.content.match(/RECOMMENDED_STEP_COUNT:\s*(\d+)/i)
+
+    if (recMatch && countMatch) {
+      const rec = recMatch[1].toUpperCase()
+      const count = parseInt(countMatch[1])
+
+      if (rec === 'FEWER') return Math.max(5, count)
+      if (rec === 'MORE') return Math.min(50, count)
+      if (rec === 'SAME') return null // no change
+    }
+  } catch (err: any) {
+    debugLog(`[reEvaluateStepCount] Failed: ${err.message}`)
+  }
+
+  return null
+}
+
 export async function selectBestVariant(variants: Variant[]): Promise<Variant> {
   // Filter completed variants
   const completed = variants.filter(v => v.status === 'COMPLETED')
@@ -528,6 +608,7 @@ export async function loadVariantsFromDb(spaceId: string, stageId?: string): Pro
     isSelected: v.isSelected,
     order: v.order,
     status: v.status as Variant['status'],
+    cacheDownloads: v.cacheDownloads || null,
     createdAt: v.createdAt,
     steps: v.steps.map(s => ({
       id: s.id,

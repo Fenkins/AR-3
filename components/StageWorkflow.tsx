@@ -84,6 +84,10 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
   const [totalCost, setTotalCost] = useState(0)
   const [breakthroughs, setBreakthroughs] = useState<any[]>([])
 
+  // Guard: track whether we've ever synced stage index from server.
+  // After first load, NEVER override the user's manual tab selection.
+  const serverStageSyncDone = useRef(false)
+
   // Polling interval
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const setupStartTimeRef = useRef<number | null>(null)
@@ -119,10 +123,14 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
         
         if (data.stages?.length > 0) {
           setStages(data.stages)
-          // Find current stage index
-          if (data.execution?.currentStageId) {
+          // Sync stage index from server ONLY on the very first successful fetch.
+          // After that, always respect the user's manual tab selection (currentStageIndex).
+          if (!serverStageSyncDone.current && data.execution?.currentStageId) {
             const idx = data.stages.findIndex((s: Stage) => s.id === data.execution.currentStageId)
-            if (idx >= 0) setCurrentStageIndex(idx)
+            if (idx >= 0) {
+              setCurrentStageIndex(idx)
+              serverStageSyncDone.current = true
+            }
           }
         }
         
@@ -139,11 +147,13 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
           setBreakthroughs(data.breakthroughs)
         }
         
-        // Load variants for the CURRENTLY SELECTED stage (by UI index), not execution state's currentStageId
-        // Execution state holds ALL stages' variants; we filter to only the selected stage
-        const selectedStageId = stages[currentStageIndex]?.id || data.execution?.currentStageId || data.stages?.[0]?.id
+        // Use data.stages (fresh from API) rather than React state (stages) which may be stale
+        // when currentStageIndex changes faster than state updates. currentStageIndex is always
+        // up-to-date because it's set synchronously by setCurrentStageIndex before the effect fires.
+        const selectedStageId = data.stages?.[currentStageIndex]?.id || data.execution?.currentStageId || data.stages?.[0]?.id
         const allVariants = data.execution?.variants || data.space?.variants || []
         const stageVariants = allVariants.filter((v: any) => v.stageId === selectedStageId)
+        console.log('[DEBUG] fetchSpaceData done: currentStageIndex=' + currentStageIndex + ', selectedStageId=' + selectedStageId + ', stageVariants=' + stageVariants.length + ', totalVariants=' + allVariants.length)
         if (stageVariants.length > 0) {
           setVariants(stageVariants)
         } else {
@@ -164,10 +174,11 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
 
   // Re-fetch when user switches stage tabs (currentStageIndex changes)
   useEffect(() => {
-    if (setupComplete) {
-      fetchSpaceData(false)
-    }
-  }, [currentStageIndex])
+    console.log('[DEBUG] currentStageIndex changed to ' + currentStageIndex + ', re-fetching...')
+    // Always fetch when tab changes — setupComplete is already true after initial mount,
+    // but we removed it from useCallback deps to avoid stale closure issues
+    fetchSpaceData(false)
+  }, [currentStageIndex, fetchSpaceData])
 
   // Polling for updates when running
   useEffect(() => {
@@ -772,6 +783,7 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
           {stages.map((stage, index) => {
             const isCurrent = index === currentStageIndex
             const isCompleted = stage.status === 'completed'
+            const isPipelineRunning = executionState?.currentStageId === stage.id && isRunning
             const experiment = experiments.find(e => e.phase.toLowerCase() === stage.name.toLowerCase())
             const hasRun = !!experiment
             
@@ -787,20 +799,31 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
                 }`}
               >
                 <button 
-                  onClick={() => setCurrentStageIndex(index)}
+                  onClick={() => { console.log('[DEBUG] Tab clicked: index=' + index + ', stage=' + stage.name + ', stages.length=' + stages.length); setCurrentStageIndex(index) }}
                   className="flex-1 flex items-center gap-3 text-left"
                 >
-                  <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${
+                  <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold relative ${
+                    isPipelineRunning ? 'bg-yellow-500 text-white animate-pulse' :
                     isCurrent ? 'bg-primary-600 text-white' 
                       : hasRun ? 'bg-green-600 text-white'
                         : 'bg-dark-700 text-dark-400'
                   }`}>
                     {hasRun ? '✓' : index + 1}
+                    {isPipelineRunning && (
+                      <span className="absolute -top-1 -right-1 w-3 h-3 bg-yellow-400 rounded-full animate-ping" />
+                    )}
                   </div>
                   <div>
-                    <p className={`text-base font-medium ${isCurrent ? 'text-white' : 'text-dark-200'}`}>
-                      {stage.name}
-                    </p>
+                    <div className="flex items-center gap-2">
+                      <p className={`text-base font-medium ${isCurrent ? 'text-white' : 'text-dark-200'}`}>
+                        {stage.name}
+                      </p>
+                      {isPipelineRunning && (
+                        <span className="px-1.5 py-0.5 text-xs font-bold bg-yellow-500 text-black rounded animate-pulse">
+                          RUNNING
+                        </span>
+                      )}
+                    </div>
                     <p className="text-xs text-dark-500 line-clamp-1">{stage.description}</p>
                     {experiment && (
                       <p className="text-xs text-green-400 mt-0.5">
@@ -879,6 +902,16 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
       )}
 
       {/* Variants */}
+      <div className="bg-dark-900 rounded-xl border border-dark-700 p-3 mb-3">
+        <div className="flex items-center gap-3 text-xs font-mono">
+          <span className="px-2 py-1 bg-yellow-500/20 text-yellow-300 rounded">
+            Tab {currentStageIndex}: {stages[currentStageIndex]?.name} (server stage: {executionState?.currentStageId})
+          </span>
+          <span className="text-dark-400">
+            Showing {variants.length} of {executionState?.variants?.length || 0} variants | setupComplete={String(setupComplete)}
+          </span>
+        </div>
+      </div>
       {variants.length > 0 && (
         <div className="bg-dark-900 rounded-xl border border-dark-700 p-4">
           <div className="flex items-center justify-between mb-3">
