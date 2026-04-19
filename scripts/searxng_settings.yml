@@ -1,0 +1,50 @@
+Welcome to vast.ai. If authentication fails, try again after a few seconds, and double check your ssh key.
+Have fun!
+use_default_settings: true
+
+general:
+  instance_name: "AR-3 Research"
+  debug: false
+  autoload_plugins: false
+
+server:
+  secret_key: "ar3-searxng-secret-CHANGE-ME"
+  bind_address: "127.0.0.1"
+  port: 4001
+  limiter: false
+  public_instance: false
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "en"
+  formats:
+    - html
+    - json
+
+brand:
+  issue_url: "https://github.com/FenkIn/AR-3/issues"
+  public_instances: ""
+  custom:
+    links:
+      AR3: "https://github.com/FenkIn/AR-3"
+
+outgoing:
+  request_timeout: 10.0
+  max_request_timeout: 30.0
+
+engines:
+  - name: wikipedia
+    engine: wikipedia
+    shortcut: w
+  - name: huggingface
+    engine: huggingface
+    shortcut: hf
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: ddg
+
+doi_resolvers:
+  "https://doi.org": "DOI.org"
+
+default_doi_resolver: "https://doi.org"
