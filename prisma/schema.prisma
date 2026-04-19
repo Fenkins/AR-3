@@ -7,198 +7,198 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model User {
-  id               String              @id @default(uuid())
-  email            String              @unique
-  password         String
-  username         String              @unique
-  role             String              @default("USER")
-  isActive         Boolean             @default(true)
-  createdAt        DateTime            @default(now())
-  updatedAt        DateTime            @updatedAt
-  serviceProviders ServiceProvider[]
-  embeddingProviders EmbeddingProvider[]
-  agents           Agent[]
-  spaces           Space[]
-  experiments      Experiment[]
-  breakthroughs    Breakthrough[]
-}
-
-model ServiceProvider {
-  id          String   @id @default(uuid())
-  userId      String
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  provider    String   // openai, anthropic, google, openrouter, minimax
-  name        String   // Display name
-  apiKey      String
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  agents      Agent[]
-
-  @@unique([userId, provider])
-}
-
-model EmbeddingProvider {
-  id          String   @id @default(uuid())
-  userId      String
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  provider    String   // openai, azure, google, cohere, huggingface
-  name        String   // Display name
-  apiKey      String
-  apiEndpoint String?  // For Azure or custom endpoints
-  model       String   // e.g. text-embedding-3-small, embedding-001, embed-english-v3.0
-  dimensions  Int?     // Output dimensions (for OpenAI 3-series)
-  isActive    Boolean  @default(true)
-  isDefault   Boolean  @default(false)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  @@unique([userId, provider])
-}
-
 model Agent {
-  id                 String           @id @default(uuid())
-  userId             String
-  user               User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  serviceProviderId  String
-  serviceProvider    ServiceProvider  @relation(fields: [serviceProviderId], references: [id], onDelete: Cascade)
-  name               String
-  model              String
-  role               String
-  order              Int              @default(0)
-  isActive           Boolean          @default(true)
-  systemPrompt       String?          // Custom system prompt (overrides hardcoded stage prompt)
-  gpuPromptVariant   String?          // Separate prompt variant when useGpu=true
-  createdAt          DateTime         @default(now())
-  updatedAt          DateTime         @updatedAt
-}
-
-model Space {
-  id              String       @id @default(uuid())
-  userId          String
-  user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  name            String
-  description     String?
-  initialPrompt   String
-  status          String       @default("INITIALIZING")
-  currentPhase    String       @default("PLANNING")
-  totalTokens     Int          @default(0)
-  totalCost       Float        @default(0)
-  useEmbeddings   Boolean      @default(false)
-  useGpu         Boolean      @default(false)
-  currentCycle    Int          @default(1)
-  setupStatus     String?      // 'PENDING', 'RUNNING', 'COMPLETED', 'FAILED' — set during thinking_setup
-  setupError      String?      // Last error encountered during thinking_setup
-  setupStep       String?      // Human-readable step description for UI progress
-  defaultNumVariants Int         @default(3)   // Default variants per stage
-  defaultStepsPerVariant Int    @default(25)  // Default steps per variant
-  numVariantsMode String     @default("fixed") // "fixed" = user-specified, "auto" = grading agent decides
-  stepsPerVariantMode String @default("fixed") // "fixed" = user-specified, "auto" = grading agent decides
-  experiments     Experiment[]
-  breakthroughs   Breakthrough[]
-  variants        Variant[]
-  modelCaches     ModelCache[]
-  createdAt       DateTime     @default(now())
-  updatedAt       DateTime     @updatedAt
-}
-
-model Variant {
-  id           String        @id @default(uuid())
-  spaceId      String
-  space        Space         @relation(fields: [spaceId], references: [id], onDelete: Cascade)
-  stageId      String
-  stageName    String
-  cycleNumber  Int           @default(1)
-  name         String
-  description  String?
-  grade        Float?
-  feedback     String?
-  userRating   String?       // thumbs_up or thumbs_down
-  isSelected   Boolean       @default(false)
-  order        Int           @default(0)
-  status       String        @default("PENDING") // PENDING, RUNNING, COMPLETED, FAILED, PENDING_REVIEW
-  cacheDownloads String?      // JSON: [{fileName, downloadUrl, description}]
-  steps        VariantStep[]
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
-}
-
-model VariantStep {
-  id          String   @id @default(uuid())
-  variantId   String
-  variant     Variant  @relation(fields: [variantId], references: [id], onDelete: Cascade)
-  name        String
-  description String?
-  order      Int      @default(0)
-  result     String?
-  grade      Float?
-  feedback   String?
-  userRating String?  // thumbs_up or thumbs_down
-  status     String   @default("PENDING") // PENDING, RUNNING, COMPLETED, SKIPPED, FAILED, PENDING_REVIEW
-  isAuto     Boolean  @default(true)
-  autoConfig String?  // JSON string for autoConfig
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-}
-
-model Experiment {
-  id           String   @id @default(uuid())
-  userId       String?
-  user         User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
-  spaceId      String
-  space        Space    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
-  phase        String
-  agentId      String
-  agentName    String
-  prompt       String
-  response     String?
-  tokensUsed   Int      @default(0)
-  cost         Float    @default(0)
-  status       String   @default("PENDING")
-  result       String?
-  metrics      String?
-  grade        Float?
-  feedback     String?
-  userRating   String?  // thumbs_up or thumbs_down
-  cycleNumber  Int      @default(1)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id                String          @id
+  userId            String
+  serviceProviderId String
+  name              String
+  model             String
+  role              String
+  order             Int             @default(0)
+  isActive          Boolean         @default(true)
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime
+  gpuPromptVariant  String?
+  systemPrompt      String?
+  ServiceProvider   ServiceProvider @relation(fields: [serviceProviderId], references: [id], onDelete: Cascade)
+  User              User            @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model Breakthrough {
-  id          String   @id @default(uuid())
+  id          String   @id
   userId      String?
-  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
   spaceId     String
-  space       Space    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
   title       String
   description String
   category    String
   confidence  Float
   verified    Boolean  @default(false)
   createdAt   DateTime @default(now())
+  Space       Space    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  User        User?    @relation(fields: [userId], references: [id])
 }
 
-model SystemConfig {
-  id            String  @id @default(uuid())
-  key           String  @unique
-  value         String
-  description   String?
-  updatedAt     DateTime @updatedAt
+model EmbeddingProvider {
+  id          String   @id
+  userId      String
+  provider    String
+  name        String
+  apiKey      String
+  apiEndpoint String?
+  model       String
+  dimensions  Int?
+  isActive    Boolean  @default(true)
+  isDefault   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime
+  User        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, provider])
+}
+
+model Experiment {
+  id          String   @id
+  userId      String?
+  spaceId     String
+  phase       String
+  agentId     String
+  agentName   String
+  prompt      String
+  response    String?
+  tokensUsed  Int      @default(0)
+  cost        Float    @default(0)
+  status      String   @default("PENDING")
+  result      String?
+  metrics     String?
+  grade       Float?
+  feedback    String?
+  userRating  String?
+  cycleNumber Int      @default(1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime
+  Space       Space    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  User        User?    @relation(fields: [userId], references: [id])
 }
 
 model ModelCache {
-  id           String   @id @default(uuid())
-  spaceId      String
-  space        Space   @relation(fields: [spaceId], references: [id], onDelete: Cascade)
-  fileName     String
-  filePath     String   // Absolute path on disk
-  fileSize     Int       // Bytes
-  downloadUrl  String?  // Original URL (e.g. HuggingFace model repo)
-  checksum     String?  // SHA256 of downloaded file
-  description  String?  // What this file/model is for
-  createdAt    DateTime @default(now())
+  id          String   @id
+  spaceId     String
+  fileName    String
+  filePath    String
+  fileSize    Int
+  downloadUrl String?
+  checksum    String?
+  description String?
+  createdAt   DateTime @default(now())
+  Space       Space    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
 
   @@index([spaceId])
+}
+
+model ServiceProvider {
+  id        String   @id
+  userId    String
+  provider  String
+  name      String
+  apiKey    String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime
+  Agent     Agent[]
+  User      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, provider])
+}
+
+model Space {
+  id                     String         @id
+  userId                 String
+  name                   String
+  description            String?
+  initialPrompt          String
+  status                 String         @default("INITIALIZING")
+  currentPhase           String         @default("PLANNING")
+  totalTokens            Int            @default(0)
+  totalCost              Float          @default(0)
+  useEmbeddings          Boolean        @default(false)
+  useGpu                 Boolean        @default(false)
+  currentCycle           Int            @default(1)
+  setupStatus            String?
+  setupError             String?
+  setupStep              String?
+  defaultNumVariants     Int            @default(3)
+  defaultStepsPerVariant Int            @default(25)
+  numVariantsMode        String         @default("fixed")
+  stepsPerVariantMode    String         @default("fixed")
+  createdAt              DateTime       @default(now())
+  updatedAt              DateTime
+  Breakthrough           Breakthrough[]
+  Experiment             Experiment[]
+  ModelCache             ModelCache[]
+  User                   User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  Variant                Variant[]
+}
+
+model SystemConfig {
+  id          String   @id
+  key         String   @unique
+  value       String
+  description String?
+  updatedAt   DateTime
+}
+
+model User {
+  id                String              @id
+  email             String              @unique
+  password          String
+  username          String              @unique
+  role              String              @default("USER")
+  isActive          Boolean             @default(true)
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime
+  Agent             Agent[]
+  Breakthrough      Breakthrough[]
+  EmbeddingProvider EmbeddingProvider[]
+  Experiment        Experiment[]
+  ServiceProvider   ServiceProvider[]
+  Space             Space[]
+}
+
+model Variant {
+  id             String        @id
+  spaceId        String
+  stageId        String
+  stageName      String
+  cycleNumber    Int           @default(1)
+  name           String
+  description    String?
+  grade          Float?
+  feedback       String?
+  userRating     String?
+  isSelected     Boolean       @default(false)
+  order          Int           @default(0)
+  status         String        @default("PENDING")
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime
+  cacheDownloads String?
+  Space          Space         @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  VariantStep    VariantStep[]
+}
+
+model VariantStep {
+  id          String   @id
+  variantId   String
+  name        String
+  description String?
+  order       Int      @default(0)
+  result      String?
+  grade       Float?
+  feedback    String?
+  userRating  String?
+  status      String   @default("PENDING")
+  isAuto      Boolean  @default(true)
+  autoConfig  String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime
+  Variant     Variant  @relation(fields: [variantId], references: [id], onDelete: Cascade)
 }

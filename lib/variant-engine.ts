@@ -24,6 +24,52 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+interface DiscoveredModel {
+  id: string
+  url: string
+  downloadUrl: string
+  downloads?: number
+  likes?: number
+  tags?: string[]
+}
+
+/** Search HuggingFace for relevant models using internal search service */
+async function searchModels(query: string, limit = 5): Promise<DiscoveredModel[]> {
+  const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000'
+  const internalSecret = process.env.INTERNAL_API_SECRET || ''
+  if (!internalSecret) {
+    debugLog('[searchModels] No INTERNAL_API_SECRET set, skipping model search')
+    return []
+  }
+  try {
+    const url = `${baseUrl}/api/search?q=${encodeURIComponent(query)}&source=hf&limit=${limit}`
+    const res = await fetch(url, {
+      headers: {
+        'x-internal-secret': internalSecret,
+        'Content-Type': 'application/json',
+      },
+      signal: AbortSignal.timeout(15000),
+    })
+    if (!res.ok) {
+      debugLog(`[searchModels] Search API returned ${res.status}`)
+      return []
+    }
+    const data = await res.json()
+    const results = Array.isArray(data) ? data : (data.results || [])
+    return results.slice(0, limit).map((m: any) => ({
+      id: m.id || m.model_name || '',
+      url: m.url || `https://huggingface.co/${m.id || m.model_name}`,
+      downloadUrl: m.download_url || m.downloadUrl || `https://huggingface.co/${m.id || m.model_name}/resolve/main`,
+      downloads: m.downloads || 0,
+      likes: m.likes || 0,
+      tags: Array.isArray(m.tags) ? m.tags : [],
+    }))
+  } catch (err: any) {
+    debugLog(`[searchModels] Error: ${err.message}`)
+    return []
+  }
+}
+
 export interface Variant {
   id: string
   stageId: string
@@ -145,10 +191,18 @@ Respond with just a number between 2-5.`
     }
   }
 
-  // Generate variant descriptions
   const variants: Variant[] = []
   const maxRetries = 2
   const numStepsTarget = typeof stageConfig.stepsPerVariant === 'number' ? stageConfig.stepsPerVariant : 25
+
+  // Discover relevant models before generating variants
+  const discoveredModels = await searchModels(initialPrompt)
+
+  const modelListSection = discoveredModels.length > 0
+    ? `\n\n## AVAILABLE MODELS FOR DOWNLOAD\nThe following HuggingFace models are available — use their URLs in the downloads field if needed:\n${
+    discoveredModels.map(m => `- ${m.url}  (${m.downloads?.toLocaleString() || 0} downloads, tags: ${(m.tags || []).slice(0, 3).join(', ')})`).join('\n')}
+`
+    : ''
 
   for (let i = 0; i < numVariants; i++) {
     let name = `Variant ${i + 1}`
@@ -178,7 +232,7 @@ IMPORTANT: Follow this EXACT format. Write ONLY the sections below. Do NOT repea
 ## METADATA
 name: <2-4 word specific name for this variant, be concrete and specific to the research goal above>
 description: <2-3 sentences describing what this variant explores and why it differs from other approaches>
-downloads: <HuggingFace or GitHub URLs for models/datasets needed, or "none">
+downloads: <HuggingFace model URLs from AVAILABLE MODELS section above, or "none" if not needed — IMPORTANT: only use URLs that start with https://huggingface.co/
 
 ## STEPS
 step_1: <imperative sentence — specific action with concrete goal>
@@ -207,7 +261,7 @@ step_23: <imperative sentence>
 step_24: <imperative sentence>
 step_25: <imperative sentence>
 
-CRITICAL: You MUST generate AT LEAST ${numStepsTarget} steps. Replace ALL step placeholders with real content. Each step must be a concrete action sentence relevant to "${initialPrompt}". Do not stop before step_25.`
+CRITICAL: You MUST generate AT LEAST ${numStepsTarget} steps. Replace ALL step placeholders with real content. Each step must be a concrete action sentence relevant to "${initialPrompt}". Do not stop before step_25.${modelListSection}`
 
       let response: AIResponse
       try {

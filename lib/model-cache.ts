@@ -30,7 +30,7 @@ function getSpaceCacheDir(spaceId: string): string {
 }
 
 /** Get HuggingFace token from SystemConfig (returns empty string if not set) */
-async function getHfToken(): Promise<string> {
+export async function getHfToken(): Promise<string> {
   try {
     const config = await prisma.systemConfig.findUnique({
       where: { key: 'huggingface_token' },

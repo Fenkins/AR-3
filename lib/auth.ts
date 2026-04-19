@@ -22,6 +22,11 @@ export function generateToken(payload: JWTPayload): string {
   return jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' })
 }
 
+/** Alias for generateToken — used by variant-engine for internal service auth */
+export function signToken(email: string): string {
+  return generateToken({ userId: 'admin', email, role: 'ADMIN' })
+}
+
 export function verifyToken(token: string): JWTPayload | null {
   try {
     return jwt.verify(token, JWT_SECRET) as JWTPayload

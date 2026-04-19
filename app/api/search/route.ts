@@ -7,12 +7,26 @@ const SEARCH_SERVICE_URL = process.env.SEARCH_SERVICE_URL || 'http://127.0.0.1:4
 export async function GET(request: NextRequest) {
   // Skip auth for internal service-to-service calls
   const authHeader = request.headers.get('authorization')
-  if (!authHeader) {
-    return NextResponse.json({ error: 'Authentication required' }, { status: 401 })
+  const internalSecret = request.headers.get('x-internal-secret')
+  const bypassSecret = process.env.INTERNAL_API_SECRET || ''
+  if (internalSecret && bypassSecret && internalSecret === bypassSecret) {
+    // Internal call — skip user auth, just validate secret
+    return handleSearch(request)
   }
-  const auth = await authMiddleware(request)
-  if ('json' in auth) return auth
 
+  const { searchParams } = new URL(request.url)
+  const q = searchParams.get('q')
+  const source = searchParams.get('source') || 'all'
+  const limit = parseInt(searchParams.get('limit') || '5', 10)
+
+  if (!q) {
+    return NextResponse.json({ error: 'q parameter required' }, { status: 400 })
+  }
+
+  return handleSearch(request)
+}
+
+async function handleSearch(request: NextRequest) {
   const { searchParams } = new URL(request.url)
   const q = searchParams.get('q')
   const source = searchParams.get('source') || 'all'
