@@ -234,15 +234,8 @@ export async function DELETE(
     const auth = await authMiddleware(request)
     if ('json' in auth) return auth
 
-    await stopSpace(params.id)
-
-    await prisma.space.delete({
-      where: {
-        id: params.id,
-        userId: auth.user.id,
-      },
-    })
-
+    await stopSpace(params.id, auth.user.id)
+    // Space is deleted inside stopSpace via cascade transaction
     return NextResponse.json({ success: true })
   } catch (error) {
     console.error('Error deleting space:', error)

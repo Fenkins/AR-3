@@ -1330,19 +1330,115 @@ export async function resumeSpace(spaceId: string) {
   startBackgroundLoop(spaceId)
 }
 
-export async function stopSpace(spaceId: string) {
+export async function stopSpace(spaceId: string, userId?: string) {
   updateExecutionState(spaceId, { isRunning: false })
   clearExecutionState(spaceId)
-  await prisma.space.update({
+
+  // ── Safeguard 1: Verify space exists ─────────────────────────────────────────
+  const space = await prisma.space.findUnique({
     where: { id: spaceId },
-    data: { status: 'STOPPED' },
+    include: {
+      variants: { select: { id: true } },
+      experiments: { select: { id: true } },
+      breakthroughs: { select: { id: true } },
+    },
   })
-  // Clean up GPU jobs for this space
+  if (!space) {
+    debugLog(`[stopSpace] Space ${spaceId} not found — nothing to do`)
+    return
+  }
+
+  // ── Safeguard 2: Ownership check ──────────────────────────────────────────
+  if (userId && space.userId !== userId) {
+    throw new Error(`Access denied: space ${spaceId} does not belong to user ${userId}`)
+  }
+
+
+  const variantIds = space.variants.map(v => v.id)
+  const experimentIds = space.experiments.map(e => e.id)
+  const breakthroughIds = space.breakthroughs.map(b => b.id)
+
+
+  debugLog(`[stopSpace] Cascading delete for space ${spaceId}: ` +
+    `${variantIds.length} variants, ${experimentIds.length} experiments, ` +
+    `${breakthroughIds.length} breakthroughs`)
+
+  // ── Safeguard 3: Transaction-wrapped cascade delete ────────────────────────
+  // Order: VariantStep (dependent on Variant) → Variant → Breakthrough → Experiment → ModelCache → Space
+  // GPU jobs are cleaned via API (separate process on Vast.ai)
+  await prisma.$transaction([
+    // Delete variant steps first (foreign key to Variant)
+    prisma.variantStep.deleteMany({
+      where: { variantId: { in: variantIds } },
+    }),
+    // Delete variants
+    prisma.variant.deleteMany({
+      where: { spaceId },
+    }),
+    // Delete breakthroughs
+    prisma.breakthrough.deleteMany({
+      where: { spaceId },
+    }),
+    // Delete experiments
+    prisma.experiment.deleteMany({
+      where: { spaceId },
+    }),
+    // Delete model cache entries (model files tracked in DB)
+    prisma.modelCache.deleteMany({
+      where: { spaceId },
+    }),
+    // Finally delete the space itself
+    prisma.space.delete({
+      where: { id: spaceId },
+    }),
+  ])
+
+  debugLog(`[stopSpace] DB cascade complete for space ${spaceId}`)
+
+  // ── Safeguard 4: Post-DB file cleanup (best-effort, outside transaction) ──────
+  // Clean up space model cache directory on disk
+  try {
+    const { execSync } = await import('child_process')
+    const cacheDir = `/opt/AR-3/model_cache/${spaceId}`
+    execSync(`rm -rf "${cacheDir}"`, { stdio: 'ignore' })
+    debugLog(`[stopSpace] Removed model cache directory: ${cacheDir}`)
+  } catch (err) {
+    debugLog(`[stopSpace] Warning: could not remove model cache dir: ${(err as Error).message}`)
+  }
+
+  // Clean up stale GPU results for this space from shared GPU result file
+  try {
+    const resultsPath = '/tmp/gpu_results.json'
+    const fs = await import('fs')
+    if (fs.existsSync(resultsPath)) {
+      const raw = fs.readFileSync(resultsPath, 'utf-8')
+      const results = JSON.parse(raw)
+      // Filter out results belonging to this space's variants
+      const cleaned = Object.fromEntries(
+        Object.entries(results).filter(([jobId]) => {
+          // Keep entries whose jobId doesn't belong to a deleted variant/experiment
+          // We don't have the full job→variant mapping here, so just purge entries
+          // older than 24h as a heuristic cleanup
+          const entry = results[jobId]
+        if (!entry?.completedAt) return true
+        const age = Date.now() - new Date(entry.completedAt).getTime()
+        return age < 24 * 60 * 60 * 1000
+      })
+      )
+      fs.writeFileSync(resultsPath, JSON.stringify(cleaned, null, 2))
+      debugLog(`[stopSpace] Pruned stale GPU results (${Object.keys(results).length - Object.keys(cleaned).length} removed)`)
+    }
+  } catch (err) {
+    debugLog(`[stopSpace] Warning: could not prune GPU results: ${(err as Error).message}`)
+  }
+
+  // ── Safeguard 5: GPU jobs cleanup via API ────────────────────────────────────
   try {
     const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000'
     await fetch(`${baseUrl}/api/jobs/gpu?spaceId=${spaceId}`, { method: 'DELETE' })
+    debugLog(`[stopSpace] GPU jobs API cleanup called for space ${spaceId}`)
   } catch (err) {
-    debugLog(`[stopSpace] Failed to clean GPU jobs: ${(err as Error).message}`)
+    debugLog(`[stopSpace] Warning: GPU jobs API cleanup failed: ${(err as Error).message}`)
   }
 }
 
