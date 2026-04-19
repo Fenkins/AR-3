@@ -608,7 +608,7 @@ export async function runCycleBackground(spaceId: string, stageId?: string): Pro
   return { jobId: experiment.id }
 }
 
-async function executeVariant(variant: Variant, spaceId: string, stageName: string): Promise<Variant> {
+async function executeVariant(variant: Variant, spaceId: string, stageName: string, gpuEnabled: boolean): Promise<Variant> {
   const space = await prisma.space.findFirst({
     where: { id: spaceId },
     include: {
@@ -636,11 +636,12 @@ async function executeVariant(variant: Variant, spaceId: string, stageName: stri
     model: agent.model,
   }
 
+  const useGpu = gpuEnabled && ((space as any).useGpu ?? false)
+
   // Execute each step
   for (const step of variant.steps) {
     if (step.status === 'COMPLETED') continue
 
-    const useGpu = (space as any).useGpu ?? false
     const variantDefaultPrompt = `You are executing variant "${variant.name}" of stage "${stageName}". Produce concrete results -- no <thought> tags. Focus on actual output, findings, and deliverables.`
     const variantSystemPrompt = agent?.gpuPromptVariant && useGpu
       ? agent.gpuPromptVariant
@@ -652,7 +653,71 @@ async function executeVariant(variant: Variant, spaceId: string, stageName: stri
     ]
 
     try {
-      const response = await callAI(agentConfig, messages)
+      let response: { content: string; tokensUsed: number; cost: number } = { content: '', tokensUsed: 0, cost: 0 }
+
+      // GPU-enabled stage: call AI then submit output to GPU worker
+      if (useGpu) {
+        debugLog(`[executeVariant] GPU stage "${stageName}", calling AI then submitting to GPU worker`)
+        response = await callAI(agentConfig, messages)
+
+        // Submit LLM output to GPU worker for execution
+        try {
+          const gpuResponse = await fetch(`${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/api/jobs/gpu`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              spaceId,
+              spaceName: space.name,
+              stageName,
+              prompt: response.content,
+              context: JSON.stringify({ previousExperiments: space.experiments.slice(0, 5) }),
+            }),
+          })
+          if (gpuResponse.ok) {
+            const { jobId } = await gpuResponse.json()
+            debugLog(`[executeVariant] GPU job submitted: ${jobId}`)
+
+            // Poll for result (max 5 minutes)
+            const maxWait = 300000
+            const pollInterval = 5000
+            let waited = 0
+            let gpuResult = ''
+            while (waited < maxWait) {
+              await new Promise(r => setTimeout(r, pollInterval))
+              waited += pollInterval
+              const statusRes = await fetch(`${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/api/jobs/gpu?jobId=${jobId}`)
+              if (statusRes.ok) {
+                const statusData = await statusRes.json()
+                if (statusData.status === 'completed') {
+                  gpuResult = statusData.result.success
+                    ? `[GPU Execution Result]: ${statusData.result.output}`
+                    : `[GPU Execution Error]: ${statusData.result.error}`
+                  debugLog(`[executeVariant] GPU job completed`)
+                  break
+                } else if (statusData.status === 'failed') {
+                  gpuResult = `[GPU Error]: ${statusData.error}`
+                  break
+                }
+              }
+              if (waited >= maxWait) {
+                gpuResult = '[GPU Timeout]: Job did not complete within 5 minutes'
+                break
+              }
+            }
+            response.content += '\n\n' + gpuResult
+          } else {
+            debugLog(`[executeVariant] GPU job submission failed: ${gpuResponse.status}`)
+            response.content += '\n\n[GPU Error]: Failed to submit GPU job'
+          }
+        } catch (gpuError: any) {
+          debugLog(`[executeVariant] GPU worker error: ${gpuError.message}`)
+          response.content += `\n\n[GPU Error]: ${gpuError.message}`
+        }
+      } else {
+        // Normal LLM-only call (no GPU)
+        response = await callAI(agentConfig, messages)
+      }
+
       step.result = response.content
       step.status = 'COMPLETED'
       step.grade = Math.min(100, Math.max(0, Math.floor(response.tokensUsed / 10)))
@@ -1536,7 +1601,7 @@ export async function executeVariantCycle(spaceId: string, variantId: string) {
   await processVariantCacheDownloads(variant, spaceId)
 
   // Execute the variant
-  const executedVariant = await executeVariant(variant, spaceId, stage.name)
+  const executedVariant = await executeVariant(variant, spaceId, stage.name, stage.gpuEnabled ?? false)
 
   // Update state
   const updatedVariants = state.variants.map(v =>
