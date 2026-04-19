@@ -28,38 +28,51 @@ interface DiscoveredModel {
   id: string
   url: string
   downloadUrl: string
+  fileName?: string
   downloads?: number
   likes?: number
   tags?: string[]
 }
 
-/** Search HuggingFace for relevant models using internal search service */
+/** Search HuggingFace for relevant models via direct internal search service call */
 async function searchModels(query: string, limit = 5): Promise<DiscoveredModel[]> {
-  const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000'
-  const internalSecret = process.env.INTERNAL_API_SECRET || ''
-  if (!internalSecret) {
-    debugLog('[searchModels] No INTERNAL_API_SECRET set, skipping model search')
-    return []
-  }
   try {
-    const url = `${baseUrl}/api/search?q=${encodeURIComponent(query)}&source=hf&limit=${limit}`
-    const res = await fetch(url, {
-      headers: {
-        'x-internal-secret': internalSecret,
-        'Content-Type': 'application/json',
-      },
-      signal: AbortSignal.timeout(15000),
-    })
+    const url = `http://127.0.0.1:4000/search?q=${encodeURIComponent(query)}&source=hf&limit=${limit}`
+    const res = await fetch(url, { signal: AbortSignal.timeout(15000) })
     if (!res.ok) {
-      debugLog(`[searchModels] Search API returned ${res.status}`)
+      debugLog(`[searchModels] Search service returned ${res.status}`)
       return []
     }
     const data = await res.json()
-    const results = Array.isArray(data) ? data : (data.results || [])
+    let results = Array.isArray(data) ? data : []
+    // If multi-word query returns 0, fall back to word-by-word and merge
+    if (results.length === 0 && query.includes(' ')) {
+      const seen = new Set<string>()
+      for (const word of query.split(' ')) {
+        if (!word || seen.has(word)) continue
+        seen.add(word)
+        const url2 = `http://127.0.0.1:4000/search?q=${encodeURIComponent(word)}&source=hf&limit=${limit}`
+        const res2 = await fetch(url2, { signal: AbortSignal.timeout(15000) })
+        if (!res2.ok) continue
+        const data2 = await res2.json()
+        if (Array.isArray(data2)) {
+          results = results.concat(data2)
+        }
+      }
+      // Deduplicate by id
+      const seenIds = new Set<string>()
+      results = results.filter(r => {
+        const id = r.id || r.model_name
+        if (seenIds.has(id)) return false
+        seenIds.add(id)
+        return true
+      })
+    }
     return results.slice(0, limit).map((m: any) => ({
       id: m.id || m.model_name || '',
       url: m.url || `https://huggingface.co/${m.id || m.model_name}`,
-      downloadUrl: m.download_url || m.downloadUrl || `https://huggingface.co/${m.id || m.model_name}/resolve/main`,
+      downloadUrl: m.download_url || m.downloadUrl || `https://huggingface.co/${m.id || m.model_name}`,
+      fileName: m.file_name || m.id?.split('/').pop() || 'model',
       downloads: m.downloads || 0,
       likes: m.likes || 0,
       tags: Array.isArray(m.tags) ? m.tags : [],
@@ -199,8 +212,8 @@ Respond with just a number between 2-5.`
   const discoveredModels = await searchModels(initialPrompt)
 
   const modelListSection = discoveredModels.length > 0
-    ? `\n\n## AVAILABLE MODELS FOR DOWNLOAD\nThe following HuggingFace models are available — use their URLs in the downloads field if needed:\n${
-    discoveredModels.map(m => `- ${m.url}  (${m.downloads?.toLocaleString() || 0} downloads, tags: ${(m.tags || []).slice(0, 3).join(', ')})`).join('\n')}
+    ? `\n\n## AVAILABLE MODELS FOR DOWNLOAD\nThe following HuggingFace models are available — use their download URLs in the downloads field if needed:\n${
+    discoveredModels.map(m => `- ${m.downloadUrl || m.url}  (${m.downloads?.toLocaleString() || 0} downloads, file: ${m.fileName || 'see URL'})`).join('\n')}
 `
     : ''
 
@@ -232,7 +245,7 @@ IMPORTANT: Follow this EXACT format. Write ONLY the sections below. Do NOT repea
 ## METADATA
 name: <2-4 word specific name for this variant, be concrete and specific to the research goal above>
 description: <2-3 sentences describing what this variant explores and why it differs from other approaches>
-downloads: <HuggingFace model URLs from AVAILABLE MODELS section above, or "none" if not needed — IMPORTANT: only use URLs that start with https://huggingface.co/
+downloads: <Use download URLs from AVAILABLE MODELS section above, or "none" if not needed — IMPORTANT: only use URLs provided above>
 
 ## STEPS
 step_1: <imperative sentence — specific action with concrete goal>

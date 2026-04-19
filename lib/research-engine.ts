@@ -96,79 +96,58 @@ Be creative but grounded in the investigation results.`,
   },
   {
     name: 'Planning',
-    description: 'Create detailed implementation plan',
-    prompt: `Create a detailed implementation plan based on the proposition.
+    description: 'Create detailed implementation plan with runnable code components',
+    prompt: `Create a detailed implementation plan that INCLUDES RUNNABLE CODE for the GPU stage.
 
 Your tasks:
-1. Break down the proposition into concrete steps
-2. Define technical requirements and specifications
-3. Consider variants and their trade-offs
-4. Incorporate feedback from previous stages
-5. Create a realistic and actionable plan
+1. Break down the proposition into concrete steps -- each step should be specific and technical
+2. Define EXACT tensor shapes, dimensions, and data types for every operation
+3. Design the core algorithm in precise mathematical terms (not vague descriptions)
+4. Specify what the GPU code will compute and what outputs it will print
+5. Anticipate failure modes -- what could go wrong with each step?
+6. For each major component, write a BRIEF SKETCH of the PyTorch code (pseudocode is fine)
 
-Be specific and practical in your planning.`,
+CRITICAL: The implementation will ONLY have access to:
+- torch, numpy, and standard Python libraries
+- An NVIDIA RTX 3060 GPU (12GB VRAM)
+- No trained models, no external APIs, no internet
+
+Your output should be a structured PLAN with code sketches, not prose.
+Format:
+  ## Step 1: [Name]
+  - What: [specific description]
+  - Tensor shapes: [e.g. (B, 512, 512)]
+  - Code sketch: [2-5 lines of pseudocode or actual torch operations]
+  - Failure points: [what could break]
+
+Be specific about dimensions and operations. Vague plans produce broken code.`,
     order: 2,
     isActive: true,
     gpuEnabled: false,
   },
   {
     name: 'Implementation',
-    description: 'Execute the implementation based on plan',
+    description: 'Execute the implementation based on plan -- produce REAL working GPU code',
     prompt: `Implement the solution based on the planning stage output.
 
 Your tasks:
-1. Execute the implementation plan
-2. Write code, configure systems, or create artifacts
+1. Execute the implementation plan from Planning stage
+2. Write REAL code that actually runs on the GPU -- not pseudocode, not sketches
 3. Address technical challenges as they arise
 4. Incorporate all previous stage feedback
-5. Produce a viable, working implementation
+5. Produce a VIABLE, WORKING implementation that produces measurable outputs
 
-Be specific and technical. Produce concrete deliverables.`,
-    gpuPrompt: `Your primary output MUST be a JSON object with a GPU command. Format:
-{"action": "run_python", "code": "YOUR_PYTHON_CODE"}
+IMPORTANT: 
+- You will receive the planning stage output in the context -- use it as your blueprint
+- Your primary output MUST be executable Python code in PYTHON-CODE blocks
+- The GPU worker will execute it directly -- if the code crashes, the variant fails
+- Print MEASUREABLE outputs: tensor norms, convergence values, alignment scores, etc.
 
-The GPU worker will execute this Python code on an NVIDIA RTX 3060 GPU with torch installed.
-
-CRITICAL RULES — VIOLATING ANY OF THESE WILL CAUSE RUNTIME FAILURES:
-1. ALWAYS use .cuda() or device='cuda' — NEVER leave tensors on CPU when operating on GPU tensors
-2. NEVER call .item() on a tensor with more than 1 element — use .sum().item(), .mean().item(), or .tolist() instead
-3. Use torch.device('cuda') explicitly and move ALL tensors to the same device
-4. Wrap EVERY operation in try/except and print the actual tensor shapes/devices on failure
-5. Always print input shapes at the start of each major step so failures are diagnosable
-
-ROBUST CODE TEMPLATE:
-import torch
-import numpy as np
-
-device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-print(f'Device: {device}')
-
-# Create dummy inputs ON THE GPU
-x = torch.randn(BATCH, HIDDEN, device=device)
-print(f'Input shape: {x.shape}')
-
-try:
-    # Your operations here — ALL on GPU
-    result = your_function(x)
-    print(f'Result shape: {result.shape}')
-    # For scalar extraction:
-    print(f'Scalar value: {result.sum().item():.4f}')
-except Exception as e:
-    print(f'ERROR: {e}')
-    print(f'x.device: {x.device}, x.shape: {x.shape}')
-    raise
-
-Your implementation tasks:
-1. Build a PROTOTYPE demonstrating the research concept
-2. Use ONLY torch tensors on CUDA — no numpy arrays for tensor operations
-3. Include print statements at EVERY step showing: what you're testing, tensor shapes, tensor devices, scalar results
-4. Make code DEBUGGABLE — if it fails, the print output must make it obvious why
-
-Focus on PROOFS OF CONCEPT. Show that the concept works. Use 4 variants to explore different implementation approaches.`,
+Be specific and technical. Produce concrete, measurable results.`,
     order: 3,
     isActive: true,
-    gpuEnabled: true,  // GPU needed for model training / compute-intensive work
-    numVariants: 4,  // More variants = more chances for viable code
+    gpuEnabled: true,
+    numVariants: 6,
   },
   {
     name: 'Testing',
@@ -188,10 +167,10 @@ Be critical but fair.`,
 
 The GPU worker will execute this on an NVIDIA RTX 3060 GPU with torch.
 
-CRITICAL RULES — VIOLATING ANY OF THESE WILL CAUSE RUNTIME FAILURES:
-1. ALWAYS move ALL tensors to CUDA — use .cuda() or device='cuda' consistently
-2. NEVER call .item() on tensors with >1 element — use .sum().item(), .mean().item(), or .tolist()
-3. All tensors in an expression must be on the same device — check with tensor.device
+CRITICAL RULES -- VIOLATING ANY OF THESE WILL CAUSE RUNTIME FAILURES:
+1. ALWAYS move ALL tensors to CUDA -- use .cuda() or device='cuda' consistently
+2. NEVER call .item() on tensors with >1 element -- use .sum().item(), .mean().item(), or .tolist()
+3. All tensors in an expression must be on the same device -- check with tensor.device
 4. Wrap operations in try/except and print tensor shapes/devices on failure
 5. Print ALL intermediate values so failures are traceable
 
@@ -373,7 +352,7 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
         }
         debugLog(`[executeResearchCycle] Variant generation complete for ${currentStage.name}`)
       } catch (err: any) {
-        debugLog(`[executeResearchCycle] Variant generation failed for ${currentStage.name}: ${err.message} — proceeding without variants`)
+        debugLog(`[executeResearchCycle] Variant generation failed for ${currentStage.name}: ${err.message} -- proceeding without variants`)
       }
     }
   }
@@ -530,7 +509,7 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
   // Update execution state
   const nextStageId = getNextStageId(stages, currentStage.id)
   
-  // Check if we just completed Evaluation (last stage) — this means a full cycle completed
+  // Check if we just completed Evaluation (last stage) -- this means a full cycle completed
   // Next stage will be Investigation (first stage), so increment cycle counter
   let newCycle = currentCycle
   if (currentStage.name === 'Evaluation') {
@@ -662,14 +641,14 @@ async function executeVariant(variant: Variant, spaceId: string, stageName: stri
     if (step.status === 'COMPLETED') continue
 
     const useGpu = (space as any).useGpu ?? false
-    const variantDefaultPrompt = `You are executing variant "${variant.name}" of stage "${stageName}". Produce concrete results — no <thought> tags. Focus on actual output, findings, and deliverables.`
+    const variantDefaultPrompt = `You are executing variant "${variant.name}" of stage "${stageName}". Produce concrete results -- no <thought> tags. Focus on actual output, findings, and deliverables.`
     const variantSystemPrompt = agent?.gpuPromptVariant && useGpu
       ? agent.gpuPromptVariant
       : (agent?.systemPrompt || variantDefaultPrompt)
 
     const messages: AIMessage[] = [
       { role: 'system', content: variantSystemPrompt },
-      { role: 'user', content: `Step: ${step.description}\n\nResearch Goal: ${space.initialPrompt}\n\nExecute this step and provide concrete results. Be concise — focus on findings and deliverables.` },
+      { role: 'user', content: `Step: ${step.description}\n\nResearch Goal: ${space.initialPrompt}\n\nExecute this step and provide concrete results. Be concise -- focus on findings and deliverables.` },
     ]
 
     try {
@@ -819,7 +798,7 @@ Execute your stage tasks thoroughly.`
 
   // Use agent's custom system prompt if set, otherwise results-focused default
   // Explicitly tell agent to avoid thinking tags in final output
-  const defaultSystemPrompt = 'You are an expert research scientist. Your role is to produce actionable research results — not to describe your thinking process.\n\nIMPORTANT RULES:\n1. NEVER use <thought> or <think> tags in your output — they are not part of your deliverable\n2. Focus on concrete findings, code, data, and conclusions\n3. When reporting results, write as if communicating to a colleague who needs the facts\n4. Be direct and concise — prioritize substance over explanation\n5. If you would include a thought in your final output, remove it and keep only the useful content\n\nYour output will be parsed automatically — include only meaningful content.'
+  const defaultSystemPrompt = 'You are an expert research scientist. Your role is to produce actionable research results -- not to describe your thinking process.\n\nIMPORTANT RULES:\n1. NEVER use <thought> or <think> tags in your output -- they are not part of your deliverable\n2. Focus on concrete findings, code, data, and conclusions\n3. When reporting results, write as if communicating to a colleague who needs the facts\n4. Be direct and concise -- prioritize substance over explanation\n5. If you would include a thought in your final output, remove it and keep only the useful content\n\nYour output will be parsed automatically -- include only meaningful content.'
   const systemPrompt = agent?.systemPrompt || defaultSystemPrompt
 
   return [
@@ -829,10 +808,10 @@ Execute your stage tasks thoroughly.`
 }
 
 async function processEvaluationResults(spaceId: string, content: string) {
-  // Check for explicit negative verdicts FIRST — these override any positive mentions
+  // Check for explicit negative verdicts FIRST -- these override any positive mentions
   const negativeVerdictPatterns = [
     /NOT\s+A\s+BREAKTHROUGH/i,
-    /NOT\s+A\s+BREAKTHROUGH\s*—/i,
+    /NOT\s+A\s+BREAKTHROUGH\s*--/i,
     /INSUFFICIENT\s+EVIDENCE/i,
     /does\s+not\s+constitute\s+a\s+breakthrough/i,
     /no+ breakthroughs? detected/i,
@@ -844,7 +823,7 @@ async function processEvaluationResults(spaceId: string, content: string) {
   ]
   const hasNegativeVerdict = negativeVerdictPatterns.some(p => p.test(content))
   if (hasNegativeVerdict) {
-    debugLog(`[processEvaluationResults] Negative verdict detected — skipping breakthrough creation`)
+    debugLog(`[processEvaluationResults] Negative verdict detected -- skipping breakthrough creation`)
     return
   }
 
@@ -873,7 +852,7 @@ async function processEvaluationResults(spaceId: string, content: string) {
 }
 
 /**
- * Process cacheDownloads for a variant — fetch models/datasets referenced in the plan.
+ * Process cacheDownloads for a variant -- fetch models/datasets referenced in the plan.
  * Calls POST /api/model-cache for each download URL. Failures are non-fatal.
  */
 async function processVariantCacheDownloads(variant: Variant, spaceId: string): Promise<void> {
@@ -1205,12 +1184,12 @@ export function startBackgroundLoop(spaceId: string): void {
           return
         }
         
-        // No PENDING variants for current stage — check if ALL variants for this stage are done
+        // No PENDING variants for current stage -- check if ALL variants for this stage are done
         // (all COMPLETED or non-existent). If so, advance to next stage and generate its variants.
         if (currentStageVariants.length > 0) {
           const allDone = currentStageVariants.every(v => v.status === 'COMPLETED' || v.status === 'FAILED')
           if (allDone) {
-            debugLog(`[startBackgroundLoop] All variants for ${currentStage?.name} complete — advancing to next stage`)
+            debugLog(`[startBackgroundLoop] All variants for ${currentStage?.name} complete -- advancing to next stage`)
             const nextStageId = getNextStageId(stages, currentStageId)
             const nextStage = stages.find(s => s.id === nextStageId)
             
@@ -1247,12 +1226,12 @@ export function startBackgroundLoop(spaceId: string): void {
         }
       }
 
-      // Execute next cycle with a hard timeout (30 min — variant execution with 15 steps takes time)
+      // Execute next cycle with a hard timeout (30 min -- variant execution with 15 steps takes time)
       debugLog(`[startBackgroundLoop] Executing cycle for stage ${currentStage?.name}`)
       try {
         await withTimeout(
           executeResearchCycle(spaceId, currentStageId),
-          1800000, // 30 min — variant step execution is slow
+          1800000, // 30 min -- variant step execution is slow
           'executeResearchCycle'
         )
         consecutiveErrors = 0
@@ -1433,7 +1412,7 @@ export async function generateStageVariants(
   // Save to database
   await saveVariantsToDatabase(spaceId, stageId, stage.name, variants, space.currentCycle)
 
-  // Update execution state — merge with existing variants from OTHER stages (don't wipe them)
+  // Update execution state -- merge with existing variants from OTHER stages (don't wipe them)
   const state = getExecutionState(spaceId)
   if (state) {
     const otherStageVariants = (state.variants || []).filter(v => v.stageId !== stageId)
@@ -1796,7 +1775,7 @@ export function runThinkingSetupBackground(spaceId: string): void {
         model: thinkingAgent.model,
       }
 
-      // Call AI to analyze research goal — with timeout
+      // Call AI to analyze research goal -- with timeout
       step = 'call_ai'
       let response: any
       try {
@@ -1812,7 +1791,7 @@ export function runThinkingSetupBackground(spaceId: string): void {
         return
       }
 
-      // Always use ALL DEFAULT_STAGES — don't trust AI recommendations
+      // Always use ALL DEFAULT_STAGES -- don't trust AI recommendations
       step = 'create_stages'
       const recommendedStages = DEFAULT_STAGES.map((s, i) => ({ ...s, id: `stage_${i}` }))
 
@@ -1835,7 +1814,7 @@ export function runThinkingSetupBackground(spaceId: string): void {
           },
         })
       } catch (expErr: any) {
-        debugLog(`[runThinkingSetup] Failed to create setup experiment: ${expErr.message} — continuing anyway`)
+        debugLog(`[runThinkingSetup] Failed to create setup experiment: ${expErr.message} -- continuing anyway`)
       }
 
       // Update space with stages and mark as RUNNING
@@ -1871,8 +1850,8 @@ export function runThinkingSetupBackground(spaceId: string): void {
       step = 'start_loop'
       startBackgroundLoop(spaceId)
 
-      debugLog(`[runThinkingSetup] COMPLETED — background loop started, variants will generate on-demand`)
-      // Mark COMPLETED immediately — variants generate lazily on first stage execution
+      debugLog(`[runThinkingSetup] COMPLETED -- background loop started, variants will generate on-demand`)
+      // Mark COMPLETED immediately -- variants generate lazily on first stage execution
       await prisma.space.update({ where: { id: spaceId }, data: { setupStatus: 'COMPLETED', setupStep: null } })
 
     } catch (err: any) {
@@ -1880,7 +1859,7 @@ export function runThinkingSetupBackground(spaceId: string): void {
       try {
         await prisma.space.update({ where: { id: spaceId }, data: { setupStatus: 'FAILED', setupError: `Step '${step}': ${err.message}`, setupStep: null } })
       } catch (updateErr: any) {
-        console.error('[runThinkingSetupBackground] CRITICAL — could not update space status:', updateErr.message)
+        console.error('[runThinkingSetupBackground] CRITICAL -- could not update space status:', updateErr.message)
       }
     }
   })()

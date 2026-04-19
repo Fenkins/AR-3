@@ -39,6 +39,34 @@ def make_request(url, headers=None, timeout=10):
         return {'error': str(e)}
 
 
+def get_model_download_info(model_id):
+    """Get the best file to download for a model (largest safetensors file)."""
+    try:
+        url = f"{HF_API}/models/{model_id}"
+        data = make_request(url, timeout=10)
+        if isinstance(data, dict) and 'error' in data:
+            return None, None
+        siblings = data.get('siblings', [])
+        if not siblings:
+            # Fallback to the model page URL itself
+            return f"https://huggingface.co/{model_id}", None
+        # Pick the largest safetensors file as the primary download
+        best = None
+        for s in siblings:
+            fname = s.get('rfilename', '')
+            size = s.get('size', 0) or 0
+            if fname.endswith('.safetensors') or fname.endswith('.bin'):
+                if best is None or size > best[1]:
+                    best = (fname, size)
+        if best:
+            return f"https://huggingface.co/{model_id}/resolve/main/{best[0]}", best[0]
+        # Fallback to first sibling
+        first = siblings[0].get('rfilename', '')
+        return f"https://huggingface.co/{model_id}/resolve/main/{first}", first
+    except Exception:
+        return None, None
+
+
 def search_huggingface(query, limit=5):
     """Search HuggingFace models by text query"""
     cache_key = f'hf:{query}:{limit}'
@@ -53,14 +81,17 @@ def search_huggingface(query, limit=5):
 
     results = []
     for m in (data if isinstance(data, list) else []):
+        model_id = m.get('id', '')
+        download_url, file_name = get_model_download_info(model_id)
         results.append({
-            'id': m.get('id', ''),
+            'id': model_id,
             'downloads': m.get('downloads', 0),
             'likes': m.get('likes', 0),
             'tags': m.get('tags', [])[:5],
-            'model_name': m.get('modelId', m.get('id', '')),
-            'url': f"https://huggingface.co/{m.get('id', '')}",
-            'download_url': f"https://huggingface.co/{m.get('id', '')}/resolve/main",
+            'model_name': model_id,
+            'url': f"https://huggingface.co/{model_id}",
+            'download_url': download_url,
+            'file_name': file_name,
             'pipeline_tag': m.get('pipeline_tag', ''),
         })
 
@@ -117,7 +148,7 @@ def search_arxiv(query, limit=5):
                 'summary': entry.find('atom:summary', ns).text.replace('\n', ' ').strip()[:300] + '...' if entry.find('atom:summary', ns) is not None else '',
                 'published': entry.find('atom:published', ns).text[:10] if entry.find('atom:published', ns) is not None else '',
                 'url': entry.find('atom:id', ns).text if entry.find('atom:id', ns) is not None else '',
-                'pdf_url': entry.find('atom:link[@title=\"pdf\"]', ns).attrib.get('href', '') if entry.find('atom:link[@title="pdf"]', ns) is not None else '',
+                'pdf_url': entry.find('atom:link[@title="pdf"]', ns).attrib.get('href', '') if entry.find('atom:link[@title="pdf"]', ns) is not None else '',
                 'authors': [a.find('atom:name', ns).text for a in entry.findall('atom:author', ns) if a.find('atom:name', ns) is not None][:3],
             })
         _cache[cache_key] = {'result': results, 'ts': time.time()}
