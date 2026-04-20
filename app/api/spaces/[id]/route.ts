@@ -43,7 +43,7 @@ export async function GET(
           orderBy: { createdAt: 'desc' },
         },
         Variant: {
-          include: { steps: { orderBy: { order: 'asc' } } },
+          include: { VariantStep: { orderBy: { order: 'asc' } } },
           orderBy: [{ cycleNumber: 'desc' }, { order: 'asc' }],
         },
       },
@@ -66,7 +66,7 @@ export async function GET(
     // Always load variants from DB to ensure fresh data, not stale in-memory state
     const dbVariants = await prisma.variant.findMany({
       where: { spaceId: params.id },
-      include: { steps: { orderBy: { order: 'asc' } } },
+      include: { VariantStep: { orderBy: { order: 'asc' } } },
       orderBy: [{ cycleNumber: 'desc' }, { order: 'asc' }],
     })
 

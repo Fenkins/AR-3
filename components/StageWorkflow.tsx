@@ -140,18 +140,18 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
         setTotalTokens(data.space.totalTokens || 0)
         setTotalCost(data.space.totalCost || 0)
         
-        if (data.space.experiments) {
-          setExperiments(data.space.experiments)
+        if (data.space.Experiment) {
+          setExperiments(data.space.Experiment)
         }
-        if (data.breakthroughs) {
-          setBreakthroughs(data.breakthroughs)
+        if (data.space.Breakthrough) {
+          setBreakthroughs(data.space.Breakthrough)
         }
         
         // Use data.stages (fresh from API) rather than React state (stages) which may be stale
         // when currentStageIndex changes faster than state updates. currentStageIndex is always
         // up-to-date because it's set synchronously by setCurrentStageIndex before the effect fires.
         const selectedStageId = data.stages?.[currentStageIndex]?.id || data.execution?.currentStageId || data.stages?.[0]?.id
-        const allVariants = data.execution?.variants || data.space?.variants || []
+        const allVariants = data.execution?.variants || []
         const stageVariants = allVariants.filter((v: any) => v.stageId === selectedStageId)
         console.log('[DEBUG] fetchSpaceData done: currentStageIndex=' + currentStageIndex + ', selectedStageId=' + selectedStageId + ', stageVariants=' + stageVariants.length + ', totalVariants=' + allVariants.length)
         if (stageVariants.length > 0) {
