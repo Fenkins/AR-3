@@ -822,11 +822,52 @@ function getNextStageId(stages: ResearchStage[], currentId: string): string {
 async function generateStagePrompt(space: any, stage: ResearchStage, previousExperiments: any[], agent?: any): Promise<AIMessage[]> {
   let contextFromPrevious = ''
   if (previousExperiments.length > 0) {
-    contextFromPrevious = `\n\nContext from Previous Work:\n${
-      previousExperiments.slice(0, 5).map((exp: any, i: number) => 
-        `[${exp.phase}]: ${exp.result?.substring(0, 500) || 'No result'}`
-      ).join('\n\n')
-    }`
+    const isProposition = stage.name === 'Proposition'
+    
+    if (isProposition) {
+      // Group experiments by cycle and phase to build lessons learned
+      const byCycle: Record<string, Record<string, any[]>> = {}
+      for (const exp of previousExperiments) {
+        const cyc = String(exp.cycleNumber || 1)
+        if (!byCycle[cyc]) byCycle[cyc] = {}
+        const ph = exp.phase || '?'
+        if (!byCycle[cyc][ph]) byCycle[cyc][ph] = []
+        byCycle[cyc][ph].push(exp)
+      }
+      
+      // Build lessons learned synthesis
+      const cycles = Object.keys(byCycle).sort((a, b) => Number(a) - Number(b))
+      const lastCycle = cycles[cycles.length - 1]
+      const currentCycleExperiments = lastCycle ? byCycle[lastCycle] : {}
+      
+      // Extract key findings from each phase
+      const investigationFindings = (currentCycleExperiments['INVESTIGATION_STEP'] || [])
+        .concat(currentCycleExperiments['Investigation'] || [])
+        .map((e: any) => e.result?.substring(0, 300) || '').filter(Boolean)
+      
+      const testingResults = (currentCycleExperiments['TESTING_STEP'] || [])
+        .concat(currentCycleExperiments['Testing'] || [])
+        .map((e: any) => e.result?.substring(0, 300) || '').filter(Boolean)
+      
+      const implementationResults = (currentCycleExperiments['IMPLEMENTATION_STEP'] || [])
+        .concat(currentCycleExperiments['Implementation'] || [])
+        .map((e: any) => e.result?.substring(0, 300) || '').filter(Boolean)
+      
+      contextFromPrevious = `\n\n## Lessons Learned from Previous Cycles\n` +
+        `You are formulating a NEW proposition for CYCLE ${(Number(lastCycle) || 1) + 1}. ` +
+        `Previous cycle (${lastCycle || 1}) results:\n\n` +
+        (investigationFindings.length ? `INVESTIGATION FINDINGS:\n${investigationFindings.slice(0, 2).join('\n')}\n\n` : '') +
+        (implementationResults.length ? `IMPLEMENTATION RESULTS:\n${implementationResults.slice(0, 2).join('\n')}\n\n` : '') +
+        (testingResults.length ? `TESTING RESULTS:\n${testingResults.slice(0, 2).join('\n')}\n\n` : '') +
+        `Based on the above, propose a REVISED or entirely NEW proposition that addresses ` +
+        `any weaknesses identified. If previous approaches failed, pivot to a different strategy.\n`
+    } else {
+      contextFromPrevious = `\n\nContext from Previous Work:\n${
+        previousExperiments.slice(0, 5).map((exp: any, i: number) => 
+          `[${exp.phase}]: ${exp.result?.substring(0, 500) || 'No result'}`
+        ).join('\n\n')
+      }`
+    }
   }
 
   // Add semantic search context from embeddings if enabled
@@ -1261,13 +1302,28 @@ export function startBackgroundLoop(spaceId: string): void {
             // Load space for config (defaultNumVariants, etc)
             const spaceForConfig = await prisma.space.findUnique({ where: { id: spaceId } })
             
+            // Check if we're wrapping from Evaluation back to Investigation (full cycle complete)
+            const currentIndex = stages.findIndex(s => s.id === currentStageId)
+            const isWrappingToInvestigation = currentIndex >= stages.length - 1 && nextStage?.name === 'Investigation'
+            
             // Persist stage advancement to DB
             try {
+              const updateData: any = { currentPhase: nextStage?.name || 'Investigation' }
+              // Increment cycle counter when completing a full stage loop
+              if (isWrappingToInvestigation) {
+                updateData.currentCycle = { increment: 1 }
+                debugLog(`[startBackgroundLoop] Full cycle complete -- incrementing currentCycle`)
+              }
               await prisma.space.update({
                 where: { id: spaceId },
-                data: { currentPhase: nextStage?.name || 'Investigation' }
+                data: updateData
               })
-            } catch {}
+              if (isWrappingToInvestigation) {
+                updateExecutionState(spaceId, { currentCycle: ((spaceForConfig as any)?.currentCycle || 1) + 1 })
+              }
+            } catch (err: any) {
+              debugLog(`[startBackgroundLoop] Failed to persist stage/cycle update: ${err.message}`)
+            }
             
             // Update execution state to next stage
             updateExecutionState(spaceId, {
