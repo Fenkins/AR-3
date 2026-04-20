@@ -10,7 +10,7 @@ export async function GET(request: NextRequest) {
     const agents = await prisma.agent.findMany({
       where: { userId: auth.user.id },
       include: {
-        ServiceProvider: {
+        serviceProvider: {
           select: {
             id: true,
             provider: true,
@@ -113,7 +113,7 @@ export async function POST(request: NextRequest) {
         gpuPromptVariant: gpuPromptVariant ?? defaults.gpuPromptVariant ?? null,
       },
       include: {
-        ServiceProvider: {
+        serviceProvider: {
           select: {
             id: true,
             provider: true,

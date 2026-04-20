@@ -35,15 +35,15 @@ export async function GET(
         userId: auth.user.id,
       },
       include: {
-        Experiment: {
+        experiments: {
           orderBy: { createdAt: 'desc' },
           take: 50,
         },
-        Breakthrough: {
+        breakthroughs: {
           orderBy: { createdAt: 'desc' },
         },
-        Variant: {
-          include: { VariantStep: { orderBy: { order: 'asc' } } },
+        variants: {
+          include: { variantSteps: { orderBy: { order: 'asc' } } },
           orderBy: [{ cycleNumber: 'desc' }, { order: 'asc' }],
         },
       },
@@ -66,7 +66,7 @@ export async function GET(
     // Always load variants from DB to ensure fresh data, not stale in-memory state
     const dbVariants = await prisma.variant.findMany({
       where: { spaceId: params.id },
-      include: { VariantStep: { orderBy: { order: 'asc' } } },
+      include: { variantSteps: { orderBy: { order: 'asc' } } },
       orderBy: [{ cycleNumber: 'desc' }, { order: 'asc' }],
     })
 

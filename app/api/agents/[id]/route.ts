@@ -59,7 +59,7 @@ export async function PUT(
         gpuPromptVariant: body.gpuPromptVariant !== undefined ? body.gpuPromptVariant : undefined,
       },
       include: {
-        ServiceProvider: {
+        serviceProvider: {
           select: {
             id: true,
             provider: true,

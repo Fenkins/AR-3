@@ -21,8 +21,8 @@ export async function GET(request: NextRequest) {
         updatedAt: true,
         _count: {
           select: {
-            Space: true,
-            Agent: true,
+            spaces: true,
+            agents: true,
           },
         },
       },

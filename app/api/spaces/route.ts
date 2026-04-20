@@ -11,7 +11,7 @@ export async function GET(request: NextRequest) {
     const spaces = await prisma.space.findMany({
       where: { userId: auth.user.id },
       include: {
-        Experiment: {
+        experiments: {
           select: {
             id: true,
             phase: true,
@@ -23,7 +23,7 @@ export async function GET(request: NextRequest) {
           orderBy: { createdAt: 'desc' },
           take: 5,
         },
-        Breakthrough: {
+        breakthroughs: {
           select: {
             id: true,
             title: true,
@@ -36,9 +36,9 @@ export async function GET(request: NextRequest) {
         },
         _count: {
           select: {
-            Experiment: true,
-            Breakthrough: true,
-            ModelCache: true,
+            experiments: true,
+            breakthroughs: true,
+            modelCaches: true,
           },
         },
       },

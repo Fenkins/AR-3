@@ -152,7 +152,7 @@ export async function generateVariants(
     include: {
       user: { 
         include: { 
-          Agent: true,
+          agents: true,
           serviceProviders: true,
         }
       },
@@ -161,7 +161,7 @@ export async function generateVariants(
 
   if (!space) throw new Error('Space not found')
 
-  const thinkingAgent = space.user.Agent
+  const thinkingAgent = space.user.agents
     .filter(a => a.role === 'THINKING' && a.isActive)
     .sort((a, b) => a.order - b.order)[0]
 
@@ -430,7 +430,7 @@ export async function gradeVariant(
     include: {
       user: { 
         include: { 
-          Agent: true,
+          agents: true,
           serviceProviders: true,
         }
       },
@@ -440,7 +440,7 @@ export async function gradeVariant(
   if (!space) throw new Error('Space not found')
 
   // Get grading agent (GRADING role only — separate from EVALUATION which is for the stage)
-  const gradingAgent = space.user.Agent
+  const gradingAgent = space.user.agents
     .filter(a => a.role === 'GRADING' && a.isActive)
     .sort((a, b) => a.order - b.order)[0]
 
@@ -530,7 +530,7 @@ export async function reEvaluateStepCount(
     include: {
       user: {
         include: {
-          Agent: { where: { isActive: true } },
+          agents: { where: { isActive: true } },
           serviceProviders: true,
         },
       },
@@ -539,7 +539,7 @@ export async function reEvaluateStepCount(
 
   if (!space) return null
 
-  const gradingAgent = space.user.Agent
+  const gradingAgent = space.user.agents
     .filter(a => a.role === 'GRADING' && a.isActive)
     .sort((a, b) => a.order - b.order)[0]
 

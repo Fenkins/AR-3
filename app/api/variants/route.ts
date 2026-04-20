@@ -26,7 +26,7 @@ export async function GET(request: NextRequest) {
     const variants = await prisma.variant.findMany({
       where: { spaceId },
       include: {
-        VariantStep: { orderBy: { order: 'asc' } },
+        variantSteps: { orderBy: { order: 'asc' } },
       },
       orderBy: [{ cycleNumber: 'desc' }, { stageId: 'asc' }, { order: 'asc' }],
     })
