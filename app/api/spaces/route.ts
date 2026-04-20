@@ -36,8 +36,8 @@ export async function GET(request: NextRequest) {
         },
         _count: {
           select: {
-            experiments: true,
-            breakthroughs: true,
+            Experiment: true,
+            Breakthrough: true,
             ModelCache: true,
           },
         },

@@ -72,7 +72,7 @@ export async function GET(request: NextRequest) {
 
     // Recent breakthroughs across all spaces
     const allBreakthroughs = spaces
-      .flatMap(s => s.breakthroughs.map(b => ({ ...b, spaceName: s.name })))
+      .flatMap(s => s.Breakthrough.map(b => ({ ...b, spaceName: s.name })))
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
       .slice(0, 10)
 
