@@ -27,7 +27,7 @@ model Agent {
 }
 
 model Technique {
-  id             String   @id
+  id             String   @id @default(cuid())
   userId         String
   spaceId        String
   cycleNumber    Int
@@ -44,7 +44,7 @@ model Technique {
 }
 
 model FailedApproach {
-  id             String   @id
+  id             String   @id @default(cuid())
   userId         String
   spaceId        String
   cycleNumber    Int
@@ -60,7 +60,7 @@ model FailedApproach {
 }
 
 model Breakthrough {
-  id          String   @id
+  id          String   @id @default(cuid())
   userId      String?
   spaceId     String
   title       String
@@ -74,7 +74,7 @@ model Breakthrough {
 }
 
 model EmbeddingProvider {
-  id          String   @id
+  id          String   @id @default(cuid())
   userId      String
   provider    String
   name        String
@@ -92,7 +92,7 @@ model EmbeddingProvider {
 }
 
 model Experiment {
-  id          String   @id
+  id          String   @id @default(cuid())
   userId      String?
   spaceId     String
   phase       String
@@ -116,7 +116,7 @@ model Experiment {
 }
 
 model ModelCache {
-  id          String   @id
+  id          String   @id @default(cuid())
   spaceId     String
   fileName    String
   filePath    String
@@ -146,7 +146,7 @@ model ServiceProvider {
 }
 
 model Space {
-  id                     String         @id
+  id                     String         @id @default(cuid())
   userId                 String
   name                   String
   description            String?
@@ -204,7 +204,7 @@ model User {
 }
 
 model Variant {
-  id             String        @id
+  id             String        @id @default(cuid())
   spaceId        String
   stageId        String
   stageName      String
@@ -228,7 +228,7 @@ model Variant {
 }
 
 model VariantStep {
-  id          String   @id
+  id          String   @id @default(cuid())
   variantId   String
   name        String
   description String?
