@@ -11,7 +11,7 @@ export async function GET(request: NextRequest) {
     const spaces = await prisma.space.findMany({
       where: { userId: auth.user.id },
       include: {
-        experiments: {
+        Experiment: {
           select: {
             tokensUsed: true,
             cost: true,
@@ -19,7 +19,7 @@ export async function GET(request: NextRequest) {
             phase: true,
           },
         },
-        breakthroughs: {
+        Breakthrough: {
           select: {
             id: true,
             title: true,
@@ -35,17 +35,17 @@ export async function GET(request: NextRequest) {
     // Calculate aggregated stats
     const totalTokens = spaces.reduce((sum, s) => sum + s.totalTokens, 0)
     const totalCost = spaces.reduce((sum, s) => sum + s.totalCost, 0)
-    const totalExperiments = spaces.reduce((sum, s) => sum + s.experiments.length, 0)
-    const totalBreakthroughs = spaces.reduce((sum, s) => sum + s.breakthroughs.length, 0)
+    const totalExperiments = spaces.reduce((sum, s) => sum + s.Experiment.length, 0)
+    const totalBreakthroughs = spaces.reduce((sum, s) => sum + s.Breakthrough.length, 0)
     const verifiedBreakthroughs = spaces.reduce(
-      (sum, s) => sum + s.breakthroughs.filter(b => b.verified).length,
+      (sum, s) => sum + s.Breakthrough.filter(b => b.verified).length,
       0
     )
 
     // Experiments by phase
     const experimentsByPhase: Record<string, number> = {}
     spaces.forEach(space => {
-      space.experiments.forEach(exp => {
+      space.Experiment.forEach(exp => {
         experimentsByPhase[exp.phase] = (experimentsByPhase[exp.phase] || 0) + 1
       })
     })
@@ -53,7 +53,7 @@ export async function GET(request: NextRequest) {
     // Breakthroughs by category
     const breakthroughsByCategory: Record<string, number> = {}
     spaces.forEach(space => {
-      space.breakthroughs.forEach(b => {
+      space.Breakthrough.forEach(b => {
         breakthroughsByCategory[b.category] = (breakthroughsByCategory[b.category] || 0) + 1
       })
     })
@@ -64,8 +64,8 @@ export async function GET(request: NextRequest) {
       name: space.name,
       status: space.status,
       phase: space.currentPhase,
-      experiments: space.experiments.length,
-      breakthroughs: space.breakthroughs.length,
+      experiments: space.Experiment.length,
+      breakthroughs: space.Breakthrough.length,
       tokensUsed: space.totalTokens,
       cost: space.totalCost,
     }))
