@@ -532,6 +532,8 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
   // Check for breakthroughs
   if (currentStage.name === 'Evaluation') {
     await processEvaluationResults(spaceId, response.content)
+    // Synthesize lessons learned from this cycle for the next Proposition
+    await synthesizeCycleLessons(spaceId, currentCycle)
   }
 
   debugLog(`[executeResearchCycle] Stage ${currentStage.name} completed`)
@@ -820,54 +822,23 @@ function getNextStageId(stages: ResearchStage[], currentId: string): string {
 }
 
 async function generateStagePrompt(space: any, stage: ResearchStage, previousExperiments: any[], agent?: any): Promise<AIMessage[]> {
+  // For Proposition stage, load the cycle review for context
   let contextFromPrevious = ''
-  if (previousExperiments.length > 0) {
-    const isProposition = stage.name === 'Proposition'
-    
-    if (isProposition) {
-      // Group experiments by cycle and phase to build lessons learned
-      const byCycle: Record<string, Record<string, any[]>> = {}
-      for (const exp of previousExperiments) {
-        const cyc = String(exp.cycleNumber || 1)
-        if (!byCycle[cyc]) byCycle[cyc] = {}
-        const ph = exp.phase || '?'
-        if (!byCycle[cyc][ph]) byCycle[cyc][ph] = []
-        byCycle[cyc][ph].push(exp)
-      }
-      
-      // Build lessons learned synthesis
-      const cycles = Object.keys(byCycle).sort((a, b) => Number(a) - Number(b))
-      const lastCycle = cycles[cycles.length - 1]
-      const currentCycleExperiments = lastCycle ? byCycle[lastCycle] : {}
-      
-      // Extract key findings from each phase
-      const investigationFindings = (currentCycleExperiments['INVESTIGATION_STEP'] || [])
-        .concat(currentCycleExperiments['Investigation'] || [])
-        .map((e: any) => e.result?.substring(0, 300) || '').filter(Boolean)
-      
-      const testingResults = (currentCycleExperiments['TESTING_STEP'] || [])
-        .concat(currentCycleExperiments['Testing'] || [])
-        .map((e: any) => e.result?.substring(0, 300) || '').filter(Boolean)
-      
-      const implementationResults = (currentCycleExperiments['IMPLEMENTATION_STEP'] || [])
-        .concat(currentCycleExperiments['Implementation'] || [])
-        .map((e: any) => e.result?.substring(0, 300) || '').filter(Boolean)
-      
-      contextFromPrevious = `\n\n## Lessons Learned from Previous Cycles\n` +
-        `You are formulating a NEW proposition for CYCLE ${(Number(lastCycle) || 1) + 1}. ` +
-        `Previous cycle (${lastCycle || 1}) results:\n\n` +
-        (investigationFindings.length ? `INVESTIGATION FINDINGS:\n${investigationFindings.slice(0, 2).join('\n')}\n\n` : '') +
-        (implementationResults.length ? `IMPLEMENTATION RESULTS:\n${implementationResults.slice(0, 2).join('\n')}\n\n` : '') +
-        (testingResults.length ? `TESTING RESULTS:\n${testingResults.slice(0, 2).join('\n')}\n\n` : '') +
-        `Based on the above, propose a REVISED or entirely NEW proposition that addresses ` +
-        `any weaknesses identified. If previous approaches failed, pivot to a different strategy.\n`
-    } else {
-      contextFromPrevious = `\n\nContext from Previous Work:\n${
-        previousExperiments.slice(0, 5).map((exp: any, i: number) => 
-          `[${exp.phase}]: ${exp.result?.substring(0, 500) || 'No result'}`
-        ).join('\n\n')
-      }`
+  if (previousExperiments.length > 0 && stage.name === 'Proposition') {
+    // Find the most recent CYCLE_REVIEW experiment
+    const cycleReview = previousExperiments.find((e: any) => e.phase?.startsWith('CYCLE_REVIEW'))
+    if (cycleReview) {
+      contextFromPrevious = `\n\n## Prior Cycle Review (Lessons Learned)\n` +
+        `${cycleReview.result?.substring(0, 1500) || ''}\n\n` +
+        `Based on the above, formulate a REVISED proposition for this new cycle that addresses ` +
+        `the weaknesses and builds on the successes of the prior cycle.\n`
     }
+  } else if (previousExperiments.length > 0) {
+    contextFromPrevious = `\n\nContext from Previous Work:\n${
+      previousExperiments.slice(0, 5).map((exp: any, i: number) => 
+        `[${exp.phase}]: ${exp.result?.substring(0, 500) || 'No result'}`
+      ).join('\n\n')
+    }`
   }
 
   // Add semantic search context from embeddings if enabled
@@ -911,6 +882,89 @@ Execute your stage tasks thoroughly.`
     { role: 'system', content: systemPrompt },
     { role: 'user', content: fullPrompt },
   ]
+}
+
+async function synthesizeCycleLessons(spaceId: string, completedCycle: number) {
+  // Load all experiments from the completed cycle to synthesize lessons
+  const cycleExperiments = await prisma.experiment.findMany({
+    where: { spaceId, cycleNumber: completedCycle },
+    orderBy: { createdAt: 'asc' },
+  })
+  
+  if (cycleExperiments.length === 0) {
+    debugLog(`[synthesizeCycleLessons] No experiments found for cycle ${completedCycle}`)
+    return
+  }
+  
+  // Build a summary of all experiment results for the LLM to analyze
+  const experimentSummary = cycleExperiments.map((exp: any) => 
+    `[${exp.phase}] ${(exp.result || '').substring(0, 800)}`
+  ).join('\n\n---\n\n')
+  
+  const synthesisPrompt = `You are a research analyst. Review this cycle's work and produce a concise lessons-learned summary for the next research cycle.
+
+CYCLE ${completedCycle} EXPERIMENTS:
+${experimentSummary}
+
+Provide a structured analysis with these sections (be specific and critical -- avoid vague praise):
+
+## What Worked Well
+- Specific approaches or techniques that produced good results
+
+## What Didn't Work  
+- Specific failures, weaknesses, or dead ends
+
+## Strategic Recommendations for Next Cycle
+- How should the next proposition differ?
+- What should be kept vs. abandoned?
+- Any new angles or pivots worth exploring?
+
+Be direct and factual. This will go directly to the Proposition agent.`
+  
+  try {
+    const space = await prisma.space.findUnique({ 
+      where: { id: spaceId },
+      include: { 
+        user: { 
+          include: { 
+            agents: { where: { isActive: true }, orderBy: { order: 'asc' } },
+            serviceProviders: true 
+          } 
+        } 
+      } 
+    })
+    if (!space) return
+    
+    const agent = space.user.agents.find((a: any) => a.role === 'THINKING') || space.user.agents[0]
+    const sp = space.user.serviceProviders.find((s: any) => s.id === agent?.serviceProviderId)
+    if (!agent || !sp) return
+    
+    const aiResult = await callAI(
+      { provider: sp.provider, apiKey: sp.apiKey, model: agent.model },
+      [{ role: 'system', content: 'You are a research analysis assistant. Be thorough and critical.' },
+       { role: 'user', content: synthesisPrompt }]
+    )
+    
+    // Save as a special CYCLE_REVIEW experiment for the next Proposition to read
+    await prisma.experiment.create({
+      data: {
+        spaceId,
+        phase: `CYCLE_REVIEW_${completedCycle}`,
+        agentId: agent.id,
+        agentName: agent.name,
+        prompt: `Cycle ${completedCycle} lessons synthesis`,
+        response: aiResult.content,
+        result: aiResult.content,
+        tokensUsed: aiResult.tokensUsed,
+        cost: aiResult.cost,
+        status: 'COMPLETED',
+        cycleNumber: completedCycle + 1, // Belongs to NEXT cycle's context
+      }
+    })
+    debugLog(`[synthesizeCycleLessons] Created cycle review for cycle ${completedCycle}`)
+  } catch (err: any) {
+    debugLog(`[synthesizeCycleLessons] Failed: ${err.message}`)
+  }
 }
 
 async function processEvaluationResults(spaceId: string, content: string) {
