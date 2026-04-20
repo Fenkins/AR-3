@@ -760,17 +760,24 @@ async function executeVariant(variant: Variant, spaceId: string, stageName: stri
     }
   }
 
-  // Grade the variant
+  // Grade the variant (includes failure mode analysis for self-evolution)
   const graded = await gradeVariant(variant, spaceId, stageName)
   variant.grade = graded.grade
   variant.feedback = graded.feedback
+  // Store self-evolution data on the variant for cycle-level synthesis
+  ;(variant as any).failureMode = graded.failureMode
+  ;(variant as any).approachVerdict = graded.approachVerdict
+  ;(variant as any).gradingWarning = graded.warning
   variant.status = 'COMPLETED'
 
-  // Persist variant grade to DB
+  // Persist variant grade + self-evolution data to DB
   await updateVariantDb(variant.id, {
     grade: graded.grade,
     feedback: graded.feedback,
     status: 'COMPLETED',
+    failureMode: graded.failureMode,
+    approachVerdict: graded.approachVerdict,
+    gradingWarning: graded.warning,
   })
 
   return variant
@@ -876,7 +883,13 @@ Execute your stage tasks thoroughly.`
   // Use agent's custom system prompt if set, otherwise results-focused default
   // Explicitly tell agent to avoid thinking tags in final output
   const defaultSystemPrompt = 'You are an expert research scientist. Your role is to produce actionable research results -- not to describe your thinking process.\n\nIMPORTANT RULES:\n1. NEVER use <thought> or <think> tags in your output -- they are not part of your deliverable\n2. Focus on concrete findings, code, data, and conclusions\n3. When reporting results, write as if communicating to a colleague who needs the facts\n4. Be direct and concise -- prioritize substance over explanation\n5. If you would include a thought in your final output, remove it and keep only the useful content\n\nYour output will be parsed automatically -- include only meaningful content.'
-  const systemPrompt = agent?.systemPrompt || defaultSystemPrompt
+
+  // Self-evolution: inject accumulated cycle prompt deltas if they exist
+  const cycleDelta = agent?.cyclePromptDelta
+  let systemPrompt = agent?.systemPrompt || defaultSystemPrompt
+  if (cycleDelta) {
+    systemPrompt = `${systemPrompt}\n\n══════ SELF-EVOLUTION CONTEXT (learned from past cycles) ══════\n${cycleDelta}\n═════════════════════════════════════════════════════════════`
+  }
 
   return [
     { role: 'system', content: systemPrompt },
@@ -885,66 +898,170 @@ Execute your stage tasks thoroughly.`
 }
 
 async function synthesizeCycleLessons(spaceId: string, completedCycle: number) {
-  // Load all experiments from the completed cycle to synthesize lessons
+  debugLog(`[synthesizeCycleLessons] Starting self-evolution analysis for cycle ${completedCycle}`)
+
+  // Load space with user + agents + service providers
+  const space = await prisma.space.findUnique({
+    where: { id: spaceId },
+    include: {
+      user: {
+        include: {
+          agents: { where: { isActive: true }, orderBy: { order: 'asc' } },
+          serviceProviders: true,
+        },
+      },
+    },
+  })
+  if (!space) {
+    debugLog(`[synthesizeCycleLessons] Space ${spaceId} not found`)
+    return
+  }
+
+  // Load all experiments from the completed cycle
   const cycleExperiments = await prisma.experiment.findMany({
     where: { spaceId, cycleNumber: completedCycle },
     orderBy: { createdAt: 'asc' },
   })
-  
-  if (cycleExperiments.length === 0) {
-    debugLog(`[synthesizeCycleLessons] No experiments found for cycle ${completedCycle}`)
+
+  // Load all graded variants from the completed cycle
+  const cycleVariants = await prisma.variant.findMany({
+    where: { spaceId, cycleNumber: completedCycle },
+  })
+
+  if (cycleExperiments.length === 0 && cycleVariants.length === 0) {
+    debugLog(`[synthesizeCycleLessons] No experiments or variants found for cycle ${completedCycle}`)
     return
   }
-  
-  // Build a summary of all experiment results for the LLM to analyze
-  const experimentSummary = cycleExperiments.map((exp: any) => 
-    `[${exp.phase}] ${(exp.result || '').substring(0, 800)}`
+
+  debugLog(`[synthesizeCycleLessons] Found ${cycleExperiments.length} experiments and ${cycleVariants.length} variants`)
+
+  // ─── STEP 1: Catalog failed approaches ────────────────────────────────────
+  const failedVariants = cycleVariants.filter((v: any) =>
+    v.failureMode && v.failureMode !== 'NONE' && v.grade && v.grade < 40
+  )
+
+  if (failedVariants.length > 0) {
+    try {
+      for (const variant of failedVariants) {
+        await catalogFailedApproach(space, variant, completedCycle)
+      }
+      debugLog(`[synthesizeCycleLessons] Cataloged ${failedVariants.length} failed approaches`)
+    } catch (err: any) {
+      debugLog(`[synthesizeCycleLessons] Failed approach cataloging: ${err.message}`)
+    }
+  }
+
+  // ─── STEP 2: Extract and store successful techniques ───────────────────────
+  const successfulVariants = cycleVariants.filter((v: any) =>
+    v.grade && v.grade >= 65
+  )
+
+  if (successfulVariants.length > 0) {
+    try {
+      await extractTechniquesFromVariants(space, successfulVariants, cycleExperiments, completedCycle)
+      debugLog(`[synthesizeCycleLessons] Extracted techniques from ${successfulVariants.length} successful variants`)
+    } catch (err: any) {
+      debugLog(`[synthesizeCycleLessons] Technique extraction: ${err.message}`)
+    }
+  }
+
+  // ─── STEP 3: Build full synthesis context for LLM ───────────────────────────
+  const experimentSummary = cycleExperiments.map((exp: any) =>
+    `[${exp.phase}] Grade:${exp.grade || 'N/A'} | ${(exp.result || '').substring(0, 600)}`
   ).join('\n\n---\n\n')
-  
-  const synthesisPrompt = `You are a research analyst. Review this cycle's work and produce a concise lessons-learned summary for the next research cycle.
+
+  const variantSummary = cycleVariants.map((v: any) =>
+    `[Variant:${v.stageName}] Grade:${v.grade || 'N/A'} | Mode:${v.failureMode || 'NONE'} | Verdict:${v.approachVerdict || 'UNKNOWN'} | ${v.name} | ${(v.feedback || '').substring(0, 300)}`
+  ).join('\n')
+
+  // Get existing failed approaches for this space to include in prompt
+  const pastFailedApproaches = await prisma.failedApproach.findMany({
+    where: { spaceId },
+    orderBy: { createdAt: 'desc' },
+    take: 10,
+  })
+
+  const failedApproachWarnings = pastFailedApproaches.length > 0
+    ? pastFailedApproaches.map((fa: any) => `- ${fa.failureMode}: ${fa.description} [AVOID: ${fa.warningText}]`).join('\n')
+    : 'No prior failed approaches recorded.'
+
+  // Get existing techniques for this space
+  const pastTechniques = await prisma.technique.findMany({
+    where: { spaceId },
+    orderBy: { avgGrade: 'desc' },
+    take: 10,
+  })
+
+  const techniqueContext = pastTechniques.length > 0
+    ? pastTechniques.map((t: any) => `- ${t.name}: ${t.description} (grade:${t.avgGrade.toFixed(1)}, success:${t.successCount}, fail:${t.failureCount})`).join('\n')
+    : 'No prior techniques recorded.'
+
+  const synthesisPrompt = `You are a research analyst and self-evolution specialist. Review this cycle's work and produce a comprehensive lessons-learned synthesis for the next research cycle.
+
+CYCLE ${completedCycle} VARIANTS (graded):
+${variantSummary}
 
 CYCLE ${completedCycle} EXPERIMENTS:
 ${experimentSummary}
 
-Provide a structured analysis with these sections (be specific and critical -- avoid vague praise):
+══════ PRIOR FAILED APPROACHES (explicitly avoid these in recommendations) ══════
+${failedApproachWarnings}
+
+══════ PRIOR SUCCESSFUL TECHNIQUES (consider leveraging these) ══════
+${techniqueContext}
+
+Provide a structured analysis with these EXACT sections:
 
 ## What Worked Well
-- Specific approaches or techniques that produced good results
+- Specific approaches, techniques, or strategies that produced good results (grade >= 65)
+- Quote the specific variant or experiment that demonstrated success
 
-## What Didn't Work  
-- Specific failures, weaknesses, or dead ends
+## What Didn't Work
+- Specific failures, weaknesses, or dead ends (grade < 40 or failureMode != NONE)
+- Classify the failure mode: MODE_COLLAPSE, WRONG_DIRECTION, PARTIAL_SUCCESS, RESOURCE_EXHAUSTION, IMPLEMENTATION_BUG, etc.
+- Quote the specific variant that failed
+
+## Approach Verdict on Current Proposition
+- Was the underlying proposition for this cycle SOUND, FLAWED, PARTIALLY_RIGHT, or TOO_EARLY?
+- Based on the grading agent's verdict: ${cycleVariants.filter((v: any) => v.approachVerdict).map((v: any) => `${v.stageName}:${v.approachVerdict}`).join(', ') || 'No verdicts recorded'}
+
+## Critical Warning for Next Proposition
+- 1-2 sentence warning about what the NEXT Proposition must explicitly avoid
+- Based on the most severe failure modes from this cycle
 
 ## Strategic Recommendations for Next Cycle
-- How should the next proposition differ?
+- How should the next proposition differ from this one?
 - What should be kept vs. abandoned?
-- Any new angles or pivots worth exploring?
+- Should the approach pivot, refine, or continue as-is?
+- Any specific new angles worth exploring?
 
-Be direct and factual. This will go directly to the Proposition agent.`
-  
+## Agent Prompt Modification Recommendations
+For each agent type (Proposition, Planning, Implementation), recommend a specific 1-2 sentence prompt delta to add to their accumulated "cyclePromptDelta" based on lessons from this cycle.
+Format:
+- Proposition: [recommendation]
+- Planning: [recommendation]
+- Implementation: [recommendation]
+
+Be direct and factual. This output drives actual agent prompt self-modification.`
+
   try {
-    const space = await prisma.space.findUnique({ 
-      where: { id: spaceId },
-      include: { 
-        user: { 
-          include: { 
-            agents: { where: { isActive: true }, orderBy: { order: 'asc' } },
-            serviceProviders: true 
-          } 
-        } 
-      } 
-    })
-    if (!space) return
-    
     const agent = space.user.agents.find((a: any) => a.role === 'THINKING') || space.user.agents[0]
     const sp = space.user.serviceProviders.find((s: any) => s.id === agent?.serviceProviderId)
-    if (!agent || !sp) return
-    
+    if (!agent || !sp) {
+      debugLog(`[synthesizeCycleLessons] No agent or service provider found`)
+      return
+    }
+
     const aiResult = await callAI(
       { provider: sp.provider, apiKey: sp.apiKey, model: agent.model },
-      [{ role: 'system', content: 'You are a research analysis assistant. Be thorough and critical.' },
-       { role: 'user', content: synthesisPrompt }]
+      [
+        { role: 'system', content: 'You are a research analysis and self-evolution assistant. Be thorough, critical, and specific. Your output directly drives agent prompt self-modification.' },
+        { role: 'user', content: synthesisPrompt },
+      ]
     )
-    
+
+    const synthesisContent = aiResult.content
+
     // Save as a special CYCLE_REVIEW experiment for the next Proposition to read
     await prisma.experiment.create({
       data: {
@@ -953,17 +1070,213 @@ Be direct and factual. This will go directly to the Proposition agent.`
         agentId: agent.id,
         agentName: agent.name,
         prompt: `Cycle ${completedCycle} lessons synthesis`,
-        response: aiResult.content,
-        result: aiResult.content,
+        response: synthesisContent,
+        result: synthesisContent,
         tokensUsed: aiResult.tokensUsed,
         cost: aiResult.cost,
         status: 'COMPLETED',
-        cycleNumber: completedCycle + 1, // Belongs to NEXT cycle's context
-      }
+        cycleNumber: completedCycle + 1,
+      },
     })
-    debugLog(`[synthesizeCycleLessons] Created cycle review for cycle ${completedCycle}`)
+
+    // ─── STEP 4: Apply agent prompt deltas from synthesis ──────────────────
+    await applyAgentPromptDeltas(space, synthesisContent)
+
+    debugLog(`[synthesizeCycleLessons] Created cycle review + applied agent prompt deltas for cycle ${completedCycle}`)
   } catch (err: any) {
     debugLog(`[synthesizeCycleLessons] Failed: ${err.message}`)
+  }
+}
+
+// ─── Self-Evolution Helper Functions ─────────────────────────────────────────
+
+/**
+ * Catalog a failed variant as a FailedApproach record
+ */
+async function catalogFailedApproach(
+  space: any,
+  variant: any,
+  completedCycle: number
+) {
+  const warning = variant.gradingWarning ||
+    `Avoid approach: ${variant.description || variant.name} (grade:${variant.grade}, mode:${variant.failureMode})`
+
+  // Check if this exact failure mode+description is already recorded recently
+  const existing = await prisma.failedApproach.findFirst({
+    where: {
+      spaceId: space.id,
+      failureMode: variant.failureMode,
+      description: { contains: variant.description?.substring(0, 50) || '' },
+      cycleNumber: { gte: completedCycle - 1 },
+    },
+  })
+
+  if (existing) {
+    // Update existing: increment failure count, add experiment ID
+    const existingIds: string[] = JSON.parse(existing.experimentIds || '[]')
+    if (!existingIds.includes(variant.id)) {
+      existingIds.push(variant.id)
+    }
+    await prisma.failedApproach.update({
+      where: { id: existing.id },
+      data: {
+        failureCount: existing.failureCount + 1,
+        experimentIds: JSON.stringify(existingIds),
+      },
+    })
+  } else {
+    // Create new failed approach record
+    await prisma.failedApproach.create({
+      data: {
+        id: `fa_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        userId: space.userId,
+        spaceId: space.id,
+        cycleNumber: completedCycle,
+        description: `${variant.stageName}: ${variant.description || variant.name}`,
+        failureMode: variant.failureMode,
+        severity: variant.grade ? (1 - variant.grade / 100) : 0.5,
+        experimentIds: JSON.stringify([variant.id]),
+        warningText: warning,
+      },
+    })
+  }
+}
+
+/**
+ * Extract named techniques from successful variants and store in DB
+ */
+async function extractTechniquesFromVariants(
+  space: any,
+  variants: any[],
+  experiments: any[],
+  completedCycle: number
+) {
+  const variantSummary = variants.map((v: any) =>
+    `[${v.stageName}] "${v.name}" (grade:${v.grade}) - ${v.description || 'no description'} | feedback: ${(v.feedback || '').substring(0, 200)}`
+  ).join('\n')
+
+  const techniqueExtractionPrompt = `
+You are a technique analyst. From the successful variants below, identify and name the specific techniques or strategies that led to success.
+
+SUCCESSFUL VARIANTS:
+${variantSummary}
+
+For each distinct technique found, respond with:
+TECHNIQUE: [short evocative name, e.g. "gradient consensus pooling"]
+DESCRIPTION: [1-sentence description of what this technique does]
+EVIDENCE: [which variant(s) demonstrated this technique and what grade they got]
+---
+
+If multiple variants share a similar underlying approach, group them under one named technique.
+If no clear distinct technique can be identified, respond with NO_DISTINCT_TECHNIQUE.
+`
+
+  const agent = space.user.agents.find((a: any) => a.role === 'THINKING') || space.user.agents[0]
+  const sp = space.user.serviceProviders.find((s: any) => s.id === agent?.serviceProviderId)
+  if (!agent || !sp) return
+
+  const result = await callAI(
+    { provider: sp.provider, apiKey: sp.apiKey, model: agent.model },
+    [{ role: 'system', content: 'You are a research technique analyst. Be specific about what makes each technique distinct and effective.' },
+     { role: 'user', content: techniqueExtractionPrompt }]
+  )
+
+  if (result.content.includes('NO_DISTINCT_TECHNIQUE')) return
+
+  // Parse technique blocks from response
+  const blocks = result.content.split(/TECHNIQUE:/i).filter((b: string) => b.trim())
+
+  for (const block of blocks) {
+    const nameMatch = block.match(/^\s*([^\n]+)/)
+    const descMatch = block.match(/DESCRIPTION:\s*([^\n]+)/i)
+    const evidenceMatch = block.match(/EVIDENCE:\s*([^\n--]+)/i)
+
+    if (nameMatch && descMatch) {
+      const name = nameMatch[1].trim()
+      const description = descMatch[1].trim()
+      const avgGrade = variants.reduce((sum: number, v: any) => sum + (v.grade || 0), 0) / variants.length
+
+      // Check if technique with similar name already exists
+      const existing = await prisma.technique.findFirst({
+        where: {
+          spaceId: space.id,
+          name: { contains: name.substring(0, 20) },
+        },
+      })
+
+      if (existing) {
+        // Update existing technique
+        const existingIds: string[] = JSON.parse(existing.experimentIds || '[]')
+        const newIds = variants.map((v: any) => v.id).filter((id: string) => !existingIds.includes(id))
+        await prisma.technique.update({
+          where: { id: existing.id },
+          data: {
+            successCount: existing.successCount + variants.length,
+            avgGrade: (existing.avgGrade * existing.successCount + avgGrade * variants.length) / (existing.successCount + variants.length),
+            experimentIds: JSON.stringify([...existingIds, ...newIds]),
+          },
+        })
+      } else {
+        // Create new technique
+        await prisma.technique.create({
+          data: {
+            id: `tech_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            userId: space.userId,
+            spaceId: space.id,
+            cycleNumber: completedCycle,
+            name,
+            description,
+            avgGrade,
+            successCount: variants.length,
+            failureCount: 0,
+            experimentIds: JSON.stringify(variants.map((v: any) => v.id)),
+          },
+        })
+      }
+    }
+  }
+}
+
+/**
+ * Parse the synthesis output and apply agent prompt deltas
+ */
+async function applyAgentPromptDeltas(space: any, synthesisContent: string) {
+  // Extract the Agent Prompt Modification Recommendations section
+  const sectionMatch = synthesisContent.match(/Agent Prompt Modification Recommendations?\s*([\s\S]+?)(?:\n##|$)/i)
+  if (!sectionMatch) {
+    debugLog(`[applyAgentPromptDeltas] No agent prompt modification section found in synthesis`)
+    return
+  }
+
+  const section = sectionMatch[1]
+
+  // Parse each agent type
+  const propositionMatch = section.match(/(?:Proposition|THINKING):\s*([^\n-]+(?:-(?:\s|\n)[^\n]+)*)/i)
+  const planningMatch = section.match(/(?:Planning|PLANNING):\s*([^\n-]+(?:-(?:\s|\n)[^\n]+)*)/i)
+  const implementationMatch = section.match(/(?:Implementation|IMPLEMENTATION):\s*([^\n-]+(?:-(?:\s|\n)[^\n]+)*)/i)
+
+  const deltas: Array<{ role: string; delta: string }> = []
+  if (propositionMatch) deltas.push({ role: 'THINKING', delta: propositionMatch[1].trim() })
+  if (planningMatch) deltas.push({ role: 'PLANNING', delta: planningMatch[1].trim() })
+  if (implementationMatch) deltas.push({ role: 'IMPLEMENTATION', delta: implementationMatch[1].trim() })
+
+  for (const { role, delta } of deltas) {
+    const agent = space.user.agents.find((a: any) => a.role === role)
+    if (!agent) continue
+
+    // Append delta to existing cyclePromptDelta (accumulated history)
+    const existingDelta = (agent as any).cyclePromptDelta || ''
+    const timestamped = `[Cycle-${(space as any).currentCycle}] ${delta}`
+    const newDelta = existingDelta
+      ? `${existingDelta}\n${timestamped}`
+      : timestamped
+
+    await prisma.agent.update({
+      where: { id: agent.id },
+      data: { cyclePromptDelta: newDelta },
+    })
+
+    debugLog(`[applyAgentPromptDeltas] Updated ${role} agent prompt delta: ${delta.substring(0, 60)}...`)
   }
 }
 

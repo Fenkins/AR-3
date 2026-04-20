@@ -8,7 +8,7 @@ datasource db {
 }
 
 model Agent {
-  id                String          @id
+  id                String          @id @default(cuid())
   userId            String
   serviceProviderId String
   name              String
@@ -17,11 +17,46 @@ model Agent {
   order             Int             @default(0)
   isActive          Boolean         @default(true)
   createdAt         DateTime        @default(now())
-  updatedAt         DateTime
+  updatedAt         DateTime        @default(now())
   gpuPromptVariant  String?
   systemPrompt      String?
+  cyclePromptDelta   String?  // Accumulated prompt modifications from self-evolution cycles
+  cycleGpuPromptDelta String? // Accumulated GPU prompt modifications from self-evolution cycles
   ServiceProvider   ServiceProvider @relation(fields: [serviceProviderId], references: [id], onDelete: Cascade)
   User              User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Technique {
+  id             String   @id
+  userId         String
+  spaceId        String
+  cycleNumber    Int
+  name           String   // e.g., "gradient latent diffusion consensus"
+  description    String   // What this technique does
+  embedding      String?  // Vector embedding (stored as JSON string)
+  avgGrade       Float    // Average grade of experiments using this technique
+  successCount   Int      // How many times this worked
+  failureCount   Int      // How many times this failed
+  experimentIds  String   // JSON array of experiment IDs that used this technique
+  createdAt      DateTime @default(now())
+  Space          Space    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  User           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model FailedApproach {
+  id             String   @id
+  userId         String
+  spaceId        String
+  cycleNumber    Int
+  description    String   // What was tried and failed
+  failureMode    String   // Classification: MODE_COLLAPSE, GRADIENT_EXPLOSION, WRONG_DIRECTION, etc.
+  severity       Float    // 0-1, how critical the failure was
+  experimentIds  String   // JSON array of experiment IDs that failed this way
+  warningText    String   // Specific warning to include in next proposition/planning
+  embedding      String?  // Vector embedding for similarity matching
+  createdAt      DateTime @default(now())
+  Space          Space    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  User           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model Breakthrough {
@@ -96,14 +131,14 @@ model ModelCache {
 }
 
 model ServiceProvider {
-  id        String   @id
+  id        String   @id @default(cuid())
   userId    String
   provider  String
   name      String
   apiKey    String
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
-  updatedAt DateTime
+  updatedAt DateTime @default(now())
   Agent     Agent[]
   User      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -135,33 +170,37 @@ model Space {
   Breakthrough           Breakthrough[]
   Experiment             Experiment[]
   ModelCache             ModelCache[]
+  Technique              Technique[]
+  FailedApproach         FailedApproach[]
   User                   User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   Variant                Variant[]
 }
 
 model SystemConfig {
-  id          String   @id
+  id          String   @id @default(cuid())
   key         String   @unique
   value       String
   description String?
-  updatedAt   DateTime
+  updatedAt   DateTime @default(now())
 }
 
 model User {
-  id                String              @id
+  id                String              @id @default(cuid())
   email             String              @unique
   password          String
   username          String              @unique
   role              String              @default("USER")
   isActive          Boolean             @default(true)
   createdAt         DateTime            @default(now())
-  updatedAt         DateTime
+  updatedAt         DateTime            @default(now())
   Agent             Agent[]
   Breakthrough      Breakthrough[]
   EmbeddingProvider EmbeddingProvider[]
   Experiment        Experiment[]
   ServiceProvider   ServiceProvider[]
   Space             Space[]
+  Technique         Technique[]
+  FailedApproach    FailedApproach[]
 }
 
 model Variant {
@@ -178,6 +217,9 @@ model Variant {
   isSelected     Boolean       @default(false)
   order          Int           @default(0)
   status         String        @default("PENDING")
+  failureMode    String?
+  approachVerdict String?
+  gradingWarning  String?
   createdAt      DateTime      @default(now())
   updatedAt      DateTime
   cacheDownloads String?

@@ -10,7 +10,7 @@ export async function GET(request: NextRequest) {
     const agents = await prisma.agent.findMany({
       where: { userId: auth.user.id },
       include: {
-        serviceProvider: {
+        ServiceProvider: {
           select: {
             id: true,
             provider: true,
@@ -100,6 +100,7 @@ export async function POST(request: NextRequest) {
 
     const agent = await prisma.agent.create({
       data: {
+        id: `agent_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         userId: auth.user.id,
         serviceProviderId,
         name,
@@ -107,11 +108,12 @@ export async function POST(request: NextRequest) {
         role,
         order: order || 0,
         isActive: true,
+        updatedAt: new Date(),
         systemPrompt: systemPrompt ?? defaults.systemPrompt,
         gpuPromptVariant: gpuPromptVariant ?? defaults.gpuPromptVariant ?? null,
       },
       include: {
-        serviceProvider: {
+        ServiceProvider: {
           select: {
             id: true,
             provider: true,

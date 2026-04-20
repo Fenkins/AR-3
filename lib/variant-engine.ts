@@ -97,6 +97,10 @@ export interface Variant {
   status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'PENDING_REVIEW'
   cacheDownloads?: string | null
   createdAt: Date
+  // Self-evolution fields from grading agent
+  failureMode?: string
+  approachVerdict?: string
+  gradingWarning?: string
 }
 
 export interface Step {
@@ -420,7 +424,7 @@ export async function gradeVariant(
   variant: Variant,
   spaceId: string,
   stageName: string
-): Promise<{ grade: number; feedback: string }> {
+): Promise<{ grade: number; feedback: string; failureMode: string; approachVerdict: string; warning: string }> {
   const space = await prisma.space.findUnique({
     where: { id: spaceId },
     include: {
@@ -463,17 +467,35 @@ Steps Completed: ${variant.steps.filter(s => s.status === 'COMPLETED').length}/$
 Results:
 ${variant.steps.map(s => `- ${s.name}: ${s.result || 'No result'}`).join('\n')}
 
-Provide:
+Provide a structured evaluation:
+
 1. Grade (1-100, where 100 is perfect)
 2. Detailed feedback on what worked and what didn't
 3. Key learnings from this variant
 4. Recommendation for next stages
+5. FAILURE MODE CLASSIFICATION — this is critical for self-evolution:
+   - MODE_COLLAPSE: outputs converged to a single mode or degenerate output
+   - GRADIENT_EXPLOSION: training diverged, loss went to infinity or NaN
+   - WRONG_DIRECTION: technically ran but didn't address the research goal
+   - PARTIAL_SUCCESS: addressed some sub-goals but missed the main objective
+   - IMPLEMENTATION_BUG: code ran but had logical/mathematical errors
+   - RESOURCE_EXHAUSTION: ran out of memory/time/compute
+   - NOVEL_APPROACH: unexpected positive result — potential breakthrough signal
+6. APPROACH VERDICT: Was the underlying approach/proposition correct?
+   - SOUND: The approach was right, implementation had issues
+   - FLAWED: The approach itself was wrong or poorly conceived
+   - PARTIALLY_RIGHT: Some aspects right, others wrong
+   - TOO_EARLY: Right approach but premature — needs more fundamental work
+7. SPECIFIC WARNING for future cycles (1 sentence — what to explicitly avoid)
 
 Format:
 Grade: [number]
 Feedback: [detailed feedback]
 Learnings: [key insights]
-Recommendation: [suggestion]`
+Recommendation: [suggestion]
+FailureMode: [MODE_COLLAPSE/GRADIENT_EXPLOSION/WRONG_DIRECTION/PARTIAL_SUCCESS/IMPLEMENTATION_BUG/RESOURCE_EXHAUSTION/NOVEL_APPROACH/NONE]
+ApproachVerdict: [SOUND/FLAWED/PARTIALLY_RIGHT/TOO_EARLY]
+Warning: [1-sentence warning for next cycle's Proposition/Planning]`
 
   const defaultGradingPrompt = 'You are an expert research grading agent. Evaluate variants rigorously and provide constructive feedback. Focus on the quality of actual results produced, not on the presence of reasoning. Score based on: scientific merit, concrete output quality, reproducibility, and relevance to the research goal.'
   const systemPrompt = gradingAgent.systemPrompt || defaultGradingPrompt
@@ -485,10 +507,16 @@ Recommendation: [suggestion]`
 
   const gradeMatch = response.content.match(/Grade:\s*(\d+)/i)
   const feedbackMatch = response.content.match(/Feedback:\s*([\s\S]+?)(?:\nLearnings:|$)/i)
+  const failureModeMatch = response.content.match(/FailureMode:\s*(\w+)/i)
+  const approachVerdictMatch = response.content.match(/ApproachVerdict:\s*(\w+)/i)
+  const warningMatch = response.content.match(/Warning:\s*([^\n]+)/i)
 
   return {
     grade: gradeMatch ? parseInt(gradeMatch[1]) : 50,
     feedback: feedbackMatch ? feedbackMatch[1].trim() : response.content,
+    failureMode: failureModeMatch ? failureModeMatch[1].trim() : 'NONE',
+    approachVerdict: approachVerdictMatch ? approachVerdictMatch[1].trim() : 'UNKNOWN',
+    warning: warningMatch ? warningMatch[1].trim() : '',
   }
 }
 
@@ -708,7 +736,16 @@ export async function updateVariantStepDb(
 // Update variant grade/rating in DB
 export async function updateVariantDb(
   variantId: string,
-  updates: { grade?: number; feedback?: string; userRating?: string; isSelected?: boolean; status?: string }
+  updates: {
+    grade?: number
+    feedback?: string
+    userRating?: string
+    isSelected?: boolean
+    status?: string
+    failureMode?: string
+    approachVerdict?: string
+    gradingWarning?: string
+  }
 ) {
   await prisma.variant.update({
     where: { id: variantId },

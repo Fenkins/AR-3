@@ -81,7 +81,7 @@ export async function PUT(request: NextRequest) {
       const config = await prisma.systemConfig.upsert({
         where: { key: HF_CONFIG_KEY },
         update: { value: token },
-        create: { key: HF_CONFIG_KEY, value: token },
+        create: { id: `cfg_hf_${Date.now()}`, key: HF_CONFIG_KEY, value: token, updatedAt: new Date() },
       })
 
       return NextResponse.json({

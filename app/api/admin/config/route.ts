@@ -43,7 +43,12 @@ export async function PUT(request: NextRequest) {
     const config = await prisma.systemConfig.upsert({
       where: { key },
       update: { value },
-      create: { key, value },
+      create: {
+        id: `cfg_${Date.now()}`,
+        key,
+        value,
+        updatedAt: new Date(),
+      },
     })
 
     return NextResponse.json({ config })
