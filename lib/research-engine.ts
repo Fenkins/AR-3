@@ -1826,7 +1826,7 @@ export async function stopSpace(spaceId: string, userId?: string) {
   const space = await prisma.space.findUnique({
     where: { id: spaceId },
     include: {
-      variants: { select: { id: true } },
+      Variant: { select: { id: true } },
       Experiment: { select: { id: true } },
       Breakthrough: { select: { id: true } },
     },
@@ -1842,7 +1842,7 @@ export async function stopSpace(spaceId: string, userId?: string) {
   }
 
 
-  const variantIds = space.variants.map(v => v.id)
+  const variantIds = space.Variant.map(v => v.id)
   const experimentIds = space.Experiment.map(e => e.id)
   const breakthroughIds = space.Breakthrough.map(b => b.id)
 
