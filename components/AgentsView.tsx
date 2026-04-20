@@ -195,7 +195,7 @@ export default function Agents() {
                         <div>
                           <div className="font-medium">{agent.name}</div>
                           <div className="text-sm text-dark-400">
-                            {agent.ServiceProvider.name} • {agent.model}
+                            {agent.serviceProvider.name} • {agent.model}
                           </div>
                         </div>
                         <span className="text-xs bg-dark-700 px-2 py-1 rounded">
@@ -343,7 +343,7 @@ function AgentModal({ agent, serviceProviders, onClose, onSuccess }: {
   onSuccess: () => void
 }) {
   const [name, setName] = useState(agent?.name || '')
-  const [serviceProviderId, setServiceProviderId] = useState(agent?.ServiceProvider.id || '')
+  const [serviceProviderId, setServiceProviderId] = useState(agent?.serviceProvider?.id || '')
   const [model, setModel] = useState(agent?.model || '')
   const [availableModels, setAvailableModels] = useState<string[]>([])
   const [role, setRole] = useState(agent?.role || 'THINKING')

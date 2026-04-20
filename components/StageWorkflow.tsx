@@ -140,11 +140,11 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
         setTotalTokens(data.space.totalTokens || 0)
         setTotalCost(data.space.totalCost || 0)
         
-        if (data.space.Experiment) {
-          setExperiments(data.space.Experiment)
+        if (data.space.experiments) {
+          setExperiments(data.space.experiments)
         }
-        if (data.space.Breakthrough) {
-          setBreakthroughs(data.space.Breakthrough)
+        if (data.space.breakthroughs) {
+          setBreakthroughs(data.space.breakthroughs)
         }
         
         // Use data.stages (fresh from API) rather than React state (stages) which may be stale
