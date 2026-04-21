@@ -281,10 +281,10 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
     include: {
       experiments: { orderBy: { createdAt: 'desc' }, take: 100 },
       breakthroughs: { orderBy: { createdAt: 'desc' } },
-      user: {
+      User: {
         include: {
-          agents: { where: { isActive: true } },
-          serviceProviders: true,
+          Agent: { where: { isActive: true } },
+          ServiceProvider: true,
         },
       },
     },
@@ -311,15 +311,15 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
     }
   }
 
-  debugLog(`[executeResearchCycle] Space has agents:`, space.user.agents.map(a => `${a.name}(${a.role})`).join(', '))
+  debugLog(`[executeResearchCycle] Space has Agent:`, space.User.Agent.map(a => `${a.name}(${a.role})`).join(', '))
   // Get appropriate agent
   const agent = getAgentForStage(space, currentStage.name)
   if (!agent) {
-    debugLog(`[executeResearchCycle] Available roles:`, space.user.agents.map(a => a.role).join(', '))
+    debugLog(`[executeResearchCycle] Available roles:`, space.User.Agent.map(a => a.role).join(', '))
     throw new Error(`No active agent found for stage: ${currentStage.name}`)
   }
 
-  const serviceProvider = space.user.serviceProviders.find(sp => sp.id === agent.serviceProviderId)
+  const serviceProvider = space.User.ServiceProvider.find(sp => sp.id === agent.serviceProviderId)
   debugLog(`[executeResearchCycle] Agent: ${agent?.name}, provider: ${serviceProvider?.provider || 'NOT FOUND'}, model: ${agent?.model}`)
   if (!serviceProvider) {
     throw new Error('Service provider not configured')
@@ -556,9 +556,9 @@ export async function runCycleBackground(spaceId: string, stageId?: string): Pro
   const space = await prisma.space.findFirst({
     where: { id: spaceId },
     include: {
-      user: {
+      User: {
         include: {
-          agents: { where: { isActive: true } },
+          Agent: { where: { isActive: true } },
         },
       },
     },
@@ -615,10 +615,10 @@ async function executeVariant(variant: Variant, spaceId: string, stageName: stri
     where: { id: spaceId },
     include: {
       experiments: { orderBy: { createdAt: 'desc' }, take: 50 },
-      user: {
+      User: {
         include: {
-          agents: { where: { isActive: true } },
-          serviceProviders: true,
+          Agent: { where: { isActive: true } },
+          ServiceProvider: true,
         },
       },
     },
@@ -629,7 +629,7 @@ async function executeVariant(variant: Variant, spaceId: string, stageName: stri
   const agent = getAgentForStage(space, stageName)
   if (!agent) throw new Error(`No agent for stage: ${stageName}`)
 
-  const serviceProvider = space.user.serviceProviders.find(sp => sp.id === agent.serviceProviderId)
+  const serviceProvider = space.User.ServiceProvider.find(sp => sp.id === agent.serviceProviderId)
   if (!serviceProvider) throw new Error('Service provider not found')
 
   const agentConfig: AIConfig = {
@@ -800,13 +800,13 @@ export function getAgentForStage(space: any, stageName: string) {
   const roles = roleMap[stageName] || ['THINKING']
 
   for (const role of roles) {
-    const agent = space.user.agents
+    const agent = space.User.Agent
       .filter((a: any) => a.role === role && a.isActive)
       .sort((a: any, b: any) => a.order - b.order)[0]
     if (agent) return agent
   }
 
-  return space.user.agents[0]
+  return space.User.Agent[0]
 }
 
 export function parseStages(space: any): ResearchStage[] {
@@ -907,10 +907,10 @@ async function synthesizeCycleLessons(spaceId: string, completedCycle: number) {
   const space = await prisma.space.findUnique({
     where: { id: spaceId },
     include: {
-      user: {
+      User: {
         include: {
-          agents: { where: { isActive: true }, orderBy: { order: 'asc' } },
-          serviceProviders: true,
+          Agent: { where: { isActive: true }, orderBy: { order: 'asc' } },
+          ServiceProvider: true,
         },
       },
     },
@@ -1101,8 +1101,8 @@ Format:
 Be direct and factual. This output drives actual agent prompt self-modification.`
 
   try {
-    const agent = space.user.agents.find((a: any) => a.role === 'THINKING') || space.user.agents[0]
-    const sp = space.user.serviceProviders.find((s: any) => s.id === agent?.serviceProviderId)
+    const agent = space.User.Agent.find((a: any) => a.role === 'THINKING') || space.User.Agent[0]
+    const sp = space.User.ServiceProvider.find((s: any) => s.id === agent?.serviceProviderId)
     if (!agent || !sp) {
       debugLog(`[synthesizeCycleLessons] No agent or service provider found`)
       return
@@ -1227,8 +1227,8 @@ If multiple variants share a similar underlying approach, group them under one n
 If no clear distinct technique can be identified, respond with NO_DISTINCT_TECHNIQUE.
 `
 
-  const agent = space.user.agents.find((a: any) => a.role === 'THINKING') || space.user.agents[0]
-  const sp = space.user.serviceProviders.find((s: any) => s.id === agent?.serviceProviderId)
+  const agent = space.User.Agent.find((a: any) => a.role === 'THINKING') || space.User.Agent[0]
+  const sp = space.User.ServiceProvider.find((s: any) => s.id === agent?.serviceProviderId)
   if (!agent || !sp) return
 
   const result = await callAI(
@@ -1317,7 +1317,7 @@ async function applyAgentPromptDeltas(space: any, synthesisContent: string) {
   if (implementationMatch) deltas.push({ role: 'IMPLEMENTATION', delta: implementationMatch[1].trim() })
 
   for (const { role, delta } of deltas) {
-    const agent = space.user.agents.find((a: any) => a.role === role)
+    const agent = space.User.Agent.find((a: any) => a.role === role)
     if (!agent) continue
 
     // Append delta to existing cyclePromptDelta (accumulated history)
@@ -2150,10 +2150,10 @@ export async function runThinkingSetup(spaceId: string) {
   const space = await prisma.space.findUnique({
     where: { id: spaceId },
     include: {
-      user: {
+      User: {
         include: {
-          agents: { where: { isActive: true } },
-          serviceProviders: true,
+          Agent: { where: { isActive: true } },
+          ServiceProvider: true,
         },
       },
     },
@@ -2161,7 +2161,7 @@ export async function runThinkingSetup(spaceId: string) {
 
   if (!space) throw new Error('Space not found')
 
-  const thinkingAgent = space.user.agents
+  const thinkingAgent = space.User.Agent
     .filter(a => a.role === 'THINKING')
     .sort((a, b) => a.order - b.order)[0]
 
@@ -2169,7 +2169,7 @@ export async function runThinkingSetup(spaceId: string) {
     throw new Error('No THINKING agent configured. Please create a Thinking Agent first.')
   }
 
-  const serviceProvider = space.user.serviceProviders.find(sp => sp.id === thinkingAgent.serviceProviderId)
+  const serviceProvider = space.User.ServiceProvider.find(sp => sp.id === thinkingAgent.serviceProviderId)
   if (!serviceProvider) {
     throw new Error('Service provider not found for thinking agent')
   }
@@ -2384,7 +2384,7 @@ export function runThinkingSetupBackground(spaceId: string): void {
       step = 'load_space'
       const space = await prisma.space.findUnique({
         where: { id: spaceId },
-        include: { user: { include: { agents: { where: { isActive: true } }, serviceProviders: true } } },
+        include: { User: { include: { Agent: { where: { isActive: true } }, ServiceProvider: true } } },
       })
       if (!space) {
         await prisma.space.update({ where: { id: spaceId }, data: { setupStatus: 'FAILED', setupError: 'Space not found', setupStep: null } })
@@ -2394,7 +2394,7 @@ export function runThinkingSetupBackground(spaceId: string): void {
       // Find thinking agent + service provider
       step = 'find_agent'
       await prisma.space.update({ where: { id: spaceId }, data: { setupStep: 'Configuring thinking agent...' } })
-      const thinkingAgent = space.user.agents
+      const thinkingAgent = space.User.Agent
         .filter(a => a.role === 'THINKING')
         .sort((a, b) => a.order - b.order)[0]
 
@@ -2403,7 +2403,7 @@ export function runThinkingSetupBackground(spaceId: string): void {
         return
       }
 
-      const serviceProvider = space.user.serviceProviders.find(sp => sp.id === thinkingAgent.serviceProviderId)
+      const serviceProvider = space.User.ServiceProvider.find(sp => sp.id === thinkingAgent.serviceProviderId)
       if (!serviceProvider) {
         await prisma.space.update({ where: { id: spaceId }, data: { setupStatus: 'FAILED', setupError: 'Service provider not found for thinking agent', setupStep: null } })
         return

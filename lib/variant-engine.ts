@@ -150,10 +150,10 @@ export async function generateVariants(
   const space = await prisma.space.findUnique({
     where: { id: spaceId },
     include: {
-      user: { 
-        include: { 
-          agents: true,
-          serviceProviders: true,
+      User: {
+        include: {
+          Agent: true,
+          ServiceProvider: true,
         }
       },
     },
@@ -161,13 +161,13 @@ export async function generateVariants(
 
   if (!space) throw new Error('Space not found')
 
-  const thinkingAgent = space.user.agents
+  const thinkingAgent = space.User.Agent
     .filter(a => a.role === 'THINKING' && a.isActive)
     .sort((a, b) => a.order - b.order)[0]
 
   if (!thinkingAgent) throw new Error('No thinking agent configured')
 
-  const serviceProvider = space.user.serviceProviders
+  const serviceProvider = space.User.ServiceProvider
     .find(sp => sp.id === thinkingAgent.serviceProviderId)
 
   if (!serviceProvider) throw new Error('Service provider not found')
@@ -428,10 +428,10 @@ export async function gradeVariant(
   const space = await prisma.space.findUnique({
     where: { id: spaceId },
     include: {
-      user: { 
-        include: { 
-          agents: true,
-          serviceProviders: true,
+      User: {
+        include: {
+          Agent: true,
+          ServiceProvider: true,
         }
       },
     },
@@ -440,13 +440,13 @@ export async function gradeVariant(
   if (!space) throw new Error('Space not found')
 
   // Get grading agent (GRADING role only — separate from EVALUATION which is for the stage)
-  const gradingAgent = space.user.agents
+  const gradingAgent = space.User.Agent
     .filter(a => a.role === 'GRADING' && a.isActive)
     .sort((a, b) => a.order - b.order)[0]
 
   if (!gradingAgent) throw new Error('No Grading Agent configured — please add a Grading Agent in the Agents panel')
 
-  const serviceProvider = space.user.serviceProviders
+  const serviceProvider = space.User.ServiceProvider
     .find(sp => sp.id === gradingAgent.serviceProviderId)
 
   if (!serviceProvider) throw new Error('Service provider not found')
@@ -528,10 +528,10 @@ export async function reEvaluateStepCount(
   const space = await prisma.space.findUnique({
     where: { id: spaceId },
     include: {
-      user: {
+      User: {
         include: {
-          agents: { where: { isActive: true } },
-          serviceProviders: true,
+          Agent: { where: { isActive: true } },
+          ServiceProvider: true,
         },
       },
     },
@@ -539,13 +539,13 @@ export async function reEvaluateStepCount(
 
   if (!space) return null
 
-  const gradingAgent = space.user.agents
+  const gradingAgent = space.User.Agent
     .filter(a => a.role === 'GRADING' && a.isActive)
     .sort((a, b) => a.order - b.order)[0]
 
   if (!gradingAgent) return null
 
-  const serviceProvider = space.user.serviceProviders.find(sp => sp.id === gradingAgent.serviceProviderId)
+  const serviceProvider = space.User.ServiceProvider.find(sp => sp.id === gradingAgent.serviceProviderId)
   if (!serviceProvider) return null
 
   const agentConfig: AIConfig = {
