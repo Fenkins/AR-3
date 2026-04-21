@@ -660,6 +660,7 @@ export async function saveVariantsToDatabase(
         isSelected: variant.isSelected,
         order: variant.order,
         status: variant.status,
+        updatedAt: new Date(),
         cacheDownloads: variant.cacheDownloads || null,
         steps: {
           create: variant.steps.map(step => ({
@@ -673,6 +674,7 @@ export async function saveVariantsToDatabase(
             userRating: step.userRating,
             status: step.status,
             isAuto: step.isAuto,
+            updatedAt: new Date(),
             autoConfig: step.autoConfig ? JSON.stringify(step.autoConfig) : null,
           })),
         },

@@ -479,6 +479,7 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
       tokensUsed: response.tokensUsed,
       cost: response.cost,
       status: 'COMPLETED',
+      updatedAt: new Date(),
       cycleNumber: currentCycle,
       result: stripThinkingTags(response.content),
       metrics: JSON.stringify({
@@ -745,6 +746,7 @@ async function executeVariant(variant: Variant, spaceId: string, stageName: stri
           tokensUsed: response.tokensUsed,
           cost: response.cost,
           status: 'COMPLETED',
+          updatedAt: new Date(),
           result: response.content,
           metrics: JSON.stringify({ variantId: variant.id, stepId: step.id, grade: step.grade }),
         }
@@ -1131,6 +1133,7 @@ Be direct and factual. This output drives actual agent prompt self-modification.
         tokensUsed: aiResult.tokensUsed,
         cost: aiResult.cost,
         status: 'COMPLETED',
+        updatedAt: new Date(),
         cycleNumber: completedCycle + 1,
       },
     })
@@ -2230,6 +2233,7 @@ Keep your response concise (3-5 sentences).`
       tokensUsed: response.tokensUsed,
       cost: response.cost,
       status: 'COMPLETED',
+      updatedAt: new Date(),
       result: response.content,
       metrics: JSON.stringify({
         recommendedStages: recommendedStages.map(s => s.name),
@@ -2450,6 +2454,7 @@ export function runThinkingSetupBackground(spaceId: string): void {
             tokensUsed: response.tokensUsed || 0,
             cost: response.cost || 0,
             status: 'COMPLETED',
+            updatedAt: new Date(),
             result: response.content,
           },
         })
