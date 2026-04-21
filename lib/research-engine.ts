@@ -1882,9 +1882,9 @@ export async function stopSpace(spaceId: string, userId?: string) {
   const space = await prisma.space.findUnique({
     where: { id: spaceId },
     include: {
-      variants: { select: { id: true } },
-      experiments: { select: { id: true } },
-      breakthroughs: { select: { id: true } },
+      Variant: { select: { id: true } },
+      Experiment: { select: { id: true } },
+      Breakthrough: { select: { id: true } },
     },
   })
   if (!space) {
@@ -1898,9 +1898,9 @@ export async function stopSpace(spaceId: string, userId?: string) {
   }
 
 
-  const variantIds = space.variants.map(v => v.id)
-  const experimentIds = space.experiments.map(e => e.id)
-  const breakthroughIds = space.breakthroughs.map(b => b.id)
+  const variantIds = space.Variant.map(v => v.id)
+  const experimentIds = space.Experiment.map(e => e.id)
+  const breakthroughIds = space.Breakthrough.map(b => b.id)
 
 
   debugLog(`[stopSpace] Cascading delete for space ${spaceId}: ` +
