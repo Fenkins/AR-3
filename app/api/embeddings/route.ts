@@ -127,6 +127,7 @@ export async function POST(request: NextRequest) {
         dimensions: dimensions || null,
         isActive: true,
         isDefault: isDefault || false,
+        updatedAt: new Date(),
       },
     })
 
