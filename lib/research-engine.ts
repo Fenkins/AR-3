@@ -1,6 +1,6 @@
 import { prisma } from './prisma'
 import { callAI, AIConfig, AIMessage } from './ai'
-import { generateVariants, gradeVariant, selectBestVariant, saveVariantsToDatabase, updateVariantStepDb, updateVariantDb, selectBestVariantFromDb, loadVariantsFromDb, reEvaluateStepCount, Variant } from './variant-engine'
+import { generateVariants, gradeVariant, selectBestVariant, saveVariantsToDatabase, updateVariantStepDb, updateVariantDb, selectBestVariantFromDb, loadVariantsFromDb, reEvaluateStepCount, Variant, Step } from './variant-engine'
 import { buildEmbeddingContext } from './embeddings'
 import fs from 'fs'
 
@@ -691,9 +691,12 @@ async function executeVariant(variant: Variant, spaceId: string, stageName: stri
               if (statusRes.ok) {
                 const statusData = await statusRes.json()
                 if (statusData.status === 'completed') {
+                  const jobId = statusData.result.jobId || jobId
+                  const code = statusData.result.code || ''
+                  const codeBlock = code ? `\n[CODE]\n${code}\n[/CODE]` : ''
                   gpuResult = statusData.result.success
-                    ? `[GPU Execution Result]: ${statusData.result.output}`
-                    : `[GPU Execution Error]: ${statusData.result.error}`
+                    ? `[GPU Execution Result] job:${jobId}${codeBlock}\n${statusData.result.output}`
+                    : `[GPU Execution Error] job:${jobId}: ${statusData.result.error}${codeBlock}`
                   debugLog(`[executeVariant] GPU job completed`)
                   break
                 } else if (statusData.status === 'failed') {
@@ -934,6 +937,59 @@ async function synthesizeCycleLessons(spaceId: string, completedCycle: number) {
   }
 
   debugLog(`[synthesizeCycleLessons] Found ${cycleExperiments.length} experiments and ${cycleVariants.length} variants`)
+
+  // ─── STEP 0: Grade any ungraded variants ───────────────────────────────────
+  // The Evaluation stage runs as a single AI call (not via executeVariantCycle), so
+  // gradeVariant() was never called for any variants. Grade them now so the rest of
+  // self-evolution can proceed.
+  const ungradedVariants = cycleVariants.filter((v: any) => v.grade == null)
+  if (ungradedVariants.length > 0) {
+    debugLog(`[synthesizeCycleLessons] Grading ${ungradedVariants.length} ungraded variants...`)
+    for (const variant of ungradedVariants) {
+      try {
+        const v = await prisma.variant.findUnique({
+          where: { id: variant.id },
+          include: { steps: { orderBy: { order: 'asc' } } },
+        })
+        if (!v) continue
+        const variantForGrading: Variant = {
+          id: v.id, stageId: v.stageId, name: v.name,
+          description: v.description || '', stageName: v.stageName,
+          cycleNumber: v.cycleNumber, grade: undefined, feedback: undefined,
+          userRating: undefined, isSelected: v.isSelected, order: v.order,
+          status: v.status as Variant['status'],
+          cacheDownloads: null, createdAt: v.createdAt,
+          steps: v.steps.map(s => ({
+            id: s.id, variantId: s.variantId, name: s.name,
+            description: s.description || '', order: s.order,
+            result: s.result || undefined, grade: s.grade || undefined,
+            feedback: s.feedback || undefined, userRating: s.userRating || undefined,
+            isAuto: s.isAuto, autoConfig: s.autoConfig ? JSON.parse(s.autoConfig) : undefined,
+            status: s.status as Step['status'],
+          })),
+        }
+        const graded = await gradeVariant(variantForGrading, spaceId, 'Evaluation')
+        await prisma.variant.update({
+          where: { id: variant.id },
+          data: {
+            grade: graded.grade,
+            feedback: graded.feedback,
+            failureMode: graded.failureMode,
+            approachVerdict: graded.approachVerdict,
+            gradingWarning: graded.warning,
+            status: 'COMPLETED',
+          },
+        })
+        debugLog(`[synthesizeCycleLessons] Graded variant ${variant.name}: ${graded.grade}`)
+      } catch (err: any) {
+        debugLog(`[synthesizeCycleLessons] Failed to grade variant ${variant.name}: ${err.message}`)
+      }
+    }
+    // Reload variants after grading
+    cycleVariants.splice(0, cycleVariants.length,
+      ...await prisma.variant.findMany({ where: { spaceId, cycleNumber: completedCycle } }))
+    debugLog(`[synthesizeCycleLessons] Reloaded ${cycleVariants.length} variants after grading`)
+  }
 
   // ─── STEP 1: Catalog failed approaches ────────────────────────────────────
   const failedVariants = cycleVariants.filter((v: any) =>
