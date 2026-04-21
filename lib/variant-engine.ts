@@ -686,7 +686,7 @@ export async function loadVariantsFromDb(spaceId: string, stageId?: string): Pro
   const where = stageId ? { spaceId, stageId } : { spaceId }
   const dbVariants = await prisma.variant.findMany({
     where,
-    include: { steps: { orderBy: { order: 'asc' } } },
+    include: { VariantStep: { orderBy: { order: 'asc' } } },
     orderBy: [{ cycleNumber: 'desc' }, { order: 'asc' }],
   })
 

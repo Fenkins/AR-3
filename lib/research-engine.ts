@@ -949,7 +949,7 @@ async function synthesizeCycleLessons(spaceId: string, completedCycle: number) {
       try {
         const v = await prisma.variant.findUnique({
           where: { id: variant.id },
-          include: { steps: { orderBy: { order: 'asc' } } },
+          include: { VariantStep: { orderBy: { order: 'asc' } } },
         })
         if (!v) continue
         const variantForGrading: Variant = {
