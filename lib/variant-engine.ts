@@ -662,7 +662,7 @@ export async function saveVariantsToDatabase(
         status: variant.status,
         updatedAt: new Date(),
         cacheDownloads: variant.cacheDownloads || null,
-        steps: {
+        VariantStep: {
           create: variant.steps.map(step => ({
             id: step.id,
             name: step.name,
