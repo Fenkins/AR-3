@@ -333,7 +333,7 @@ CRITICAL: You MUST generate AT LEAST ${numStepsTarget} steps. Replace ALL step p
       const hasPlaceholderBrackets = /<(write|placeholder|example|[xyz]+)>/i.test(parsedName) || /<(write|placeholder|example|[xyz]+)>/i.test(parsedDesc)
       const isGenericName = /^(variant|step|ok|undefined|null|\[.*\]|a specific|a 2-3|additional exploration)$/i.test(parsedName)
       const nameOk = parsedName.length >= 5 && parsedName.length <= 80 && !hasPlaceholderBrackets && !isGenericName
-      const descOk = parsedDesc.length >= 20
+      const descOk = parsedDesc.length >= 10
 
       // Step quality: require >= 5 real steps, no placeholders, no duplicated header artifacts
       const badStepPatterns = /^(write|placeholder|example|continue|additional exploration|null|undefined|step \d|<)/i
