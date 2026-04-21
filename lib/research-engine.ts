@@ -279,8 +279,8 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
   const space = await prisma.space.findFirst({
     where: { id: spaceId },
     include: {
-      experiments: { orderBy: { createdAt: 'desc' }, take: 100 },
-      breakthroughs: { orderBy: { createdAt: 'desc' } },
+      Experiment: { orderBy: { createdAt: 'desc' }, take: 100 },
+      Breakthrough: { orderBy: { createdAt: 'desc' } },
       User: {
         include: {
           Agent: { where: { isActive: true } },
@@ -383,7 +383,7 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
   }
 
   // Get context from previous experiments
-  const previousExperiments = space.experiments.slice(0, 10)
+  const previousExperiments = space.Experiment.slice(0, 10)
   const messages = await generateStagePrompt(space, currentStage, previousExperiments, agent)
 
   debugLog(`[executeResearchCycle] Calling AI for stage: ${currentStage.name}`)
@@ -614,7 +614,7 @@ async function executeVariant(variant: Variant, spaceId: string, stageName: stri
   const space = await prisma.space.findFirst({
     where: { id: spaceId },
     include: {
-      experiments: { orderBy: { createdAt: 'desc' }, take: 50 },
+      Experiment: { orderBy: { createdAt: 'desc' }, take: 50 },
       User: {
         include: {
           Agent: { where: { isActive: true } },
@@ -672,7 +672,7 @@ async function executeVariant(variant: Variant, spaceId: string, stageName: stri
               spaceName: space.name,
               stageName,
               prompt: response.content,
-              context: JSON.stringify({ previousExperiments: space.experiments.slice(0, 5) }),
+              context: JSON.stringify({ previousExperiments: space.Experiment.slice(0, 5) }),
             }),
           })
           if (gpuResponse.ok) {
@@ -1825,7 +1825,7 @@ export async function resumeSpace(spaceId: string) {
   // Reconstruct execution state from database since in-memory state was lost on restart
   const space = await prisma.space.findFirst({
     where: { id: spaceId },
-    include: { experiments: { orderBy: { createdAt: 'desc' }, take: 50 } },
+    include: { Experiment: { orderBy: { createdAt: 'desc' }, take: 50 } },
   })
   if (!space) throw new Error('Space not found')
 
@@ -1858,7 +1858,7 @@ export async function resumeSpace(spaceId: string) {
     currentStageId,
     currentPhase: currentStage?.name || 'Investigation',
     variants,
-    Experiment: space.experiments,
+    Experiment: space.Experiment,
     lastUpdated: new Date(),
     retryCount: 0,
     retryCountByStage: {},
@@ -2019,7 +2019,7 @@ export async function generateStageVariants(
 ): Promise<Variant[]> {
   const space = await prisma.space.findUnique({
     where: { id: spaceId },
-    include: { experiments: { orderBy: { createdAt: 'desc' }, take: 10 } },
+    include: { Experiment: { orderBy: { createdAt: 'desc' }, take: 10 } },
   })
 
   if (!space) throw new Error('Space not found')
@@ -2028,7 +2028,7 @@ export async function generateStageVariants(
   const stage = stages.find(s => s.id === stageId)
   if (!stage) throw new Error('Stage not found')
 
-  const previousContext = space.experiments
+  const previousContext = space.Experiment
     .slice(0, 3)
     .map(e => `[${e.phase}]: ${e.result?.substring(0, 300) || ''}`)
     .join('\n\n')
@@ -2347,8 +2347,8 @@ export async function getSpaceStatus(spaceId: string) {
   const space = await prisma.space.findFirst({
     where: { id: spaceId },
     include: {
-      experiments: { orderBy: { createdAt: 'desc' }, take: 20 },
-      breakthroughs: { orderBy: { createdAt: 'desc' } },
+      Experiment: { orderBy: { createdAt: 'desc' }, take: 20 },
+      Breakthrough: { orderBy: { createdAt: 'desc' } },
     },
   })
 
@@ -2361,8 +2361,8 @@ export async function getSpaceStatus(spaceId: string) {
     space,
     execution: state,
     stages,
-    recentExperiments: space.experiments.slice(0, 10),
-    Breakthrough: space.breakthroughs,
+    recentExperiments: space.Experiment.slice(0, 10),
+    Breakthrough: space.Breakthrough,
     isRunning: state?.isRunning ?? false,
     currentStage: state?.currentStageId,
     currentPhase: state?.currentPhase ?? space.currentPhase,
