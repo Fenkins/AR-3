@@ -42,8 +42,8 @@ export async function getUserFromToken(token: string) {
   const user = await prisma.user.findUnique({
     where: { id: payload.userId },
     include: {
-      agents: true,
-      spaces: true,
+      Agent: true,
+      Space: true,
     }
   })
 

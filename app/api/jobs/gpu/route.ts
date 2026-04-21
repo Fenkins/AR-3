@@ -42,6 +42,7 @@ interface GPUJob {
 interface GPUResult {
   jobId: string
   output: string
+  code?: string
   error?: string
   tokensUsed?: number
   cost?: number
@@ -84,6 +85,18 @@ export async function GET(request: NextRequest) {
 
   if (action === 'config') {
     return NextResponse.json({ config: getGPUConfig() })
+  }
+
+  // GET ?action=bySpace&spaceId=xxx — return all GPU results for a space
+  if (action === 'bySpace') {
+    const spaceId = searchParams.get('spaceId')
+    if (!spaceId) return NextResponse.json({ error: 'spaceId required' }, { status: 400 })
+    const results = readResults()
+    const spaceResults = Object.entries(results)
+      .filter(([jobId]) => jobId.includes(spaceId))
+      .map(([jobId, r]) => ({ jobId, ...r }))
+      .sort((a, b) => (b.completedAt || '').localeCompare(a.completedAt || ''))
+    return NextResponse.json({ results: spaceResults })
   }
 
   const jobId = searchParams.get('jobId')

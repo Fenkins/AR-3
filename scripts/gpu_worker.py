@@ -376,6 +376,7 @@ def execute_gpu_command(job: dict, timeout: int = DEFAULT_JOB_TIMEOUT) -> dict:
                 'error': f"Unknown GPU action: {action}. Supported: run_python, run_bash, nvidia_smi",
             }
 
+        result['code'] = gpu_command.get('code', '')
         cleanup_gpu_memory()
         return result
 

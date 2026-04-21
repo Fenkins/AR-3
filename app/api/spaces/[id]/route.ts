@@ -35,14 +35,14 @@ export async function GET(
         userId: auth.user.id,
       },
       include: {
-        experiments: {
+        Experiment: {
           orderBy: { createdAt: 'desc' },
           take: 50,
         },
-        breakthroughs: {
+        Breakthrough: {
           orderBy: { createdAt: 'desc' },
         },
-        variants: {
+        Variant: {
           include: { steps: { orderBy: { order: 'asc' } } },
           orderBy: [{ cycleNumber: 'desc' }, { order: 'asc' }],
         },

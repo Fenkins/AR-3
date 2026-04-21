@@ -1187,7 +1187,7 @@ function VariantsModal({ variants, onSelect, onExecute, selectedVariantId, onClo
                           <div className="flex-1">
                             <p className="font-medium">{step.status === 'PENDING_REVIEW' ? `⚠ ${step.name}` : step.name}</p>
                             <p className={`text-xs ${step.status === 'PENDING_REVIEW' ? 'text-yellow-400' : 'text-dark-400'}`}>{step.description}</p>
-                            {step.result && (
+                            {step.result && !step.result.includes('[GPU Execution') && (
                               <p className="text-xs text-dark-300 mt-2 font-mono line-clamp-3">{step.result}</p>
                             )}
                           </div>
@@ -1195,6 +1195,65 @@ function VariantsModal({ variants, onSelect, onExecute, selectedVariantId, onClo
                       </div>
                     ))}
                   </div>
+
+                  {/* GPU Executions Panel */}
+                  {(() => {
+                    const gpuSteps = selectedVariant.steps.filter(s => s.result && (s.result.includes('[GPU Execution Result]') || s.result.includes('[GPU Execution Error]')))
+                    if (gpuSteps.length === 0) return null
+                    return (
+                      <div className="mt-4">
+                        <div className="flex items-center gap-2 mb-3">
+                          <h5 className="text-sm font-semibold text-dark-400">GPU Executions</h5>
+                          <span className="px-2 py-0.5 text-xs rounded bg-primary-500/20 text-primary-300">{gpuSteps.length}</span>
+                        </div>
+                        <div className="space-y-3 max-h-96 overflow-y-auto">
+                          {gpuSteps.map((step) => {
+                            const isError = step.result.includes('[GPU Execution Error]')
+                            // Parse jobId and code from enhanced result format
+                            const codeMatch = step.result.match(/\[CODE\][\s\S]*?\n?([\s\S]*?)\n?\[\/CODE\]/)
+                            const jobIdMatch = step.result.match(/\[GPU Execution (?:Result|Error)\] job:([^:\s]+)/)
+                            const jobId = jobIdMatch ? jobIdMatch[1] : null
+                            const code = codeMatch ? codeMatch[1].trim() : null
+                            const rawOutput = step.result
+                              .replace(/\[CODE\][\s\S]*?\[\/CODE\]/, '')
+                              .replace(/^\[GPU Execution (?:Result|Error)\] job:[^:\s]+:?\s*/, '')
+                              .trim()
+                            const [showCode, setShowCode] = useState(false)
+                            const displayContent = showCode && code ? code : rawOutput
+                            return (
+                              <div key={step.id} className="bg-dark-900 rounded-lg overflow-hidden border border-dark-700">
+                                <div className="flex items-center justify-between px-3 py-2 bg-dark-800 border-b border-dark-700">
+                                  <div className="flex items-center gap-2">
+                                    <span className={`w-2 h-2 rounded-full ${isError ? 'bg-red-400' : 'bg-green-400'}`} />
+                                    <span className="text-xs font-medium text-dark-300">{step.name.substring(0, 50)}</span>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    {code && (
+                                      <button
+                                        onClick={() => setShowCode(!showCode)}
+                                        className="text-xs px-2 py-0.5 rounded bg-dark-700 hover:bg-dark-600 text-dark-300"
+                                      >
+                                        {showCode ? 'Output' : 'Code'}
+                                      </button>
+                                    )}
+                                    <span className={`text-xs px-2 py-0.5 rounded ${isError ? 'bg-red-500/20 text-red-300' : 'bg-green-500/20 text-green-300'}`}>
+                                      {isError ? 'ERROR' : 'OK'}
+                                    </span>
+                                  </div>
+                                </div>
+                                <div className="p-3 overflow-x-auto">
+                                  <pre className="text-xs font-mono text-dark-300 whitespace-pre-wrap break-all max-h-48 overflow-y-auto">
+                                    {displayContent.substring(0, 3000)}
+                                    {displayContent.length > 3000 && <span className="text-dark-500">... (truncated)</span>}
+                                  </pre>
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )
+                  })()}
                 </div>
               </div>
             ) : (
