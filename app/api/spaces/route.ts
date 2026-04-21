@@ -98,6 +98,7 @@ export async function POST(request: NextRequest) {
         defaultStepsPerVariant: Math.max(3, Math.min(100, stepsPerVariant || 25)),
         numVariantsMode: numVariantsMode || 'fixed',
         stepsPerVariantMode: stepsPerVariantMode || 'fixed',
+        updatedAt: new Date(),
       },
     })
 
