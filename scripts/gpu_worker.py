@@ -131,10 +131,12 @@ def extract_gpu_command(prompt: str) -> dict:
     )
     if code_blocks:
         best = max(code_blocks, key=lambda b: len(b.strip())).strip()
-        if len(best) > 50 and not best.startswith('{'):
-            log(f"Strategy 1: Pure ```python block, {len(best)} chars",
+        # Remove non-ASCII characters (em-dash —, curly quotes, etc.) from extracted code
+        best_clean = ''.join(c if ord(c) < 128 else '?' for c in best)
+        if len(best_clean) > 50 and not best_clean.startswith('{'):
+            log(f"Strategy 1: Pure ```python block, {len(best_clean)} chars",
                 thread_id=threading.current_thread().name)
-            return {"action": "run_python", "code": best}
+            return {"action": "run_python", "code": best_clean}
 
     # ── Strategy 2: Quote-aware brace matching for JSON objects ───────────────
     # Collect all top-level JSON objects containing 'action' and 'code'
@@ -181,10 +183,12 @@ def extract_gpu_command(prompt: str) -> dict:
     # ── Strategy 3: Bare ```python blocks ─────────────────────────────────────
     for block in code_blocks:
         block = block.strip()
-        if len(block) > 50 and re_module.search(r'\b(import |from |torch|cuda|tensor|def |class )', block):
-            log(f"Strategy 3: Bare ```python block with code, {len(block)} chars",
+        # Remove non-ASCII characters (em-dash —, curly quotes, etc.)
+        block_clean = ''.join(c if ord(c) < 128 else '?' for c in block)
+        if len(block_clean) > 50 and re_module.search(r'\b(import |from |torch|cuda|tensor|def |class )', block_clean):
+            log(f"Strategy 3: Bare ```python block with code, {len(block_clean)} chars",
                 thread_id=threading.current_thread().name)
-            return {"action": "run_python", "code": block}
+            return {"action": "run_python", "code": block_clean}
 
     # ── Strategy 4: Line-by-line code assembly ────────────────────────────────
     lines = prompt.split('\n')
@@ -206,6 +210,10 @@ def extract_gpu_command(prompt: str) -> dict:
         # actual Python code keywords on the same line (not just prose after the number)
         if re.match(r'^\d+\.\s+\w', stripped) and not any(kw in stripped for kw in ['import ', 'from ', 'def ', 'class ', 'torch.', 'cuda.', 'tensor(', '.cuda()', '.to(', 'return ', ' = ']):
             continue
+        # Skip lines containing non-ASCII characters (em-dash —, en-dash –, quotes, etc.)
+        # These are prose text from the LLM, not code
+        if any(ord(c) > 127 for c in stripped):
+            continue
         # Code indicators
         if any(kw in stripped for kw in ['import ', 'from ', 'def ', 'class ',
                                          'torch.', 'cuda.', 'tensor(', '.cuda()', '.to(']):
@@ -219,7 +227,7 @@ def extract_gpu_command(prompt: str) -> dict:
                 break
 
     if code_lines:
-        code = '\n'.join(code_lines)
+        code = ''.join(c if ord(c) < 128 else '?' for c in '\n'.join(code_lines))
         if len(code) > 30:
             log(f"Strategy 4: Assembled code lines, {len(code)} chars",
                 thread_id=threading.current_thread().name)
