@@ -791,6 +791,44 @@ Execute this step and provide concrete results. Be concise -- focus on findings 
         response = await callAI(agentConfig, messages)
       }
 
+      // ─── Detect FAKE experiments (thinking blocks instead of real code) ─────────────
+      // After GPU execution, check if the LLM output was a thinking block vs real Python code.
+      // If the thinking block contains numbered lists but no real Python imports/functions,
+      // this means code extraction failed and we got thinking instead of code.
+      const gpuResultMatch = response.content.match(/\[GPU (Error|Result)\]:\s*([^\[]*)/i)
+      const gpuResultText = gpuResultMatch ? gpuResultMatch[2].trim() : ''
+      const hasGpuError = /\[GPU Error\]:/.test(response.content)
+      const hasGpuResult = /\[GPU Result\]:/.test(response.content) && gpuResultText.length > 10
+
+      if (stageName === 'Implementation' && useGpu) {
+        // Check for indicators that thinking was stored instead of real code
+        const responseLower = response.content.toLowerCase()
+        const hasThinkingTags = responseLower.includes('<thought') || responseLower.includes('<think>')
+        const hasNumberedList = /^\s*\d+\.\s+[a-z]/m.test(response.content) // "1. We need to..."
+        const hasRealCode = /(^|\n)(import |from |def |class |torch\.|cuda\.|tensor\()/m.test(response.content)
+
+        // If we have thinking tags + numbered list items + NO real Python code → FAKE
+        const isFakeExperiment = hasThinkingTags && hasNumberedList && !hasRealCode
+        const isEmptyGpuOutput = !hasGpuError && !hasGpuResult && response.content.length < 500
+
+        if (isFakeExperiment || isEmptyGpuOutput) {
+          debugLog(`[executeVariant] FAKE EXPERIMENT DETECTED for "${variant.name}": thinking=${hasThinkingTags}, numberedList=${hasNumberedList}, realCode=${hasRealCode}, gpuError=${hasGpuError}, gpuResult=${hasGpuResult}`)
+          step.status = 'FAILED'
+          step.result = `[FAKE EXPERIMENT DETECTED]: Implementation produced no real GPU code. The agent output contained thinking/numbered-lists instead of Python code. This variant must be retried with correct code output.
+
+Original output preview: ${response.content.substring(0, 500)}`
+          step.grade = 0
+          await updateVariantStepDb(step.id, {
+            result: step.result,
+            grade: 0,
+            status: 'FAILED',
+          })
+          // Mark the whole variant as FAILED after all steps process
+          variant.failureMode = 'FAKE_EXPERIMENT'
+          continue
+        }
+      }
+
       step.result = response.content
 
       // ─── Testing Results Gate ───────────────────────────────────────────────────────────

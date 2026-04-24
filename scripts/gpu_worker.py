@@ -202,6 +202,10 @@ def extract_gpu_command(prompt: str) -> dict:
             continue
         if stripped.startswith('```') or stripped.startswith('{"'):
             continue
+        # Skip numbered list items (e.g. "1. We need to load...") unless they contain
+        # actual Python code keywords on the same line (not just prose after the number)
+        if re.match(r'^\d+\.\s+\w', stripped) and not any(kw in stripped for kw in ['import ', 'from ', 'def ', 'class ', 'torch.', 'cuda.', 'tensor(', '.cuda()', '.to(', 'return ', ' = ']):
+            continue
         # Code indicators
         if any(kw in stripped for kw in ['import ', 'from ', 'def ', 'class ',
                                          'torch.', 'cuda.', 'tensor(', '.cuda()', '.to(']):
