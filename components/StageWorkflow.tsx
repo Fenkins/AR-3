@@ -121,36 +121,64 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
           }
         }
         
-        if (data.stages?.length > 0) {
-          setStages(data.stages)
-          // Sync stage index from server ONLY on the very first successful fetch.
-          // After that, always respect the user's manual tab selection (currentStageIndex).
-          if (!serverStageSyncDone.current && data.execution?.currentStageId) {
-            const idx = data.stages.findIndex((s: Stage) => s.id === data.execution.currentStageId)
-            if (idx >= 0) {
-              setCurrentStageIndex(idx)
-              serverStageSyncDone.current = true
-            }
+        // Defensive: ensure stages array is valid before accessing indices
+        if (!data.stages?.length) {
+          console.log('[StageWorkflow] No stages yet, skipping variant load')
+          setStages([])
+          setVariants([])
+          return
+        }
+        
+        setStages(data.stages)
+        // Sync stage index from server ONLY on the very first successful fetch.
+        // After that, always respect the user's manual tab selection (currentStageIndex).
+        if (!serverStageSyncDone.current && data.execution?.currentStageId) {
+          const idx = data.stages.findIndex((s: Stage) => s.id === data.execution.currentStageId)
+          if (idx >= 0) {
+            setCurrentStageIndex(idx)
+            serverStageSyncDone.current = true
           }
         }
         
-        setExecutionState(data.execution)
+        // Defensive: ensure stages array is valid before accessing anything
+        if (!data.stages?.length) {
+          console.log('[StageWorkflow] No stages yet, skipping variant load')
+          setStages([])
+          setVariants([])
+          setExecutionState(data.execution || null)
+          return
+        }
+        
+        setStages(data.stages)
+        // Sync stage index from server ONLY on the very first successful fetch.
+        // After that, always respect the user's manual tab selection (currentStageIndex).
+        if (!serverStageSyncDone.current && data.execution?.currentStageId) {
+          const idx = data.stages.findIndex((s: Stage) => s.id === data.execution.currentStageId)
+          if (idx >= 0) {
+            setCurrentStageIndex(idx)
+            serverStageSyncDone.current = true
+          }
+        }
+        
+        setExecutionState(data.execution || null)
         setIsRunning(data.execution?.isRunning || data.space.status === 'RUNNING')
         setRunStatus(data.execution?.isRunning ? 'running' : data.space.status === 'PAUSED' ? 'paused' : 'idle')
         setTotalTokens(data.space.totalTokens || 0)
         setTotalCost(data.space.totalCost || 0)
         
-        if (data.space.experiments) {
-          setExperiments(data.space.experiments)
-        }
-        if (data.space.breakthroughs) {
-          setBreakthroughs(data.space.breakthroughs)
+        if (data.space.experiments) setExperiments(data.space.experiments)
+        if (data.space.breakthroughs) setBreakthroughs(data.space.breakthroughs)
+        
+        // Compute selectedStageId with bounds check
+        let selectedStageId: string
+        if (currentStageIndex >= 0 && currentStageIndex < data.stages.length) {
+          selectedStageId = data.stages[currentStageIndex].id
+        } else if (data.execution?.currentStageId) {
+          selectedStageId = data.execution.currentStageId
+        } else {
+          selectedStageId = data.stages[0].id
         }
         
-        // Use data.stages (fresh from API) rather than React state (stages) which may be stale
-        // when currentStageIndex changes faster than state updates. currentStageIndex is always
-        // up-to-date because it's set synchronously by setCurrentStageIndex before the effect fires.
-        const selectedStageId = data.stages?.[currentStageIndex]?.id || data.execution?.currentStageId || data.stages?.[0]?.id
         const allVariants = data.execution?.variants || []
         const stageVariants = allVariants.filter((v: any) => v.stageId === selectedStageId)
         console.log('[DEBUG] fetchSpaceData done: currentStageIndex=' + currentStageIndex + ', selectedStageId=' + selectedStageId + ', stageVariants=' + stageVariants.length + ', totalVariants=' + allVariants.length)
@@ -897,14 +925,14 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
       <div className="bg-dark-900 rounded-xl border border-dark-700 p-3 mb-3">
         <div className="flex items-center gap-3 text-xs font-mono">
           <span className="px-2 py-1 bg-yellow-500/20 text-yellow-300 rounded">
-            Tab {currentStageIndex}: {stages[currentStageIndex]?.name} (server stage: {executionState?.currentStageId})
+            Tab {currentStageIndex}: {stages[currentStageIndex]?.name ?? '...'} (server stage: {executionState?.currentStageId ?? 'none'})
           </span>
           <span className="text-dark-400">
-            Showing {variants.length} of {executionState?.variants?.length || 0} variants | setupComplete={String(setupComplete)}
+            Showing {variants?.length ?? 0} of {executionState?.variants?.length ?? 0} variants | setupComplete={String(setupComplete)}
           </span>
         </div>
       </div>
-      {variants.length > 0 && (
+      {(variants?.length ?? 0) > 0 && (
         <div className="bg-dark-900 rounded-xl border border-dark-700 p-4">
           <div className="flex items-center justify-between mb-3">
             <h4 className="font-semibold">Variants</h4>
@@ -946,7 +974,7 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
                   }`}>
                     {v.status.toLowerCase()}
                   </span>
-                  <span className="text-xs text-dark-500">{v.steps.length} steps</span>
+                  <span className="text-xs text-dark-500">{(v.steps || []).length} steps</span>
                 </div>
               </div>
             ))}
@@ -955,7 +983,7 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
       )}
 
       {/* Breakthroughs */}
-      {breakthroughs.length > 0 && (
+      {(breakthroughs?.length ?? 0) > 0 && (
         <div className="bg-dark-900 rounded-xl border border-green-500/30 p-4">
           <h4 className="font-semibold mb-3 flex items-center gap-2">
             <span>🏆</span>
@@ -1132,7 +1160,7 @@ function VariantsModal({ variants, onSelect, onExecute, selectedVariantId, onClo
                 </div>
                 <p className={`text-sm mb-2 ${variant.status === 'PENDING_REVIEW' ? 'text-yellow-400' : 'text-dark-400'}`}>{variant.description}</p>
                 <div className="flex items-center justify-between text-sm">
-                  <span className="text-dark-500">{variant.steps.length} steps</span>
+                  <span className="text-dark-500">{(variant.steps || []).length} steps</span>
                   <span className={`px-2 py-0.5 text-xs rounded capitalize ${
                     variant.status === 'COMPLETED' ? 'bg-green-500/20 text-green-300' :
                     variant.status === 'RUNNING' ? 'bg-yellow-500/20 text-yellow-300' :

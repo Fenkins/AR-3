@@ -219,7 +219,7 @@ Respond with just a number between 2-5.`
     ? `\n\n## AVAILABLE MODELS FOR DOWNLOAD\nThe following HuggingFace models are available — use their download URLs in the downloads field if needed:\n${
     discoveredModels.map(m => `- ${m.downloadUrl || m.url}  (${m.downloads?.toLocaleString() || 0} downloads, file: ${m.fileName || 'see URL'})`).join('\n')}
 `
-    : ''
+    : `\n\n## AVAILABLE MODELS FOR DOWNLOAD\nRecommended models for ODE experiments (tested with bitsandbytes 8-bit on RTX 3060):\n- https://huggingface.co/Qwen/Qwen2.5-1.5B (1.67 GB per copy in 8-bit — fits 2+ copies)\n- https://huggingface.co/Qwen/Qwen2.5-3B (3 GB per copy in 8-bit — fits 2 copies)\n`
 
   for (let i = 0; i < numVariants; i++) {
     let name = `Variant ${i + 1}`
@@ -249,7 +249,7 @@ IMPORTANT: Follow this EXACT format. Write ONLY the sections below. Do NOT repea
 ## METADATA
 name: <2-4 word specific name for this variant, be concrete and specific to the research goal above>
 description: <2-3 sentences describing what this variant explores and why it differs from other approaches>
-downloads: <Use download URLs from AVAILABLE MODELS section above, or "none" if not needed — IMPORTANT: only use URLs provided above>
+downloads: <CRITICAL: You MUST use ONLY the download URLs listed in the AVAILABLE MODELS section above. Copy-paste the exact URLs from that section. Do NOT invent or guess model IDs. If the models in the AVAILABLE MODELS section are not useful, write "none">
 
 ## STEPS
 step_1: <imperative sentence — specific action with concrete goal>
@@ -295,6 +295,9 @@ CRITICAL: You MUST generate AT LEAST ${numStepsTarget} steps. Replace ALL step p
       }
 
       const content = response.content
+        .replace(/<thought>[\s\S]*?<\/thought>/gi, '')
+        .replace(/<think>[\s\S]*?<\/think>/gi, '')
+        .replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, '')
 
       // Parse name
       const nameMatch = content.match(/^name:\s*(.+)$/im) || content.match(/VARIANT_NAME:\s*(.+?)(?:\n|$)/i)
@@ -304,15 +307,39 @@ CRITICAL: You MUST generate AT LEAST ${numStepsTarget} steps. Replace ALL step p
       const descMatch = content.match(/^description:\s*([\s\S]+?)(?:^downloads:|^## |^step_|_metadata)/im)
       const parsedDesc = descMatch ? descMatch[1].trim() : ''
 
-      // Parse downloads
+      // Parse downloads — supports both HTTPS URLs and bare HuggingFace model IDs
       const dlMatch = content.match(/^downloads:\s*([\s\S]+?)(?:^## STEPS|^step_|_steps)/im)
       if (dlMatch) {
         const dlText = dlMatch[1].trim()
         if (!/^none$/i.test(dlText)) {
-          const urls = Array.from(dlText.matchAll(/(https?:\/\/[^\s\n,]+)/g), (m: RegExpMatchArray) => m[1])
+          // Match full HTTPS URLs that look like valid HuggingFace model file URLs
+          // Must contain huggingface.co/owner/model/...
+          const urlPattern = /https?:\/\/(?:www\.)?huggingface\.co\/[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+(?:\/[a-zA-Z0-9_.-]+)*/g
+          const urls = Array.from(dlText.matchAll(urlPattern), (m: RegExpMatchArray) => m[0])
           for (const url of urls.slice(0, 5)) {
-            const label = url.split('/').pop() || url
-            cacheDownloads.push({ fileName: label, downloadUrl: url, description: label })
+            // Skip URL paths that are clearly not model files (e.g. /huggingface.co/LetsThink)
+            if (url.includes('/resolve/') || url.includes('/blob/')) {
+              const label = url.split('/').pop() || url
+              cacheDownloads.push({ fileName: label, downloadUrl: url, description: label })
+            } else if (url.match(/huggingface\.co\/[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/)) {
+              // Bare repo URL (no /resolve/) — treat as model repo, use snapshot_download
+              const modelId = url.replace('https://huggingface.co/', '')
+              cacheDownloads.push({ fileName: modelId.replace('/', '_'), downloadUrl: url, description: modelId })
+            }
+          }
+          // Also match bare HuggingFace model IDs (e.g. "GSAI-ML/LLaDA-8B-Base", "gpt2")
+          // Only match IDs that look like real model repos (owner/model format, owner is 2+ chars)
+          const modelIdPattern = /\b([a-zA-Z0-9][a-zA-Z0-9_.-]{1,50}\/[a-zA-Z0-9_.-]{1,100})\b/g
+          const seenIds = new Set(cacheDownloads.map(d => d.downloadUrl))
+          for (const m of dlText.matchAll(modelIdPattern)) {
+            const modelId = m[0]
+            // Skip garbage IDs containing URL-like parts
+            if (modelId.includes('huggingface.co') || modelId.includes('http') || modelId.includes('//')) continue
+            if (!seenIds.has(modelId)) {
+              seenIds.add(modelId)
+              const downloadUrl = 'https://huggingface.co/' + modelId
+              cacheDownloads.push({ fileName: modelId.split('/').pop(), downloadUrl, description: modelId })
+            }
           }
         }
       }
@@ -330,7 +357,7 @@ CRITICAL: You MUST generate AT LEAST ${numStepsTarget} steps. Replace ALL step p
         .map(([, text]) => text)
 
       // Quality checks
-      const hasPlaceholderBrackets = /<(write|placeholder|example|[xyz]+)>/i.test(parsedName) || /<(write|placeholder|example|[xyz]+)>/i.test(parsedDesc)
+      const hasPlaceholderBrackets = /<(.*?)>/i.test(parsedName) || /<(.*?)>/i.test(parsedDesc)
       const isGenericName = /^(variant|step|ok|undefined|null|\[.*\]|a specific|a 2-3|additional exploration)$/i.test(parsedName)
       const nameOk = parsedName.length >= 5 && parsedName.length <= 80 && !hasPlaceholderBrackets && !isGenericName
       const descOk = parsedDesc.length >= 10
@@ -707,7 +734,7 @@ export async function loadVariantsFromDb(spaceId: string, stageId?: string): Pro
     status: v.status as Variant['status'],
     cacheDownloads: v.cacheDownloads || null,
     createdAt: v.createdAt,
-    steps: v.steps.map(s => ({
+    steps: v.VariantStep.map(s => ({
       id: s.id,
       variantId: s.variantId,
       name: s.name,

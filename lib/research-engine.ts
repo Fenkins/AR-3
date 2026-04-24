@@ -2,6 +2,7 @@ import { prisma } from './prisma'
 import { callAI, AIConfig, AIMessage } from './ai'
 import { generateVariants, gradeVariant, selectBestVariant, saveVariantsToDatabase, updateVariantStepDb, updateVariantDb, selectBestVariantFromDb, loadVariantsFromDb, reEvaluateStepCount, Variant, Step } from './variant-engine'
 import { buildEmbeddingContext } from './embeddings'
+import { addToCache } from './model-cache'
 import fs from 'fs'
 
 const logFile = '/tmp/ar1_debug.log'
@@ -107,10 +108,16 @@ Your tasks:
 5. Anticipate failure modes -- what could go wrong with each step?
 6. For each major component, write a BRIEF SKETCH of the PyTorch code (pseudocode is fine)
 
-CRITICAL: The implementation will ONLY have access to:
-- torch, numpy, and standard Python libraries
-- An NVIDIA RTX 3060 GPU (12GB VRAM)
-- No trained models, no external APIs, no internet
+CRITICAL: Your plan MUST account for model access:
+- For ODE multi-model experiments, use Qwen/Qwen2.5-1.5B or Qwen/Qwen2.5-3B — both support bitsandbytes 8-bit and fit 2+ copies on RTX 3060
+- These models are freely downloadable without special permissions: Qwen/Qwen2.5-1.5B, Qwen/Qwen2.5-3B
+- Include at least one model ID in the downloads field below (e.g. "Qwen/Qwen2.5-1.5B")
+- Download format for model repos: POST /api/model-cache with {spaceId, fileName: "Qwen_Qwen2.5-1.5B", downloadUrl: "https://huggingface.co/Qwen/Qwen2.5-1.5B"}
+- After download, load from local path: /tmp/model_cache/{spaceId}/Qwen_Qwen2.5-1.5B
+- Load models with bitsandbytes 8-bit using BitsAndBytesConfig (transformers 5.x API)
+- VRAM constraint: RTX 3060 has ~11.6 GB total -- Qwen2.5-1.5B in 8-bit uses ~1.7 GB per copy, Qwen2.5-3B uses ~3 GB per copy
+- Plan for loading 2+ model copies simultaneously for ODE experiments
+- Include at least one model ID or download URL in the downloads field below
 
 Your output should be a structured PLAN with code sketches, not prose.
 Format:
@@ -119,6 +126,8 @@ Format:
   - Tensor shapes: [e.g. (B, 512, 512)]
   - Code sketch: [2-5 lines of pseudocode or actual torch operations]
   - Failure points: [what could break]
+
+IMPORTANT: The downloads field below is REQUIRED. If no external models are needed, explicitly write "downloads: none". Otherwise include HuggingFace model IDs and/or download URLs.
 
 Be specific about dimensions and operations. Vague plans produce broken code.`,
     order: 2,
@@ -139,6 +148,38 @@ Your tasks:
 
 IMPORTANT: 
 - You will receive the planning stage output in the context -- use it as your blueprint
+- If the research goal requires models (e.g., diffusion LMs, embeddings), use /api/model-cache to download them from HuggingFace first
+- Download format: POST /api/model-cache with {spaceId, fileName, downloadUrl}
+- HuggingFace download URLs: https://huggingface.co/{model_id}
+- After download, models are available at /tmp/model_cache/{spaceId}/{model_id}/ (full repo)
+- Load models with bitsandbytes 8-bit for VRAM efficiency:
+
+  from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+  import torch
+
+  # Use BitsAndBytesConfig for transformers 5.x compatibility
+  bnb_config = BitsAndBytesConfig(load_in_8bit=True)
+  model = AutoModelForCausalLM.from_pretrained(
+      '/tmp/model_cache/{spaceId}/model_id',  # Full repo path or HuggingFace model ID
+      quantization_config=bnb_config,
+      device_map='cuda',
+      dtype=torch.bfloat16,
+      trust_remote_code=True,  # Required for custom model architectures
+  )
+  tokenizer = AutoTokenizer.from_pretrained('/tmp/model_cache/{spaceId}/model_id')
+
+  # Inference example:
+  input_ids = tokenizer(text, return_tensors='pt').to('cuda')
+  with torch.no_grad():
+      output = model.generate(**input_ids, max_new_tokens=50)
+  print(tokenizer.decode(output[0], skip_special_tokens=True))
+
+- Recommended models for ODE research (all support 8-bit, tested on RTX 3060):
+  - Qwen/Qwen2.5-1.5B (1.67 GB per copy in 8-bit, 2 copies = 3.3 GB)
+  - Qwen/Qwen2.5-3B (~3 GB per copy in 8-bit, 2 copies fit in 11.6 GB)
+  - Qwen/Qwen2.5-7B (~6-7 GB per copy in 8-bit, 2 copies need aggressive memory management)
+- For ODE multi-model experiments, use Qwen2.5-1.5B or Qwen2.5-3B to ensure 2+ copies fit comfortably
+- VRAM budget: RTX 3060 has 11.6 GB total
 - Your primary output MUST be executable Python code in PYTHON-CODE blocks
 - The GPU worker will execute it directly -- if the code crashes, the variant fails
 - Print MEASUREABLE outputs: tensor norms, convergence values, alignment scores, etc.
@@ -173,6 +214,7 @@ CRITICAL RULES -- VIOLATING ANY OF THESE WILL CAUSE RUNTIME FAILURES:
 3. All tensors in an expression must be on the same device -- check with tensor.device
 4. Wrap operations in try/except and print tensor shapes/devices on failure
 5. Print ALL intermediate values so failures are traceable
+6. If using downloaded models, load from /tmp/model_cache/{spaceId}/ -- never from remote URLs
 
 ROBUST TEST CODE TEMPLATE:
 import torch
@@ -646,13 +688,38 @@ async function executeVariant(variant: Variant, spaceId: string, stageName: stri
     if (step.status === 'COMPLETED') continue
 
     const variantDefaultPrompt = `You are executing variant "${variant.name}" of stage "${stageName}". Produce concrete results -- no <thought> tags. Focus on actual output, findings, and deliverables.`
-    const variantSystemPrompt = agent?.gpuPromptVariant && useGpu
+    const basePrompt = agent?.gpuPromptVariant && useGpu
       ? agent.gpuPromptVariant
       : (agent?.systemPrompt || variantDefaultPrompt)
 
+    // Inject dynamic research context for GPU stages
+    const cycleDelta = (agent as any)?.cyclePromptDelta || ''
+    const researchType = (space as any).researchType || ''
+    const targetModelIds = (space as any).targetModelIds || ''
+    const researchScope = (space as any).researchScope || ''
+    let researchContext = ''
+    if (useGpu && (researchType || targetModelIds || researchScope)) {
+      researchContext = `\n\n══════ RESEARCH SCOPE (from preparation stages) ══════\n` +
+        (researchType ? `Research Type: ${researchType}\n` : '') +
+        (targetModelIds ? `Target Model IDs: ${targetModelIds}\n` : '') +
+        (researchScope ? `Research Scope: ${researchScope}\n` : '') +
+        (cycleDelta ? `\nSelf-Evolution Context: ${cycleDelta}\n` : '') +
+        `═════════════════════════════════════════════════════════════`
+    }
+
+    const variantSystemPrompt = basePrompt + (researchContext || '')
+
     const messages: AIMessage[] = [
       { role: 'system', content: variantSystemPrompt },
-      { role: 'user', content: `Step: ${step.description}\n\nResearch Goal: ${space.initialPrompt}\n\nExecute this step and provide concrete results. Be concise -- focus on findings and deliverables.` },
+      { role: 'user', content: `Step: ${step.description}
+
+Research Goal: ${space.initialPrompt}
+
+
+## Prior Stage Results (for scope detection)
+${space.Experiment.slice(0, 8).map((e: any) => `[${e.phase || e.stageName || 'experiment'}]: ${(e.result || e.response || '').substring(0, 800)}`).join('\n\n')}
+
+Execute this step and provide concrete results. Be concise -- focus on findings and deliverables.` },
     ]
 
     try {
@@ -725,6 +792,29 @@ async function executeVariant(variant: Variant, spaceId: string, stageName: stri
       }
 
       step.result = response.content
+
+      // ─── Testing Results Gate ───────────────────────────────────────────────────────────
+      // For Testing stage: verify GPU output contains meaningful results before marking COMPLETED
+      // If verification fails, mark step as FAILED (triggers variant regression)
+      if (stageName === 'Testing' && useGpu) {
+        const verification = verifyTestingOutput(variant.name, variant.description || null, response.content)
+        if (!verification.valid) {
+          debugLog(`[executeVariant] Testing verification FAILED for "${variant.name}": ${verification.reason}`)
+          step.status = 'FAILED'
+          step.result = `[VERIFICATION FAILED]: ${verification.reason}\n\nOriginal output:\n${response.content}`
+          step.grade = 0
+          // Persist failed step to DB
+          await updateVariantStepDb(step.id, {
+            result: step.result,
+            grade: 0,
+            status: 'FAILED',
+          })
+          // Continue to next step (variant-level failure will be handled after all steps processed)
+          continue
+        }
+        debugLog(`[executeVariant] Testing verification PASSED for "${variant.name}"${verification.verdict ? ` (${verification.verdict})` : ''}`)
+      }
+
       step.status = 'COMPLETED'
       step.grade = Math.min(100, Math.max(0, Math.floor(response.tokensUsed / 10)))
       
@@ -763,6 +853,24 @@ async function executeVariant(variant: Variant, spaceId: string, stageName: stri
       step.status = 'FAILED'
       step.result = `Error: ${error.message}`
     }
+  }
+
+  // Check if any step failed — if so, mark variant as FAILED without grading
+  const failedSteps = variant.steps.filter(s => s.status === 'FAILED')
+  if (failedSteps.length > 0) {
+    const { failureType, reason } = classifyStepFailure(failedSteps)
+    debugLog(`[executeVariant] Variant "${variant.name}" has ${failedSteps.length} failed step(s): ${reason} (${failureType})`)
+    variant.status = 'FAILED'
+    ;(variant as any).failureMode = failureType
+    ;(variant as any).lastFailureReason = reason
+    variant.feedback = `Step failure: ${reason}`
+    await updateVariantDb(variant.id, {
+      status: 'FAILED',
+      feedback: `Step failure: ${reason}`,
+      failureMode: failureType,
+      lastFailureReason: reason,
+    })
+    return variant
   }
 
   // Grade the variant (includes failure mode analysis for self-evolution)
@@ -961,7 +1069,7 @@ async function synthesizeCycleLessons(spaceId: string, completedCycle: number) {
           userRating: undefined, isSelected: v.isSelected, order: v.order,
           status: v.status as Variant['status'],
           cacheDownloads: null, createdAt: v.createdAt,
-          steps: v.steps.map(s => ({
+          steps: v.VariantStep.map(s => ({
             id: s.id, variantId: s.variantId, name: s.name,
             description: s.description || '', order: s.order,
             result: s.result || undefined, grade: s.grade || undefined,
@@ -1140,6 +1248,17 @@ Be direct and factual. This output drives actual agent prompt self-modification.
 
     // ─── STEP 4: Apply agent prompt deltas from synthesis ──────────────────
     await applyAgentPromptDeltas(space, synthesisContent)
+
+    // ─── STEP 5: Update space research context from preparation stages ───────
+    // Extract model IDs, research type, and scope from the completed preparation stages
+    const researchContext = extractResearchContext(space, cycleExperiments)
+    if (researchContext) {
+      await prisma.space.update({
+        where: { id: spaceId },
+        data: researchContext,
+      })
+      debugLog(`[synthesizeCycleLessons] Updated space research context: ${JSON.stringify(researchContext)}`)
+    }
 
     debugLog(`[synthesizeCycleLessons] Created cycle review + applied agent prompt deltas for cycle ${completedCycle}`)
   } catch (err: any) {
@@ -1339,6 +1458,46 @@ async function applyAgentPromptDeltas(space: any, synthesisContent: string) {
   }
 }
 
+/**
+ * Extract research context (model IDs, research type, scope) from preparation stage experiments.
+ * Called after Investigation/Proposition/Planning stages complete, before Implementation runs.
+ */
+function extractResearchContext(space: any, experiments: any[]): any {
+  const context: any = {}
+  const allText = experiments.map((e: any) => `${e.prompt || ''} ${e.result || e.response || ''}`).join('\n')
+
+  // Extract research type keywords
+  if (/diffusion\s*language\s*model|dLLM|LLADA|DreamLM|MDLM|masked\s*diffusion/i.test(allText)) {
+    context.researchType = 'diffusion_model'
+  } else if (/autoregressive|Qwen|Llama|GPT/i.test(allText)) {
+    context.researchType = 'autoregressive'
+  } else if (/latent\s*space|ODE|multi[- ]model|ensemble|consensus/i.test(allText)) {
+    context.researchType = 'multi_model_ensemble'
+  }
+
+  // Extract HuggingFace model IDs from experiment text
+  const modelIdMatches = allText.match(/([a-zA-Z0-9_-]+\/[a-zA-Z0-9_.-]+)/g)
+  const uniqueModelIds = [...new Set(modelIdMatches || [])]
+    .filter(id => id.length > 3 && !id.match(/^(the|a|an|this|that|for|with)$/i))
+    .slice(0, 10)
+  if (uniqueModelIds.length > 0) {
+    context.targetModelIds = JSON.stringify(uniqueModelIds)
+  }
+
+  // Build research scope summary
+  const scopeTerms = [
+    'latent space', 'ODE', 'consensus', 'diffusion', 'multi-model', 'inference',
+    'hidden state', 'embedding', 'vector', 'trajectory', 'denoise', 'generation'
+  ]
+  const foundScope = scopeTerms.filter(term => allText.toLowerCase().includes(term))
+  if (foundScope.length > 0) {
+    context.researchScope = `Key focus: ${foundScope.slice(0, 5).join(', ')}. ` +
+      `From ${experiments.length} preparation experiments.`
+  }
+
+  return Object.keys(context).length > 0 ? context : null
+}
+
 async function processEvaluationResults(spaceId: string, content: string) {
   // Check for explicit negative verdicts FIRST -- these override any positive mentions
   const negativeVerdictPatterns = [
@@ -1400,28 +1559,25 @@ async function processVariantCacheDownloads(variant: Variant, spaceId: string): 
 
   if (!Array.isArray(downloads) || downloads.length === 0) return
 
-  const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000'
-
   for (const dl of downloads) {
     if (!dl.downloadUrl || !dl.fileName) continue
+
+    // Skip obviously invalid URLs (AI-generated garbage)
+    const url = dl.downloadUrl
+    if (url.includes('huggingface.co/') && !url.match(/huggingface\.co\/[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+/)) {
+      debugLog(`[processVariantCacheDownloads] Skipping invalid URL: ${url}`)
+      continue
+    }
     try {
-      const res = await fetch(`${baseUrl}/api/model-cache`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          spaceId,
-          fileName: dl.fileName,
-          downloadUrl: dl.downloadUrl,
-          description: dl.description || dl.fileName,
-        }),
+      const entry = await addToCache({
+        spaceId,
+        fileName: dl.fileName,
+        downloadUrl: dl.downloadUrl,
+        description: dl.description || dl.fileName,
       })
-      if (res.ok) {
-        debugLog(`[processVariantCacheDownloads] Downloaded: ${dl.fileName}`)
-      } else {
-        debugLog(`[processVariantCacheDownloads] Failed to download ${dl.fileName}: ${res.status} ${await res.text()}`)
-      }
+      debugLog(`[processVariantCacheDownloads] Downloaded: ${dl.fileName} (${entry.fileSize} bytes)`)
     } catch (err: any) {
-      debugLog(`[processVariantCacheDownloads] Error downloading ${dl.fileName}: ${err.message}`)
+      debugLog(`[processVariantCacheDownloads] Failed to download ${dl.fileName}: ${err.message}`)
     }
   }
 }
@@ -1695,16 +1851,48 @@ export function startBackgroundLoop(spaceId: string): void {
       const currentStage = stages.find(s => s.id === currentStageId)
 
       // Check if there are pending variants to execute for the current stage
+      // Also include regressed variants from earlier stages (lower order) — they take priority
       if (state.variants && state.variants.length > 0) {
         const currentStageVariants = state.variants.filter(v => v.stageId === currentStageId)
-        const pendingVariant = currentStageVariants.find(v => v.status === 'PENDING')
+        // Primary: pending in current stage
+        let pendingVariant = currentStageVariants.find(v => v.status === 'PENDING')
+        // Fallback: if no pending in current stage, check earlier stages for regressed PENDING variants
+        if (!pendingVariant) {
+          const currentOrder = currentStage?.order ?? 0
+          const earlierStageVariants = state.variants.filter(v => {
+            const variantStage = stages.find(s => s.id === v.stageId)
+            const variantOrder = variantStage?.order ?? 0
+            return variantOrder < currentOrder && v.status === 'PENDING'
+          })
+          if (earlierStageVariants.length > 0) {
+            // Pick the earliest stage variant (most regressed)
+            earlierStageVariants.sort((a, b) => {
+              const orderA = stages.find(s => s.id === a.stageId)?.order ?? 0
+              const orderB = stages.find(s => s.id === b.stageId)?.order ?? 0
+              return orderA - orderB
+            })
+            pendingVariant = earlierStageVariants[0]
+            debugLog(`[startBackgroundLoop] No pending in ${currentStage?.name}, found regressed pending variant: ${pendingVariant.name} (${stages.find(s => s.id === pendingVariant.stageId)?.name})`)
+          }
+        }
         
         if (pendingVariant) {
           debugLog(`[startBackgroundLoop] Executing pending variant ${pendingVariant.name}`)
           try {
+            // Read variant execution timeout from GPU config (jobTimeout is in seconds, withTimeout needs ms)
+            let variantTimeoutMs = 1800000 // default 30 min
+            try {
+              const fs = require('fs')
+              const gpuConfig = JSON.parse(fs.readFileSync('/tmp/gpu_config.json', 'utf8'))
+              variantTimeoutMs = (gpuConfig.jobTimeout || 3600) * 1000
+              debugLog(`[startBackgroundLoop] Variant execution timeout set to ${variantTimeoutMs/1000}s from GPU config`)
+            } catch {
+              debugLog(`[startBackgroundLoop] Could not read GPU config, using default 30min timeout`)
+            }
+
             await withTimeout(
               executeVariantCycle(spaceId, pendingVariant.id),
-              1800000,
+              variantTimeoutMs,
               'executeVariantCycle'
             )
             consecutiveErrors = 0
@@ -1773,12 +1961,21 @@ export function startBackgroundLoop(spaceId: string): void {
         }
       }
 
-      // Execute next cycle with a hard timeout (30 min -- variant execution with 15 steps takes time)
+      // Read stage cycle execution timeout from GPU config (jobTimeout is in seconds)
+      let stageCycleTimeoutMs = 1800000
+      try {
+        const fs = require('fs')
+        const gpuConfig = JSON.parse(fs.readFileSync('/tmp/gpu_config.json', 'utf8'))
+        stageCycleTimeoutMs = (gpuConfig.jobTimeout || 3600) * 1000
+      } catch {}
+
+
+      // Execute next cycle with a hard timeout
       debugLog(`[startBackgroundLoop] Executing cycle for stage ${currentStage?.name}`)
       try {
         await withTimeout(
           executeResearchCycle(spaceId, currentStageId),
-          1800000, // 30 min -- variant step execution is slow
+          stageCycleTimeoutMs,
           'executeResearchCycle'
         )
         consecutiveErrors = 0
@@ -1987,6 +2184,22 @@ export async function stopSpace(spaceId: string, userId?: string) {
   } catch (err) {
     debugLog(`[stopSpace] Warning: GPU jobs API cleanup failed: ${(err as Error).message}`)
   }
+  // ── Safeguard 6: GPU job/result file cleanup for this space only ─────────────────
+  // Do NOT stop GPU worker or cloudflared -- they are shared infrastructure that
+  // must survive space deletions. Stopping them would take down the entire platform.
+  // They will be restarted automatically when the next space starts.
+  try {
+    const { execSync } = await import('child_process')
+    const gpuFiles = ['/tmp/gpu_jobs.json', '/tmp/gpu_results.json']
+    for (const f of gpuFiles) {
+      try {
+        execSync(`rm -f "${f}"`, { stdio: 'ignore' })
+        debugLog(`[stopSpace] Removed ${f}`)
+      } catch {}
+    }
+  } catch (err) {
+    debugLog(`[stopSpace] Warning: GPU files cleanup error: ${(err as Error).message}`)
+  }
 }
 
 export async function updateSpaceStages(spaceId: string, stages: ResearchStage[]) {
@@ -2006,6 +2219,280 @@ export async function updateSpaceStages(spaceId: string, stages: ResearchStage[]
   })
 
   return stages
+}
+
+// ─── Variant Failure Classification & Regression ──────────────────────────────────────────────
+
+export type FailureType = 'TECHNICAL' | 'MODEL_LOAD' | 'APPROACH' | 'FUNDAMENTAL' | 'PARTIAL'
+
+/**
+ * Analyzes failed steps and classifies the failure type.
+ * This determines which earlier stage the variant should regress to.
+ */
+function classifyStepFailure(failedSteps: { status: string; result?: string | null }[]): { failureType: FailureType; reason: string } {
+  const errorTexts = failedSteps
+    .filter(s => s.status === 'FAILED' && s.result)
+    .map(s => (s.result || '').toLowerCase())
+    .join(' ')
+
+  // TECHNICAL: code crashes, import errors, shape mismatches, runtime errors
+  if (/runtimeerror|import error|modulenotfounderror|attributeerror|typeerror\b|shape mismatch|linalg|cross dimension|indexerror|keyerror|valueerror\b/.test(errorTexts)) {
+    const match = errorTexts.match(/(runtimeerror|import error|modulenotfounderror|attributeerror|typeerror|shape mismatch|linalg|cross dimension|indexerror|keyerror|valueerror)[^.]*\.([^.]*)/)
+    const reason = match ? `${match[1]} in ${match[2].trim()}` : 'code execution error'
+    return { failureType: 'TECHNICAL', reason }
+  }
+
+  // MODEL_LOAD: model loading failures, wrong architecture, missing weights
+  if (/model.*load|weights.*missing|cannot load|no module named.*model|architectur|state_dict| safetensors/.test(errorTexts)) {
+    return { failureType: 'MODEL_LOAD', reason: 'model loading or weights error' }
+  }
+
+  // APPROACH: the approach didn't produce useful results (low grade but no crash)
+  if (/no result|empty output|did not converge|failed to produce|undefined|nan/i.test(errorTexts)) {
+    return { failureType: 'APPROACH', reason: 'approach produced no useful output' }
+  }
+
+  // Default to TECHNICAL for any other failure
+  return { failureType: 'TECHNICAL', reason: 'unknown execution failure' }
+}
+
+/**
+ * Determines which stage to regress to based on failure type and current stage.
+ * Stage order: Investigation(0) → Proposition(1) → Planning(2) → Implementation(3) → Testing(4) → Verification(5) → Evaluation(6)
+ */
+function getRegressionTargetStage(failureType: FailureType, currentStageOrder: number): { targetStageOrder: number; targetStageName: string } {
+  // TECHNICAL and MODEL_LOAD: regress to Planning (order 2) — the approach is sound, just needs better code
+  if (failureType === 'TECHNICAL' || failureType === 'MODEL_LOAD') {
+    const targetOrder = Math.max(0, currentStageOrder - 2) // Planning or earlier
+    const stageNames: Record<number, string> = { 0: 'Investigation', 1: 'Proposition', 2: 'Planning', 3: 'Implementation' }
+    return { targetStageOrder: targetOrder, targetStageName: stageNames[targetOrder] || 'Planning' }
+  }
+
+  // APPROACH: regress to Proposition — the hypothesis needs rethinking
+  if (failureType === 'APPROACH') {
+    const targetOrder = Math.max(0, currentStageOrder - 3) // Proposition or earlier
+    const stageNames: Record<number, string> = { 0: 'Investigation', 1: 'Proposition' }
+    return { targetStageOrder: targetOrder, targetStageName: stageNames[targetOrder] || 'Proposition' }
+  }
+
+  // PARTIAL: regress to the previous stage — close but needs refinement
+  if (failureType === 'PARTIAL') {
+    const targetOrder = Math.max(0, currentStageOrder - 1)
+    const stageNames: Record<number, string> = { 0: 'Investigation', 1: 'Proposition', 2: 'Planning', 3: 'Implementation' }
+    return { targetStageOrder: targetOrder, targetStageName: stageNames[targetOrder] || 'Planning' }
+  }
+
+  // FUNDAMENTAL: regress all the way to Investigation
+  return { targetStageOrder: 0, targetStageName: 'Investigation' }
+}
+
+/**
+ * Maximum retries per variant before giving up
+ */
+const MAX_RETRIES_PER_STAGE = 2
+
+/**
+ * Regresses a failed variant to an earlier stage for a do-over.
+ * Does NOT increment the cycle counter — this is an internal retry.
+ */
+async function regressVariantToStage(
+  spaceId: string,
+  variantId: string,
+  targetStageName: string,
+  targetStageId: string,
+  failureType: FailureType,
+  failureReason: string
+): Promise<{ success: boolean; newVariant?: any; retryCount?: number }> {
+  const state = getExecutionState(spaceId)
+  if (!state) return { success: false }
+
+  const variant = state.variants.find(v => v.id === variantId)
+  if (!variant) return { success: false }
+
+  // Check retry limit
+  const currentRetries = (variant as any).retryCount || 0
+  if (currentRetries >= MAX_RETRIES_PER_STAGE) {
+    debugLog(`[regressVariantToStage] Variant ${variant.name} exceeded max retries (${MAX_RETRIES_PER_STAGE}), marking as GAVE_UP`)
+    const updatedVariants = state.variants.map(v =>
+      v.id === variantId ? { ...v, status: 'GAVE_UP', feedback: `Exceeded max retries (${MAX_RETRIES_PER_STAGE}). Last failure: ${failureReason}` } : v
+    )
+    updateExecutionState(spaceId, { variants: updatedVariants })
+    await prisma.variant.update({
+      where: { id: variantId },
+      data: { status: 'GAVE_UP', feedback: `Exceeded max retries. Last failure: ${failureReason}`, retryCount: currentRetries + 1 }
+    })
+    return { success: false }
+  }
+
+  // Log the regression with readable history
+  const timestamp = new Date().toISOString()
+  const attempt = currentRetries + 1
+  const historyEntry = `[${timestamp}] Stage regression #${attempt}: "${variant.name}" (${variant.stageName}) → Testing FAILED (${failureType})\n  Reason: ${failureReason}\n  Do-over: Regression to ${targetStageName} (attempt ${attempt + 1})\n  ---\n`
+
+  const existingHistory = (variant as any).retryHistory || ''
+  const newHistory = historyEntry + existingHistory
+
+  debugLog(`[regressVariantToStage] Regressing ${variant.name} from ${variant.stageName} → ${targetStageName} (attempt ${attempt}): ${failureReason}`)
+
+  // Find the new stage ID from the stages list
+  const space = await prisma.space.findUnique({ where: { id: spaceId } })
+  if (!space) return { success: false }
+  const stages = parseStages(space)
+  const newStage = stages.find(s => s.name === targetStageName)
+  if (!newStage) return { success: false }
+
+  // Update variant: move to new stage, reset status, increment retry count
+  const updatedVariant = {
+    ...variant,
+    stageId: newStage.id,
+    stageName: targetStageName,
+    status: 'PENDING',
+    grade: null,
+    feedback: null,
+    retryCount: attempt,
+    retryHistory: newHistory,
+    lastFailureReason: `${failureType}: ${failureReason}`,
+    steps: variant.steps.map((s: any) => ({ ...s, status: 'PENDING', result: null, grade: null })),
+  }
+
+  const updatedVariants = state.variants.map(v => v.id === variantId ? updatedVariant : v)
+  updateExecutionState(spaceId, { variants: updatedVariants })
+
+  // Persist to DB
+  await prisma.variant.update({
+    where: { id: variantId },
+    data: {
+      stageId: newStage.id,
+      stageName: targetStageName,
+      status: 'PENDING',
+      retryCount: attempt,
+      lastFailureReason: `${failureType}: ${failureReason}`,
+      // Note: we store history in a JSON field if needed, for now it's in memory only
+    }
+  })
+
+  return { success: true, newVariant: updatedVariant, retryCount: attempt }
+}
+
+// ─── Testing Output Verification Gate ─────────────────────────────────────────────────────────
+
+interface TestingVerification {
+  valid: boolean
+  reason: string
+  verdict?: 'PASS' | 'FAIL'
+  missingChecks: string[]
+}
+
+/**
+ * Verifies that Testing stage output actually contains meaningful, verifiable results.
+ * This is the "results gate" — if output doesn't contain real results, the variant fails
+ * rather than wasting cycles on grading.
+ *
+ * Checks:
+ * 1. Contains METRICS (numeric values) — required for quantitative testing
+ * 2. Contains a VERDICT (PASS/FAIL) — required per Testing stage prompt
+ * 3. For model-related variants: output contains actual text/model outputs, not just tensor shapes
+ * 4. No error indicators
+ */
+function verifyTestingOutput(
+  variantName: string,
+  variantDescription: string | null,
+  gpuOutput: string
+): TestingVerification {
+  const output = gpuOutput.toLowerCase()
+  const missingChecks: string[] = []
+
+  // 1. Check for error indicators
+  if (output.includes('[gpu error]') || output.includes('runtimeerror') ||
+      output.includes('typeerror') || output.includes('valueerror') ||
+      output.includes('modulenotfounderror') || output.includes('attributeerror') ||
+      output.includes('cuda out of memory') || output.includes('out of memory')) {
+    return {
+      valid: false,
+      reason: `GPU output contains error indicators: testing code did not execute cleanly`,
+      missingChecks: ['clean execution'],
+    }
+  }
+
+
+  // 1b. Check for AI thinking tags — indicates the LLM produced internal monologue instead of real GPU output
+  if (output.includes('<thought') || output.includes('<think>') ||
+      output.includes('</thought>') || output.includes('```python\n<thought') ||
+      output.includes('\u3010') || output.includes('\u3011')) {  // Chinese brackets from AI text
+    return {
+      valid: false,
+      reason: `GPU output contains AI thinking/monologue tags — real GPU code did not run. The variant produced simulated output instead of actual model inference.`,
+      missingChecks: ['real GPU execution (found AI thinking tags instead)'],
+    }
+  }
+
+  // 2. Check for VERDICT — required per Testing stage prompt
+  const verdictMatch = output.match(/\bverdict\s*:\s*(pass|fail)/i)
+  if (!verdictMatch) {
+    missingChecks.push('VERDICT (PASS/FAIL statement)')
+  }
+
+  // 3. Check for METRICS — required for quantitative testing
+  // Looks for numbers that represent measurements (percentages, decimals, scientific notation)
+  const hasNumericMetrics = /\d+\.\d+|\d+\s*(%|°|accuracy|precision|recall|f1|mae|mse|rmse|loss|metric|score|value|result)/i.test(output)
+  if (!hasNumericMetrics) {
+    missingChecks.push('quantitative METRICS (numeric measurements)')
+  }
+
+  // 4. For model-related variants: check for actual model outputs (text generation, embeddings)
+  // If variant name/description suggests "model inference", "generation", "embedding",
+  // the output should contain actual text or model-produced content, not just tensor shapes
+  const modelRelatedTerms = ['model', 'inference', 'generation', 'text', 'embedding', 'lm', 'llm', 'diffusion', 'latent']
+  const isModelRelated = modelRelatedTerms.some(term =>
+    (variantName || '').toLowerCase().includes(term) ||
+    (variantDescription || '').toLowerCase().includes(term)
+  )
+  if (isModelRelated) {
+    // Should have some text output that isn't just code or tensor notation
+    const hasTextOutput = /[a-z]{4,}/i.test(output) && // at least some readable text
+      output.length > 200 // not just a few characters
+    const hasTensorShapes = /tensor.*shape|shape.*torch|torch\.tensor/i.test(output)
+    const onlyTensors = hasTensorShapes && !hasTextOutput
+
+    if (onlyTensors) {
+      missingChecks.push('actual model OUTPUT (found only tensor shapes, no generated text/content)')
+    }
+  }
+
+  // 5. Check for evidence of actual computation (not just empty/padding output)
+  if (output.length < 100) {
+    return {
+      valid: false,
+      reason: `GPU output too short (${output.length} chars) — likely no real computation occurred`,
+      missingChecks: ['meaningful output'],
+    }
+  }
+
+  // 6. Check for EXECUTION_PLAN self-declaration — should appear in Implementation output
+  // If the GPU output came from an Implementation that declared execution_mode=simulation
+  // but the research goal requires real GPU experiments, flag it
+  const declaredExecutionMatch = gpuOutput.match(/execution_mode\s*:\s*(real_gpu|simulation)/i)
+  if (declaredExecutionMatch) {
+    const declaredMode = declaredExecutionMatch[1].toLowerCase()
+    if (declaredMode === 'simulation') {
+      missingChecks.push(`Implementation declared "execution_mode: simulation" — real GPU experiments required by Research Goal`)
+    }
+  }
+
+  if (missingChecks.length > 0) {
+    return {
+      valid: false,
+      reason: `Testing output missing required elements: ${missingChecks.join(', ')}. Variant "${variantName}" marked FAILED — fix in Planning before retry.`,
+      missingChecks,
+    }
+  }
+
+  return {
+    valid: true,
+    reason: 'Testing output verified: contains metrics and verdict',
+    verdict: verdictMatch?.[1]?.toUpperCase() as 'PASS' | 'FAIL',
+    missingChecks: [],
+  }
 }
 
 export async function getSpaceStages(spaceId: string): Promise<ResearchStage[]> {
@@ -2080,7 +2567,19 @@ export async function executeVariantCycle(spaceId: string, variantId: string) {
   if (!stage) throw new Error('Stage not found')
 
   // Process cache downloads (models/datasets) before execution begins
-  await processVariantCacheDownloads(variant, spaceId)
+  // If downloads fail, mark variant as FAILED rather than throwing (allows pipeline to advance)
+  try {
+    await processVariantCacheDownloads(variant, spaceId)
+  } catch (err: any) {
+    debugLog(`[executeVariantCycle] Download processing failed for ${variant.name}: ${err.message}`)
+    const failedVariant = { ...variant, status: 'FAILED' as const, feedback: `Download failed: ${err.message}` }
+    const updatedVariants = state.variants.map(v => v.id === variantId ? failedVariant : v)
+    updateExecutionState(spaceId, { variants: updatedVariants })
+    try {
+      await prisma.variant.update({ where: { id: variantId }, data: { status: 'FAILED', feedback: `Download failed: ${err.message}` } })
+    } catch {}
+    return failedVariant
+  }
 
   // Execute the variant
   const executedVariant = await executeVariant(variant, spaceId, stage.name, stage.gpuEnabled ?? false)
@@ -2090,6 +2589,40 @@ export async function executeVariantCycle(spaceId: string, variantId: string) {
     v.id === variantId ? executedVariant : v
   )
   updateExecutionState(spaceId, { variants: updatedVariants })
+
+  // ─── Failure Regression ──────────────────────────────────────────────────────────────
+  // If the variant failed (step crash, model load error, etc.), regress to an earlier stage
+  // This allows the pipeline to self-correct without incrementing the cycle counter
+  if (executedVariant.status === 'FAILED') {
+    const failedSteps = executedVariant.steps.filter((s: any) => s.status === 'FAILED')
+    const { failureType, reason } = classifyStepFailure(failedSteps)
+    const currentStageOrder = stage.order
+    const { targetStageOrder, targetStageName } = getRegressionTargetStage(failureType, currentStageOrder)
+
+    // Don't regress if already at Investigation (order 0) or if the target is the same stage
+    if (targetStageName !== stage.name) {
+      debugLog(`[executeVariantCycle] Variant "${executedVariant.name}" FAILED (${failureType}): ${reason}`)
+      debugLog(`[executeVariantCycle] Regressing to ${targetStageName} (from ${stage.name})`)
+
+      // Get stages to find the target stage ID
+      const stages = parseStages(space)
+      const targetStage = stages.find(s => s.name === targetStageName)
+      if (targetStage) {
+        const regressionResult = await regressVariantToStage(
+          spaceId, variantId, targetStageName, targetStage.id,
+          failureType, reason
+        )
+        if (regressionResult.success) {
+          debugLog(`[executeVariantCycle] Regression successful: ${executedVariant.name} → ${targetStageName} (retry ${regressionResult.retryCount})`)
+          // Return the updated variant (now PENDING in the new stage)
+          const regressedVariant = state.variants.find(v => v.id === variantId)
+          return regressedVariant || executedVariant
+        }
+      }
+    } else {
+      debugLog(`[executeVariantCycle] Variant "${executedVariant.name}" FAILED but already at ${stage.name}, not regressing`)
+    }
+  }
 
   // If this variant is the best, propagate its learnings
   if (executedVariant.status === 'COMPLETED') {

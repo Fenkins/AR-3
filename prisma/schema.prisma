@@ -158,6 +158,9 @@ model Space {
   useEmbeddings          Boolean        @default(false)
   useGpu                 Boolean        @default(false)
   currentCycle           Int            @default(1)
+  researchType           String?        // e.g. "diffusion_model", "autoregressive", "multi_model_ensemble"
+  targetModelIds         String?        // JSON array of HuggingFace model IDs, e.g. ["Qwen/Qwen2.5-1.5B", "GSAI-ML/LLaDA-8B-Base"]
+  researchScope          String?        // Brief description of what Implementation should actually execute
   setupStatus            String?
   setupError             String?
   setupStep              String?
@@ -220,6 +223,8 @@ model Variant {
   failureMode    String?
   approachVerdict String?
   gradingWarning  String?
+  retryCount      Int           @default(0)
+  lastFailureReason String?
   createdAt      DateTime      @default(now())
   updatedAt      DateTime
   cacheDownloads String?

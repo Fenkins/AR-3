@@ -20,6 +20,23 @@ HF_API = "https://huggingface.co/api"
 GH_API = "https://api.github.com"
 ARXIV_API = "http://export.arxiv.org/api"
 
+# HuggingFace token for authenticated API access (higher rate limits)
+HF_TOKEN = ''
+
+def _load_hf_token():
+    global HF_TOKEN
+    import os
+    # Try environment first, then DB config file
+    HF_TOKEN = os.environ.get('HF_TOKEN', '')
+    if not HF_TOKEN:
+        try:
+            with open('/tmp/hf_token', 'r') as f:
+                HF_TOKEN = f.read().strip()
+        except:
+            pass
+
+_load_hf_token()
+
 # In-memory cache to avoid repeated searches (cache for 5 minutes)
 _cache = {}
 _CACHE_TTL = 300
@@ -29,6 +46,8 @@ def make_request(url, headers=None, timeout=10):
     h = headers or {}
     h.setdefault('User-Agent', 'AR-3-Research-Pipeline/1.0')
     h.setdefault('Accept', 'application/json')
+    if HF_TOKEN:
+        h['Authorization'] = f'Bearer {HF_TOKEN}'
     try:
         req = urllib.request.Request(url, headers=h)
         with urllib.request.urlopen(req, timeout=timeout) as resp:

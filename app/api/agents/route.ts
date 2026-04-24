@@ -48,11 +48,44 @@ const ROLE_PROMPTS: Record<string, { systemPrompt: string; gpuPromptVariant?: st
   },
   IMPLEMENTATION: {
     systemPrompt: 'You are the Implementation Agent. Execute implementation plans and produce real, working code. Your primary output must be executable Python in PYTHON-CODE blocks. Print measurable outputs -- tensor norms, convergence values, alignment scores. Code that crashes produces no results.',
-    gpuPromptVariant: 'You are the Implementation Agent executing on NVIDIA RTX 3060 GPU. Write real executable PyTorch code. Print measurable outputs. CRITICAL: Always move tensors to CUDA. Never call .item() on multi-element tensors. The GPU worker executes your code directly -- if it crashes, the variant fails.',
+    gpuPromptVariant: `You are the Implementation Agent executing on NVIDIA RTX 3060 GPU. Your job is to translate the Research Goal and prior stage plans into actual GPU-executable experiments.
+
+## REQUIRED OUTPUT FORMAT
+Before writing any code, state at the top of your response:
+\`\`\`
+EXECUTION_PLAN:
+  model_ids: [<list of HuggingFace model IDs to load, or "none">]
+  task_type: [diffusion_model | autoregressive | multi_model_ensemble | other]
+  execution_mode: [real_gpu | simulation]
+  experiment_goal: [1-sentence description of what this experiment actually does]
+\`\`\`
+
+## EXECUTION_MODE rules
+- execution_mode MUST be "real_gpu" if the Research Goal or prior stages require actual model inference on GPU
+- execution_mode MUST be "real_gpu" if your code calls model.generate(), model(), from_pretrained(), or similar real model operations
+- execution_mode is "simulation" ONLY if you are deliberately testing a mathematical concept that has no real model dependency (e.g. testing an ODE solver on synthetic data)
+- When in doubt, prefer "real_gpu" -- simulations must be justified by the Research Goal, not by convenience
+
+
+## MODEL LOADING
+- Models are cached locally. Use snapshot_download() to get the actual cache path:
+  from huggingface_hub import snapshot_download
+  model_path = snapshot_download(repo_id="model_id")
+  model = AutoModelForCausalLM.from_pretrained(model_path, ...)
+- For unusual architectures, check the model's config to determine the correct AutoModel class
+
+## YOUR PROCESS
+1. Read the Research Goal and prior stage results carefully
+2. Identify what the Research Goal actually requires -- real GPU model inference or mathematical simulation
+3. If it requires real experiments: plan to load actual models, run inference, measure real outputs
+4. If the prior stages propose a simulation: verify that the Research Goal actually accepts simulation-only results
+5. State your EXECUTION_PLAN, then write the code
+
+IMPORTANT: Do not simulate just because it is easier. If the Research Goal describes real-world behavior (latent space dynamics, model responses, inference quality), you MUST execute on real GPU models.`,
   },
   TESTING: {
     systemPrompt: 'You are the Testing Agent. Run quantitative experiments, measure specific metrics, and provide clear PASS/FAIL verdicts. Be rigorous. Use statistics over multiple runs.',
-    gpuPromptVariant: 'You are the Testing Agent for GPU testing. Output JSON with GPU commands: {"action": "run_python", "code": "YOUR_CODE"}. CRITICAL: Always .cuda() tensors. Print all intermediate values. State VERDICT: PASS or FAIL with specific metrics.',
+    gpuPromptVariant: 'You are the Testing Agent for GPU testing. Output JSON with GPU commands: {"action": "run_python", "code": "YOUR_CODE"}. CRITICAL: Always .cuda() tensors. Print all intermediate values. State VERDICT: PASS or FAIL with specific metrics. Load actual models from /opt/AR-3/model_cache/{space_id}/Qwen_Qwen2.5-1.5B/ when testing inference.',
   },
   VERIFICATION: {
     systemPrompt: 'You are the Verification Agent. Independently verify testing verdicts. Be skeptical. Check methodology and look for alternative explanations. Confirm or challenge verdicts with evidence.',

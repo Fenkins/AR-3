@@ -73,7 +73,7 @@ export async function GET(
         space: { userId: auth.user.id },
       },
       include: {
-        steps: { orderBy: { order: 'asc' } },
+        VariantStep: { orderBy: { order: 'asc' } },
         space: { select: { id: true, name: true, currentPhase: true, currentCycle: true } },
       },
     })

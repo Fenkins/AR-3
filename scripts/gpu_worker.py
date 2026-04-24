@@ -229,6 +229,79 @@ def extract_gpu_command(prompt: str) -> dict:
     return {"action": "nvidia_smi"}
 
 
+
+def execute_quantized_code(code: str, timeout: int = DEFAULT_JOB_TIMEOUT) -> dict:
+    """"Execute Python code with quantized model support (bitsandbytes 8-bit)."""
+    log(f"Executing quantized Python code ({len(code)} chars)",
+        thread_id=threading.current_thread().name)
+
+    # ── Pre-process: coerce f-string tensor.item():.Nf patterns ─────────────
+    fixed_code = re_module.sub(
+        r"f(['\"])(.+?)\{(.+?)\.item\(\):\.(\\d+)f\}(.*?)\\1",
+        lambda m: "f'" + m.group(2) + '{float(' + m.group(3) + '.item()):.'
+                  + m.group(4) + 'f}' + m.group(5) + "'",
+        code
+    )
+    if fixed_code != code:
+        log(f"Format-string coercion applied",
+            thread_id=threading.current_thread().name)
+
+    code_file = f"/tmp/gpu_code_{int(time.time()*1000)}.py"
+    with open(code_file, 'w') as f:
+        f.write(fixed_code)
+
+    try:
+        result = subprocess.run(
+            ['python3', code_file],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd='/tmp',
+            env={
+                **os.environ,
+                'LD_LIBRARY_PATH': '/usr/local/cuda/lib64:' + os.environ.get('LD_LIBRARY_PATH', ''),
+            }
+        )
+        try:
+            os.unlink(code_file)
+        except Exception:
+            pass
+
+        if result.returncode == 0:
+            return {
+                'success': True,
+                'output': result.stdout.strip(),
+                'error': None,
+            }
+        else:
+            return {
+                'success': False,
+                'output': result.stdout.strip(),
+                'error': result.stderr.strip() or f'Exit code: {result.returncode}',
+            }
+    except subprocess.TimeoutExpired:
+        try:
+            os.unlink(code_file)
+        except Exception:
+            pass
+        return {
+            'success': False,
+            'output': '',
+            'error': f'Code execution timed out ({timeout}s limit)',
+        }
+    except Exception as e:
+        try:
+            os.unlink(code_file)
+        except Exception:
+            pass
+        return {
+            'success': False,
+            'output': '',
+            'error': str(e),
+        }
+
+
+
 def execute_python_code(code: str, timeout: int = DEFAULT_JOB_TIMEOUT) -> dict:
     """Execute Python code and return result/error."""
     log(f"Executing Python code ({len(code)} chars)",
@@ -337,6 +410,18 @@ def execute_gpu_command(job: dict, timeout: int = DEFAULT_JOB_TIMEOUT) -> dict:
                 }
             log(f"Running Python code, {len(code)} chars", thread_id=tid)
             result = execute_python_code(code, timeout=timeout)
+
+        elif action == 'run_quantized':
+            # bitsandbytes 8-bit quantization path
+            code = gpu_command.get('code', '')
+            if not code or len(code) < 10:
+                return {
+                    'success': False,
+                    'output': '',
+                    'error': 'No valid Python code found',
+                }
+            log(f"Running quantized Python code, {len(code)} chars", thread_id=tid)
+            result = execute_quantized_code(code, timeout=timeout)
 
         elif action == 'run_bash':
             cmd = gpu_command.get('command', gpu_command.get('cmd', ''))
