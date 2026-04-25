@@ -109,13 +109,13 @@ Your tasks:
 6. For each major component, write a BRIEF SKETCH of the PyTorch code (pseudocode is fine)
 
 CRITICAL: Your plan MUST account for model access:
-- For ODE multi-model experiments, use Qwen/Qwen2.5-1.5B or Qwen/Qwen2.5-3B — both support bitsandbytes 8-bit and fit 2+ copies on RTX 3060
-- These models are freely downloadable without special permissions: Qwen/Qwen2.5-1.5B, Qwen/Qwen2.5-3B
-- Include at least one model ID in the downloads field below (e.g. "Qwen/Qwen2.5-1.5B")
-- Download format for model repos: POST /api/model-cache with {spaceId, fileName: "Qwen_Qwen2.5-1.5B", downloadUrl: "https://huggingface.co/Qwen/Qwen2.5-1.5B"}
-- After download, load from local path: /tmp/model_cache/{spaceId}/Qwen_Qwen2.5-1.5B
+- For ODE multi-model diffusion experiments, use GSAI-ML/LLaDA-8B-Base (8B diffusion LM)
+- These models are freely downloadable: GSAI-ML/LLaDA-8B-Base, GSAI-ML/LLaDA-8B-Instruct
+- Include at least one model ID in the downloads field below (e.g. "GSAI-ML/LLaDA-8B-Base")
+- Download format for model repos: POST /api/model-cache with {spaceId, fileName: "GSAI-ML_LLaDA-8B-Base", downloadUrl: "https://huggingface.co/GSAI-ML/LLaDA-8B-Base"}
+- After download, load from local path using from_pretrained(YOUR_MODEL_ID)
 - Load models with bitsandbytes 8-bit using BitsAndBytesConfig (transformers 5.x API)
-- VRAM constraint: RTX 3060 has ~11.6 GB total -- Qwen2.5-1.5B in 8-bit uses ~1.7 GB per copy, Qwen2.5-3B uses ~3 GB per copy
+- VRAM constraint: RTX 3060 has ~11.6 GB total -- LLaDA-8B in 8-bit uses ~7-8 GB per copy
 - Plan for loading 2+ model copies simultaneously for ODE experiments
 - Include at least one model ID or download URL in the downloads field below
 
@@ -174,11 +174,10 @@ IMPORTANT:
       output = model.generate(**input_ids, max_new_tokens=50)
   print(tokenizer.decode(output[0], skip_special_tokens=True))
 
-- Recommended models for ODE research (all support 8-bit, tested on RTX 3060):
-  - Qwen/Qwen2.5-1.5B (1.67 GB per copy in 8-bit, 2 copies = 3.3 GB)
-  - Qwen/Qwen2.5-3B (~3 GB per copy in 8-bit, 2 copies fit in 11.6 GB)
-  - Qwen/Qwen2.5-7B (~6-7 GB per copy in 8-bit, 2 copies need aggressive memory management)
-- For ODE multi-model experiments, use Qwen2.5-1.5B or Qwen2.5-3B to ensure 2+ copies fit comfortably
+- Recommended diffusion models for ODE research (NOT autoregressive — use diffusion LMs):
+  - GSAI-ML/LLaDA-8B-Base (8B parameters, diffusion LM)
+  - GSAI-ML/LLaDA-8B-Instruct (instruction-tuned variant)
+- For ODE multi-model experiments, load multiple copies using device_map="cuda"
 - VRAM budget: RTX 3060 has 11.6 GB total
 - Your primary output MUST be executable Python code in PYTHON-CODE blocks
 - The GPU worker will execute it directly -- if the code crashes, the variant fails

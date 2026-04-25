@@ -219,8 +219,14 @@ Respond with just a number between 2-5.`
     ? `\n\n## AVAILABLE MODELS FOR DOWNLOAD\nThe following HuggingFace models are available — use their download URLs in the downloads field if needed:\n${
     discoveredModels.map(m => `- ${m.downloadUrl || m.url}  (${m.downloads?.toLocaleString() || 0} downloads, file: ${m.fileName || 'see URL'})`).join('\n')}
 `
-    : `\n\n## AVAILABLE MODELS FOR DOWNLOAD\nRecommended models for ODE experiments (tested with bitsandbytes 8-bit on RTX 3060):\n- https://huggingface.co/Qwen/Qwen2.5-1.5B (1.67 GB per copy in 8-bit — fits 2+ copies)\n- https://huggingface.co/Qwen/Qwen2.5-3B (3 GB per copy in 8-bit — fits 2 copies)\n`
+        : `
 
+## AVAILABLE MODELS FOR DOWNLOAD
+Recommended diffusion models for ODE experiments (diffusion text models):
+- https://huggingface.co/GSAI-ML/LLaDA-8B-Base (8B diffusion LM)
+- https://huggingface.co/GSAI-ML/LLaDA-8B-Instruct (instruction-tuned)
+- For multi-model ODE experiments, load 2+ copies using from_pretrained with device_map="cuda"
+`
   for (let i = 0; i < numVariants; i++) {
     let name = `Variant ${i + 1}`
     let description = 'Exploration variant'
