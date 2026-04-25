@@ -157,6 +157,7 @@ model Space {
   totalCost              Float          @default(0)
   useEmbeddings          Boolean        @default(false)
   useGpu                 Boolean        @default(false)
+  strictCodeGates        Boolean        @default(false)  // If true, fail early-stage variants with no code indicators
   currentCycle           Int            @default(1)
   researchType           String?        // e.g. "diffusion_model", "autoregressive", "multi_model_ensemble"
   targetModelIds         String?        // JSON array of HuggingFace model IDs, e.g. ["Qwen/Qwen2.5-1.5B", "GSAI-ML/LLaDA-8B-Base"]

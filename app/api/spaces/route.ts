@@ -75,7 +75,7 @@ export async function POST(request: NextRequest) {
     if ('json' in auth) return auth
 
     const body = await request.json()
-    const { name, description, initialPrompt, useEmbeddings, useGpu, numVariants, stepsPerVariant, numVariantsMode, stepsPerVariantMode } = body
+    const { name, description, initialPrompt, useEmbeddings, useGpu, strictCodeGates, numVariants, stepsPerVariant, numVariantsMode, stepsPerVariantMode } = body
 
     if (!name || !initialPrompt) {
       return NextResponse.json(
@@ -94,6 +94,7 @@ export async function POST(request: NextRequest) {
         currentPhase: 'PLANNING',
         useEmbeddings: useEmbeddings || false,
         useGpu: useGpu || false,
+        strictCodeGates: strictCodeGates || false,
         defaultNumVariants: Math.max(1, Math.min(10, numVariants || 3)),
         defaultStepsPerVariant: Math.max(3, Math.min(100, stepsPerVariant || 25)),
         numVariantsMode: numVariantsMode || 'fixed',

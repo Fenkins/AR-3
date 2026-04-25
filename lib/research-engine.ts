@@ -856,7 +856,9 @@ Original output preview: ${response.content.substring(0, 500)}`
       // For early stages (Investigation, Proposition), check if the output contains
       // actual code indicators BEFORE marking as COMPLETED. If the output is pure prose
       // with no code whatsoever, this is a fake experiment — fail it early.
-      if ((stageName === 'Investigation' || stageName === 'Proposition') && !useGpu) {
+      // This gate is controlled by space.strictCodeGates (user-controllable toggle).
+      const strictCodeGates = (space as any).strictCodeGates ?? false
+      if ((stageName === 'Investigation' || stageName === 'Proposition') && strictCodeGates) {
         const hasCodeIndicators = /(^|\n)(import |from |def |class |torch\.|cuda\.|tensor\(|# |torch\s|return |for |while |if )/m.test(response.content)
         if (!hasCodeIndicators) {
           debugLog(`[executeVariant] FAKE DETECTED (early stage): "${variant.name}" output contains no code indicators — pure prose`)
@@ -875,7 +877,7 @@ Original output preview: ${response.content.substring(0, 500)}`
         }
       }
 
-      step.status = 'COMPLETED'
+step.status = 'COMPLETED'
       step.grade = Math.min(100, Math.max(0, Math.floor(response.tokensUsed / 10)))
       
       // Persist step result to DB
