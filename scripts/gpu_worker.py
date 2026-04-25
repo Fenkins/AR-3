@@ -208,7 +208,7 @@ def extract_gpu_command(prompt: str) -> dict:
             continue
         # Skip numbered list items (e.g. "1. We need to load...") unless they contain
         # actual Python code keywords on the same line (not just prose after the number)
-        if re.match(r'^\d+\.\s+\w', stripped) and not any(kw in stripped for kw in ['import ', 'from ', 'def ', 'class ', 'torch.', 'cuda.', 'tensor(', '.cuda()', '.to(', 'return ', ' = ']):
+        if re.match(r'^\d+\.\s+\w', stripped) and not any(kw in stripped for kw in ['import ', 'from ', 'def ', 'class ', 'torch.', 'cuda.', 'tensor(', '.cuda()', '.to(', 'return ', ' = ', 'for ']):
             continue
         # Skip lines containing non-ASCII characters (em-dash —, en-dash –, quotes, etc.)
         # These are prose text from the LLM, not code
