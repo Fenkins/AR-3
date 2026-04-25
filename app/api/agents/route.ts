@@ -77,7 +77,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 The code MUST:
 - Start with \`import torch\` or \`from transformers\` or \`from huggingface_hub\`
-- Contain actual model loading (from_pretrained) if doing real inference
+- Contain actual model loading (from_pretrained) if doing real inference -- the model ID must match your EXECUTION_PLAN model_ids field
 - Print measurable outputs: tensor norms, convergence values, alignment scores
 - NOT contain numbered lists like "1. We need to..." or "2. Load the model..."
 
@@ -87,13 +87,16 @@ The code MUST:
 
 ## MODEL LOADING (for RTX 3060)
 - Use BitsAndBytesConfig for 8-bit loading to fit 2+ model copies:
-  from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+  from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
   bnb_config = BitsAndBytesConfig(load_in_8bit=True)
-  model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-1.5B",
-    quantization_config=bnb_config, device_map="cuda", torch_dtype=torch.bfloat16)
-- Models available: Qwen/Qwen2.5-1.5B (1.7GB/copy in 8-bit), Qwen/Qwen2.5-3B (3GB/copy in 8-bit)
-- Load tokenizer the same way, then: input_ids = tokenizer(text, return_tensors="pt").to("cuda")
+- The model ID is specified by YOU in the EXECUTION_PLAN's model_ids field
+- Load the model using: model = AutoModelForCausalLM.from_pretrained(YOUR_MODEL_ID, quantization_config=bnb_config, device_map="cuda", torch_dtype=torch.bfloat16)
+- Load tokenizer: tokenizer = AutoTokenizer.from_pretrained(YOUR_MODEL_ID)
+- Then: input_ids = tokenizer(text, return_tensors="pt").to("cuda")
 - Inference: output = model.generate(**input_ids, max_new_tokens=50)
+- CRITICAL: The Research Goal specifies "diffusion text models such as LLADA and DreamLM dLLMs". Use these model IDs if no specific model is required.
+- Available diffusion models: GSAI-ML/LLaDA-8B-Base, https://huggingface.co/GSAI-ML/LLaDA-8B-Base
+- For multi-model experiments, load multiple copies: model1 = ...from_pretrained(MODEL_A); model2 = ...from_pretrained(MODEL_B)
 
 ## YOUR PROCESS
 1. Read the Research Goal and prior stage plans carefully
@@ -105,7 +108,7 @@ WARNING: If your response contains numbered lists ("1. Do X") instead of code, t
   },
   TESTING: {
     systemPrompt: 'You are the Testing Agent. Run quantitative experiments, measure specific metrics, and provide clear PASS/FAIL verdicts. Be rigorous. Use statistics over multiple runs.',
-    gpuPromptVariant: 'You are the Testing Agent for GPU testing. Output JSON with GPU commands: {"action": "run_python", "code": "YOUR_CODE"}. CRITICAL: Always .cuda() tensors. Print all intermediate values. State VERDICT: PASS or FAIL with specific metrics. Load actual models from /opt/AR-3/model_cache/{space_id}/Qwen_Qwen2.5-1.5B/ when testing inference.',
+    gpuPromptVariant: 'You are the Testing Agent for GPU testing. Output JSON with GPU commands: {"action": "run_python", "code": "YOUR_CODE"}. CRITICAL: Always .cuda() tensors. Print all intermediate values. State VERDICT: PASS or FAIL with specific metrics. Use the model IDs specified in the Research Goal (LLADA, DreamLM dLLMs or as specified by the Implementation variant).',
   },
   VERIFICATION: {
     systemPrompt: 'You are the Verification Agent. Independently verify testing verdicts. Be skeptical. Check methodology and look for alternative explanations. Confirm or challenge verdicts with evidence.',
