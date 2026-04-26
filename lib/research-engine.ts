@@ -679,14 +679,26 @@ async function executeVariant(variant: Variant, spaceId: string, stageName: stri
     const researchType = (space as any).researchType || ''
     const targetModelIds = (space as any).targetModelIds || ''
     const researchScope = (space as any).researchScope || ''
+    // Read dynamic GPU hardware info from gpu_worker (avoids hardcoding GPU model/VRAM)
+    let gpuHardwareInfo = ''
+    try {
+      if (fs.existsSync('/tmp/gpu_info.json')) {
+        const gpuInfo = JSON.parse(fs.readFileSync('/tmp/gpu_info.json', 'utf8'))
+        gpuHardwareInfo = `\n══════ GPU HARDWARE (auto-discovered) ══════\n${gpuInfo.full}\nVRAM: ${gpuInfo.memory}\n═════════════════════════════════════════════════════════════\n`
+      }
+    } catch {}
+
     let researchContext = ''
-    if (useGpu && (researchType || targetModelIds || researchScope)) {
-      researchContext = `\n\n══════ RESEARCH SCOPE (from preparation stages) ══════\n` +
+    if (useGpu && (researchType || targetModelIds || researchScope || gpuHardwareInfo)) {
+      researchContext = gpuHardwareInfo +
         (researchType ? `Research Type: ${researchType}\n` : '') +
         (targetModelIds ? `Target Model IDs: ${targetModelIds}\n` : '') +
         (researchScope ? `Research Scope: ${researchScope}\n` : '') +
         (cycleDelta ? `\nSelf-Evolution Context: ${cycleDelta}\n` : '') +
         `═════════════════════════════════════════════════════════════`
+    } else if (useGpu && gpuHardwareInfo) {
+      // GPU enabled but no research scope yet -- still provide GPU hardware info
+      researchContext = gpuHardwareInfo + `\n═════════════════════════════════════════════════════════════\n`
     }
 
     const variantSystemPrompt = basePrompt + (researchContext || '')

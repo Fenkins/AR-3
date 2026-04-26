@@ -23,6 +23,7 @@ from pathlib import Path
 JOB_QUEUE_FILE = '/tmp/gpu_jobs.json'
 JOB_RESULTS_FILE = '/tmp/gpu_results.json'
 GPU_CONFIG_FILE = '/tmp/gpu_config.json'
+GPU_INFO_FILE = '/tmp/gpu_info.json'
 POLL_INTERVAL = 3  # seconds
 DEFAULT_MAX_CONCURRENT = 1
 DEFAULT_JOB_TIMEOUT = 3600  # 1 hour default
@@ -608,8 +609,22 @@ def main():
              '--format=csv,noheader'],
             capture_output=True, text=True, timeout=10
         )
+        gpu_info = None
         if result.returncode == 0:
-            log(f"GPU detected: {result.stdout.strip()}")
+            gpu_line = result.stdout.strip()
+            log(f"GPU detected: {gpu_line}")
+            # Parse GPU info: "NVIDIA GeForce RTX 4090, 550.107.02, 24564 MiB"
+            parts = [p.strip() for p in gpu_line.split(',')]
+            gpu_name = parts[0] if len(parts) > 0 else 'Unknown'
+            gpu_mem = parts[2] if len(parts) > 2 else 'Unknown'
+            gpu_info = {'name': gpu_name, 'full': gpu_line, 'memory': gpu_mem}
+            # Write GPU info to file for research-engine to read
+            try:
+                import json
+                with open(GPU_INFO_FILE, 'w') as f:
+                    json.dump(gpu_info, f)
+            except Exception as info_err:
+                log(f"Warning: could not write GPU info: {info_err}")
         else:
             log("WARNING: nvidia-smi failed")
     except Exception as e:
