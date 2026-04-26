@@ -256,6 +256,20 @@ def execute_quantized_code(code: str, timeout: int = DEFAULT_JOB_TIMEOUT) -> dic
                   + m.group(4) + 'f}' + m.group(5) + "'",
         code
     )
+
+    # ── Patch: Handle LLaDA transformers 5.x compatibility ─────────────────
+    patch_wrapper = """
+import torch
+import builtins as _builtins
+_orig_getattr = torch.nn.Module.__getattr__
+def _patched_getattr(self, name, *args, **kwargs):
+    if name == 'all_tied_weights_keys':
+        return {}
+    return _orig_getattr(self, name, *args, **kwargs)
+torch.nn.Module.__getattr__ = _patched_getattr
+"""
+    fixed_code = patch_wrapper + fixed_code
+
     if fixed_code != code:
         log(f"Format-string coercion applied",
             thread_id=threading.current_thread().name)
@@ -330,6 +344,23 @@ def execute_python_code(code: str, timeout: int = DEFAULT_JOB_TIMEOUT) -> dict:
                   + m.group(4) + 'f}' + m.group(5) + "'",
         code
     )
+
+    # ── Patch: Handle LLaDA transformers 5.x compatibility ───────────────────
+    # LLaDA's custom model code (modeling_llada.py) is missing `all_tied_weights_keys`
+    # which breaks from_pretrained in transformers 5.5+. Patch torch.nn.Module to
+    # return {} (empty dict) when that attribute is missing, instead of AttributeError.
+    # This allows model loading to complete, then we clean up after.
+    patch_wrapper = '''
+import torch
+import builtins as _builtins
+_orig_getattr = torch.nn.Module.__getattr__
+def _patched_getattr(self, name, *args, **kwargs):
+    if name == 'all_tied_weights_keys':
+        return {}
+    return _orig_getattr(self, name, *args, **kwargs)
+torch.nn.Module.__getattr__ = _patched_getattr
+'''
+    fixed_code = patch_wrapper + fixed_code
     if fixed_code != code:
         log(f"Format-string coercion applied",
             thread_id=threading.current_thread().name)
