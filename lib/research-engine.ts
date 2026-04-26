@@ -108,17 +108,6 @@ Your tasks:
 5. Anticipate failure modes -- what could go wrong with each step?
 6. For each major component, write a BRIEF SKETCH of the PyTorch code (pseudocode is fine)
 
-CRITICAL: Your plan MUST account for model access:
-- For ODE multi-model diffusion experiments, use GSAI-ML/LLaDA-8B-Base (8B diffusion LM)
-- These models are freely downloadable: GSAI-ML/LLaDA-8B-Base, GSAI-ML/LLaDA-8B-Instruct
-- Include at least one model ID in the downloads field below (e.g. "GSAI-ML/LLaDA-8B-Base")
-- Download format for model repos: POST /api/model-cache with {spaceId, fileName: "GSAI-ML_LLaDA-8B-Base", downloadUrl: "https://huggingface.co/GSAI-ML/LLaDA-8B-Base"}
-- After download, load from local path using from_pretrained(YOUR_MODEL_ID)
-- Load models with bitsandbytes 8-bit using BitsAndBytesConfig (transformers 5.x API)
-- VRAM constraint: RTX 3060 has ~11.6 GB total -- LLaDA-8B in 8-bit uses ~7-8 GB per copy
-- Plan for loading 2+ model copies simultaneously for ODE experiments
-- Include at least one model ID or download URL in the downloads field below
-
 Your output should be a structured PLAN with code sketches, not prose.
 Format:
   ## Step 1: [Name]
@@ -173,12 +162,6 @@ IMPORTANT:
   with torch.no_grad():
       output = model.generate(**input_ids, max_new_tokens=50)
   print(tokenizer.decode(output[0], skip_special_tokens=True))
-
-- Recommended diffusion models for ODE research (NOT autoregressive — use diffusion LMs):
-  - GSAI-ML/LLaDA-8B-Base (8B parameters, diffusion LM)
-  - GSAI-ML/LLaDA-8B-Instruct (instruction-tuned variant)
-- For ODE multi-model experiments, load multiple copies using device_map="cuda"
-- VRAM budget: RTX 3060 has 11.6 GB total
 - Your primary output MUST be executable Python code in PYTHON-CODE blocks
 - The GPU worker will execute it directly -- if the code crashes, the variant fails
 - Print MEASUREABLE outputs: tensor norms, convergence values, alignment scores, etc.
@@ -205,7 +188,7 @@ Be critical but fair.`,
     gpuPrompt: `Your primary output MUST be a JSON object with a GPU command if your tests need GPU. Format:
 {"action": "run_python", "code": "YOUR_TEST_CODE"}
 
-The GPU worker will execute this on an NVIDIA RTX 3060 GPU with torch.
+The GPU worker will execute this on an NVIDIA GPU with torch.
 
 CRITICAL RULES -- VIOLATING ANY OF THESE WILL CAUSE RUNTIME FAILURES:
 1. ALWAYS move ALL tensors to CUDA -- use .cuda() or device='cuda' consistently
