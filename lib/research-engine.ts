@@ -63,20 +63,39 @@ export interface SpaceExecutionState {
 export const DEFAULT_STAGES: Omit<ResearchStage, 'id'>[] = [
   {
     name: 'Investigation',
-    description: 'Research existing approaches, identify gaps and opportunities',
-    prompt: `Analyze the research goal and investigate the problem space.
+    description: 'Explore LLaDA model behavior through actual code execution',
+    prompt: `You are exploring how LLaDA diffusion language models actually behave by running real code.
 
-Your tasks:
-1. Research existing approaches and solutions
-2. Identify gaps and opportunities
-3. Look for novel angles and unexplored areas
-4. Document findings and insights
-5. Provide feedback for the next stage
+Your task: For each step, you MUST produce ACTUAL RUNNABLE code that loads and executes on the LLaDA model. This is not analysis or description — this is hands-on exploration.
 
-Be thorough and curious in your investigation.`,
+For each step you must:
+1. Write real Python/PyTorch code (not pseudocode, not description)
+2. The code must actually load a diffusion model and run inference
+3. Execute the code and observe the real output
+4. Based on the output, design the next experiment
+
+Code requirements for EACH step:
+- Must include: import statements, model loading, tokenization, diffusion sampling loop
+- Must print: actual tensor shapes, actual latent values, actual model outputs
+- Must not: describe what code should do without running it
+
+Output format for EACH step:
+## Step N: [Exploration name]
+### Code:
+\`\`\`python
+[actual runnable code]
+\`\`\`
+### Observed Output:
+[what the code actually produced]
+### Analysis:
+[what this tells us about the model]
+
+IMPORTANT: Every step must produce REAL code that runs. If your code fails, that IS a valid result — document WHY it failed and what that reveals about the model.
+
+Your goal is to discover how LLaDA's latent space works through direct experimentation, not through literature review or description.`,
     order: 0,
     isActive: true,
-    gpuEnabled: false,
+    gpuEnabled: true,
   },
   {
     name: 'Proposition',
@@ -845,31 +864,6 @@ Original output preview: ${response.content.substring(0, 500)}`
           continue
         }
         debugLog(`[executeVariant] Testing verification PASSED for "${variant.name}"${verification.verdict ? ` (${verification.verdict})` : ''}`)
-      }
-
-      // ─── Code Viability Gate: Investigation + Proposition ──────────────────────
-      // For early stages (Investigation, Proposition), check if the output contains
-      // actual code indicators BEFORE marking as COMPLETED. If the output is pure prose
-      // with no code whatsoever, this is a fake experiment — fail it early.
-      // This gate is controlled by space.strictCodeGates (user-controllable toggle).
-      const strictCodeGates = (space as any).strictCodeGates ?? false
-      if ((stageName === 'Investigation' || stageName === 'Proposition') && strictCodeGates) {
-        const hasCodeIndicators = /(^|\n)(import |from |def |class |torch\.|cuda\.|tensor\(|# |torch\s|return |for |while |if )/m.test(response.content)
-        if (!hasCodeIndicators) {
-          debugLog(`[executeVariant] FAKE DETECTED (early stage): "${variant.name}" output contains no code indicators — pure prose`)
-          step.status = 'FAILED'
-          step.result = `[FAKE EXPERIMENT DETECTED]: ${stageName} produced pure prose with no code indicators. Research agents must produce runnable code snippets demonstrating model loading, tensor operations, or diffusion process simulation. This variant must be retried with code demonstrations.
-
-Original output preview: ${response.content.substring(0, 500)}`
-          step.grade = 0
-          await updateVariantStepDb(step.id, {
-            result: step.result,
-            grade: 0,
-            status: 'FAILED',
-          })
-          variant.failureMode = 'FAKE_EXPERIMENT'
-          continue
-        }
       }
 
 step.status = 'COMPLETED'

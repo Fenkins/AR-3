@@ -457,8 +457,7 @@ function CreateSpaceModal({ onClose, onSuccess }: { onClose: () => void; onSucce
   const [initialPrompt, setInitialPrompt] = useState('')
   const [useEmbeddings, setUseEmbeddings] = useState(false)
   const [useGpu, setUseGpu] = useState(false)
-  const [strictCodeGates, setStrictCodeGates] = useState(false)
-  const [numVariants, setNumVariants] = useState(3)
+const [numVariants, setNumVariants] = useState(3)
   const [stepsPerVariant, setStepsPerVariant] = useState(25)
   const [numVariantsMode, setNumVariantsMode] = useState<'fixed' | 'auto'>('fixed')
   const [stepsPerVariantMode, setStepsPerVariantMode] = useState<'fixed' | 'auto'>('fixed')
@@ -478,7 +477,7 @@ function CreateSpaceModal({ onClose, onSuccess }: { onClose: () => void; onSucce
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ name, description, initialPrompt, useEmbeddings, useGpu, strictCodeGates, numVariants, stepsPerVariant, numVariantsMode, stepsPerVariantMode }),
+        body: JSON.stringify({ name, description, initialPrompt, useEmbeddings, useGpu, numVariants, stepsPerVariant, numVariantsMode, stepsPerVariantMode }),
       })
 
       if (!response.ok) {
@@ -649,22 +648,7 @@ function CreateSpaceModal({ onClose, onSuccess }: { onClose: () => void; onSucce
             </label>
           </div>
 
-          <div className="mb-6">
-            <label className="flex items-center gap-3 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={strictCodeGates}
-                onChange={(e) => setStrictCodeGates(e.target.checked)}
-                className="w-5 h-5 rounded border-dark-600 bg-dark-800 text-primary-600 focus:ring-primary-500"
-              />
-              <div>
-                <span className="font-medium">Strict Code Gates</span>
-                <p className="text-sm text-dark-400">Fail early-stage variants with no code indicators (Investigation, Proposition)</p>
-              </div>
-            </label>
-          </div>
-
-          <div className="flex gap-3">
+<div className="flex gap-3">
             <button
               type="button"
               onClick={onClose}
