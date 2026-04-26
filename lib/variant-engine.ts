@@ -215,18 +215,18 @@ Respond with just a number between 2-5.`
   // Discover relevant models before generating variants
   const discoveredModels = await searchModels(initialPrompt)
 
+  // If search finds models, include them as recommendations; otherwise say nothing about models
+  // This allows the agent to reason from the research goal alone, without hardcoded fallbacks
   const modelListSection = discoveredModels.length > 0
-    ? `\n\n## AVAILABLE MODELS FOR DOWNLOAD\nThe following HuggingFace models are available — use their download URLs in the downloads field if needed:\n${
-    discoveredModels.map(m => `- ${m.downloadUrl || m.url}  (${m.downloads?.toLocaleString() || 0} downloads, file: ${m.fileName || 'see URL'})`).join('\n')}
-`
-        : `
+    ? `
 
 ## AVAILABLE MODELS FOR DOWNLOAD
-Recommended diffusion models for ODE experiments (diffusion text models):
-- https://huggingface.co/GSAI-ML/LLaDA-8B-Base (8B diffusion LM)
-- https://huggingface.co/GSAI-ML/LLaDA-8B-Instruct (instruction-tuned)
-- For multi-model ODE experiments, load 2+ copies using from_pretrained with device_map="cuda"
+The following HuggingFace models are available — use their download URLs in the downloads field if needed:
+${
+    discoveredModels.map(m => `- ${m.downloadUrl || m.url}  (${m.downloads?.toLocaleString() || 0} downloads, file: ${m.fileName || 'see URL'})`).join('\n')}
 `
+    : ''
+
   for (let i = 0; i < numVariants; i++) {
     let name = `Variant ${i + 1}`
     let description = 'Exploration variant'
