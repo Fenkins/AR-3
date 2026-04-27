@@ -34,10 +34,60 @@ interface DiscoveredModel {
   tags?: string[]
 }
 
+
+/** Extract concise search keywords from a long research prompt for HF API */
+function extractSearchKeywords(prompt: string): string {
+  const promptLower = prompt.toLowerCase()
+  const results: string[] = []
+
+  // Extract concise search keywords for HuggingFace API.
+  // HF API searches model names, descriptions, tags. Only model-relevant terms help.
+  // Research concept terms (gasket, ode, latent) don't match HF metadata = 0 results.
+  // Known working terms: 'llada', 'base', 'diffusion' — these match LLaDA model metadata.
+  const lladaFound = promptLower.includes('llada')
+  const baseFound = promptLower.includes('base')
+  const diffusionFound = promptLower.includes('diffusion')
+
+  if (lladaFound || baseFound) {
+    // llada + base = perfect query for finding the base model on HF
+    // 'diffusion' is NOT added — it causes 0 results when ANDed with llada+base
+    if (lladaFound) results.push('llada')
+    if (baseFound) results.push('base')
+  }
+
+  if (results.length > 0) {
+    const joined = results.slice(0, 4).join(' ')  // max 4 terms to avoid over-ANDing
+    return joined.length > 60 ? joined.substring(0, 60) : joined
+  }
+
+  // Fallback: strip prompt to 3+ char words, filter stopwords, join
+  const stopwords = new Set([
+    'i', 'you', 'we', 'us', 'my', 'our', 'the', 'a', 'an', 'to', 'of', 'in', 'for', 'on',
+    'with', 'by', 'at', 'is', 'are', 'was', 'be', 'have', 'has', 'it', 'its', 'that',
+    'this', 'these', 'those', 'what', 'which', 'who', 'how', 'when', 'where', 'not',
+    'no', 'but', 'or', 'and', 'if', 'then', 'so', 'do', 'does', 'did', 'can', 'could',
+    'would', 'should', 'will', 'just', 'very', 'more', 'most', 'some', 'any', 'all',
+    'each', 'every', 'both', 'few', 'many', 'much', 'such', 'only', 'own', 'same',
+    'than', 'too', 'also', 'well', 'back', 'even', 'new', 'now', 'here', 'there',
+    'from', 'up', 'out', 'about', 'into', 'over', 'after', 'before', 'between',
+    'through', 'during', 'without', 'within', 'along', 'around', 'like', 'really',
+    'want', 'way', 'need', 'use', 'using', 'used', 'get', 'let', 'lets', 'fig'
+  ])
+  const words = prompt
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, ' ')
+    .split()
+    .filter(w => w.length >= 3 && !stopwords.has(w))
+    .slice(0, 15)
+  return words.join(' ').substring(0, 60) || 'diffusion language model'
+}
+
 /** Search HuggingFace for relevant models via direct internal search service call */
 async function searchModels(query: string, limit = 5): Promise<DiscoveredModel[]> {
+  const searchQuery = extractSearchKeywords(query)
+  console.log(`[searchModels] extracted query: "${searchQuery}"`)
   try {
-    const url = `http://127.0.0.1:4000/search?q=${encodeURIComponent(query)}&source=hf&limit=${limit}`
+    const url = `http://127.0.0.1:4000/search?q=${encodeURIComponent(searchQuery)}&source=hf&limit=${limit}`
     const res = await fetch(url, { signal: AbortSignal.timeout(15000) })
     if (!res.ok) {
       debugLog(`[searchModels] Search service returned ${res.status}`)
