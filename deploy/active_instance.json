@@ -1,0 +1,19 @@
+{
+  "instance_id": "36020930",
+  "contract_id": "36020930",
+  "ssh_host": "ssh1.vast.ai",
+  "ssh_port": "20930",
+  "public_ip": "220.82.52.202",
+  "machine_id": "45421",
+  "gpu_name": "RTX 3060",
+  "gpu_mem_gb": 12,
+  "dph_total": 0.037,
+  "geolocation": "South Korea, KR",
+  "api_key": "9633eb091df75ff2c2004b0a38646129600b602a074382e7df06a99ac00ad5a4",
+  "tunnel_url": "https://biographies-sold-explicit-masters.trycloudflare.com",
+  "status": "running",
+  "launched_at": 1777737289,
+  "admin_url": "https://biographies-sold-explicit-masters.trycloudflare.com",
+  "admin_email": "admin@example.com",
+  "admin_password": "jkp93p"
+}
