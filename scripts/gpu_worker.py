@@ -192,38 +192,46 @@ def extract_gpu_command(prompt: str) -> dict:
             return {"action": "run_python", "code": block_clean}
 
     # ── Strategy 4: Line-by-line code assembly ────────────────────────────────
+    # AGGRESSIVE: any line with 4+ spaces indentation and alphanumeric content is code
     lines = prompt.split('\n')
     code_lines = []
     in_code = False
     for raw_line in lines:
         stripped = raw_line.strip()
-        # Skip non-code lines
-        if (stripped.startswith('#')
-                or stripped.startswith('- ')
-                or stripped.startswith('* ')
-                or not stripped):
+        # Skip empty lines
+        if not stripped:
             if in_code:
                 in_code = False
             continue
-        if stripped.startswith('```') or stripped.startswith('{"'):
+        # Skip comment-only lines, markdown bullets
+        if stripped.startswith('#') or stripped.startswith('- ') or stripped.startswith('* '):
+            if in_code:
+                in_code = False
             continue
-        # Skip numbered list items (e.g. "1. We need to load..." or "1. Simulates...")
-        # unless they contain actual Python code (assignment, function call, import, etc.)
-        if re.match(r'^\d+\.\s+\w', stripped):
-            # Skip if line has NO Python indicators (no =, (, dot, keywords)
-            if not any(kw in stripped for kw in ['=', '(', '.', 'import ', 'from ', 'def ', 'class ', 'torch.', 'cuda.', 'tensor(', '.cuda()', '.to(', 'return ', 'for ']):
-                continue
-        # Skip lines containing non-ASCII characters (em-dash —, en-dash –, quotes, etc.)
-        # These are prose text from the LLM, not code
-        if any(ord(c) > 127 for c in stripped):
+        if stripped.startswith('```') or stripped.startswith('{'):
             continue
-        # Code indicators
+        # Skip numbered list items WITHOUT Python indicators (unless indented 4+ spaces)
+        # AGGRESSIVE: any indented line (4+ spaces) with alphanumeric content is potential code
+        leading_spaces = len(raw_line) - len(raw_line.lstrip())
+        if leading_spaces >= 4:
+            # Indented line — include it as code if it has alphanumeric content
+            if any(c.isalnum() for c in stripped):
+                in_code = True
+                code_lines.append(raw_line)
+                # Don't stop early — collect up to 50 lines
+                if len(code_lines) >= 50:
+                    break
+            continue
+        # UnIndented or lightly indented: only include if it has strong Python indicators
         if any(kw in stripped for kw in ['import ', 'from ', 'def ', 'class ',
                                          'torch.', 'cuda.', 'tensor(', '.cuda()', '.to(']):
             in_code = True
         if in_code:
             code_lines.append(raw_line)
+            if len(code_lines) >= 50:
+                break
         elif len(code_lines) > 0 and stripped:
+            # Light indentation — could be continuation
             if stripped.startswith('    ') or stripped.startswith('\t'):
                 code_lines.append(raw_line)
             elif len(code_lines) > 5:
@@ -232,7 +240,7 @@ def extract_gpu_command(prompt: str) -> dict:
     if code_lines:
         code = ''.join(c if ord(c) < 128 else '?' for c in '\n'.join(code_lines))
         if len(code) > 30:
-            log(f"Strategy 4: Assembled code lines, {len(code)} chars",
+            log(f"Strategy 4: Assembled {len(code_lines)} code lines, {len(code)} chars",
                 thread_id=threading.current_thread().name)
             return {"action": "run_python", "code": code}
 
@@ -331,6 +339,68 @@ torch.nn.Module.__getattr__ = _patched_getattr
 
 
 
+def auto_fix_code(code: str) -> str:
+    """Attempt to fix common SyntaxError/IndentationError issues in one pass."""
+    import re as re_module
+
+    fixed = code
+
+    # 1. Add missing colons after def/class/if/for/while/elif/else/try/except/finally/with
+    # Pattern: line ending with keyword followed by newline (no colon)
+    keyword_lines = re_module.compile(
+        r'^(\s*)(def |class |if |elif |else:|try:|except |finally:|with |for |while |async def |async class )',
+        re_module.MULTILINE
+    )
+    def add_colon(m):
+        text = m.group(2)
+        # Already has colon
+        if text.endswith(':'):
+            return m.group(1) + text
+        # if/elif/else/try/except/finally/with/for/while need colon
+        return m.group(1) + text + ':'
+    fixed = keyword_lines.sub(add_colon, fixed)
+
+    # 2. Fix missing closing parens/brackets/braces on lines
+    # Count open (, [, { and try to close them at end of line
+    lines = fixed.split('\n')
+    fixed_lines = []
+    for line in lines:
+        fixed_lines.append(line)
+        open_parens = line.count('(') - line.count(')')
+        open_brackets = line.count('[') - line.count(']')
+        open_braces = line.count('{') - line.count('}')
+        # If we opened more than we closed and line doesn't end with comma/backslash
+        if open_parens > 0 and not line.rstrip().endswith(('\\', ',', '+')):
+            fixed_lines[-1] += ')' * open_parens
+        if open_brackets > 0 and not line.rstrip().endswith(('\\', ',', '+')):
+            fixed_lines[-1] += ']' * open_brackets
+        if open_braces > 0 and not line.rstrip().endswith(('\\', ',', '+')):
+            fixed_lines[-1] += '}' * open_braces
+    fixed = '\n'.join(fixed_lines)
+
+    # 3. Fix common indentation errors: dedent lines that start with blank space after unindented line
+    # (i.e., fix "def foo():\npass\n  something" type issues)
+    lines = fixed.split('\n')
+    fixed_lines = []
+    prev_indented = False
+    for line in lines:
+        stripped = line.lstrip()
+        leading_spaces = len(line) - len(stripped)
+        # If we go from non-indented to indented without intermediate dedent
+        if stripped and leading_spaces > 0 and not prev_indented and fixed_lines:
+            prev_line = fixed_lines[-1].strip()
+            # Previous line was a colon-less header, add pass first
+            if prev_line and not prev_line.startswith('#') and not prev_line.startswith('return') and '(' not in prev_line and ')' not in prev_line:
+                # Check if last line looks like it needed a colon
+                if not prev_line.endswith(':'):
+                    pass  # already handled above
+        fixed_lines.append(line)
+        prev_indented = (leading_spaces > 0)
+    fixed = '\n'.join(fixed_lines)
+
+    return fixed
+
+
 def execute_python_code(code: str, timeout: int = DEFAULT_JOB_TIMEOUT) -> dict:
     """Execute Python code and return result/error."""
     log(f"Executing Python code ({len(code)} chars)",
@@ -346,7 +416,7 @@ def execute_python_code(code: str, timeout: int = DEFAULT_JOB_TIMEOUT) -> dict:
         code
     )
 
-    # ── Patch: Handle LLaDA transformers 5.x compatibility ───────────────────
+    # ── Patch: Handle LLaDA transformers 5.x compatibility ────────────────────
     # LLaDA's custom model code (modeling_llada.py) is missing `all_tied_weights_keys`
     # which breaks from_pretrained in transformers 5.5+. Patch torch.nn.Module to
     # return {} (empty dict) when that attribute is missing, instead of AttributeError.
@@ -390,6 +460,45 @@ torch.nn.Module.__getattr__ = _patched_getattr
                 'error': None,
             }
         else:
+            # Check for SyntaxError or IndentationError — try auto-fix once
+            stderr = result.stderr.strip()
+            if 'SyntaxError' in stderr or 'IndentationError' in stderr:
+                log(f"Syntax/IndentationError detected, attempting auto-fix",
+                    thread_id=threading.current_thread().name)
+                fixed_once = auto_fix_code(code)
+                if fixed_once != code:
+                    log(f"Auto-fix applied, retrying execution",
+                        thread_id=threading.current_thread().name)
+                    with open(code_file, 'w') as f:
+                        f.write(patch_wrapper + fixed_once)
+                    result = subprocess.run(
+                        ['python3', code_file],
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout,
+                        cwd='/tmp'
+                    )
+                    try:
+                        os.unlink(code_file)
+                    except Exception:
+                        pass
+                    if result.returncode == 0:
+                        return {
+                            'success': True,
+                            'output': result.stdout.strip(),
+                            'error': None,
+                        }
+                    else:
+                        return {
+                            'success': False,
+                            'output': result.stdout.strip(),
+                            'error': 'Auto-fix failed:\n' + stderr + '\n\nAfter auto-fix:\n' + result.stderr.strip(),
+                        }
+                return {
+                    'success': False,
+                    'output': result.stdout.strip(),
+                    'error': 'SyntaxError/IndentationError — auto-fix could not resolve:\n' + stderr,
+                }
             return {
                 'success': False,
                 'output': result.stdout.strip(),

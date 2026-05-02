@@ -24,6 +24,38 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+/**
+ * Check if text contains real executable Python code (not pseudocode).
+ * Returns true only if text has >=3 lines with code indicators:
+ * import, from, def, class, torch., cuda., tensor(, .cuda(), .to(, return, for, or assignment '='
+ */
+function check_is_real_code(text: string): boolean {
+  const lines = text.split('\n')
+  let codeLineCount = 0
+  for (const line of lines) {
+    const stripped = line.trim()
+    if (
+      stripped.includes('import ') ||
+      stripped.includes('from ') ||
+      stripped.includes('def ') ||
+      stripped.includes('class ') ||
+      stripped.includes('torch.') ||
+      stripped.includes('cuda.') ||
+      stripped.includes('tensor(') ||
+      stripped.includes('.cuda()') ||
+      stripped.includes('.to(') ||
+      stripped.includes('return ') ||
+      stripped.includes('for ') ||
+      // Assignment patterns: "x =", "x.y =", "x[y] =" but not "=="
+      (stripped.includes('=') && !stripped.startsWith('==') && !stripped.startsWith('!=') && !stripped.startsWith('<=') && !stripped.startsWith('>='))
+    ) {
+      codeLineCount++
+    }
+    if (codeLineCount >= 3) return true
+  }
+  return false
+}
+
 interface DiscoveredModel {
   id: string
   url: string
@@ -437,6 +469,14 @@ CRITICAL: You MUST generate AT LEAST ${numStepsTarget} steps. Replace ALL step p
           isAuto: false,
           status: 'PENDING',
         }))
+
+        // ── Pseudocode gate for Implementation/Testing stages ─────────────────────
+        // If the LLM response looks like pseudocode rather than real code, flag it
+        if ((stageConfig.name === 'Implementation' || stageConfig.name === 'Testing') && !check_is_real_code(content)) {
+          debugLog(`[generateVariants] PSEUDOCODE DETECTED in variant ${i + 1} (${stageConfig.name}), marking PENDING_REVIEW`)
+          ;(steps[0] as any).gradingWarning = 'Generated content appears to be pseudocode rather than executable code. Real code must contain imports, function definitions, or torch/tensor operations.'
+          steps[0].status = 'PENDING_REVIEW'
+        }
         break
       } else {
         debugLog(`[generateVariants] Variant ${i + 1} failed quality: content preview="${content.substring(0, 150).replace(/\n/g, ' ')}"`)

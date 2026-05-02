@@ -444,6 +444,27 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
     const useGpu = (space as any).useGpu ?? false
     if (currentStage.gpuEnabled && useGpu) {
       debugLog(`[executeResearchCycle] GPU-enabled stage, submitting LLM output to GPU worker`)
+
+      // ── Pre-execution code quality gate ─────────────────────────────────────────
+      // Count lines with code indicators before submitting to GPU
+      const codeIndicators = ['import ', 'from ', 'def ', 'class ', 'torch.', 'cuda.', 'tensor(', '.cuda()', '.to(', 'return ', 'for ', '=']
+      const responseLines = response.content.split('\n')
+      let codeLineCount = 0
+      for (const line of responseLines) {
+        const stripped = line.trim()
+        for (const indicator of codeIndicators) {
+          if (stripped.includes(indicator)) {
+            codeLineCount++
+            break
+          }
+        }
+      }
+      if (codeLineCount < 5) {
+        const warning = `\n\n[CODE QUALITY WARNING] LLM response contains only ${codeLineCount} lines with code indicators but stage is GPU-enabled. Response may be pseudocode. Got ${responseLines.length} total lines.`
+        debugLog(`[executeResearchCycle]${warning}`)
+        response.content += warning
+      }
+
       try {
         const gpuResponse = await fetch(`${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/api/jobs/gpu`, {
           method: 'POST',
@@ -1594,6 +1615,187 @@ async function processEvaluationResults(spaceId: string, content: string) {
 }
 
 /**
+ * Ensure all HuggingFace models required by variants are downloaded BEFORE GPU execution.
+ * 
+ * Flow:
+ * 1. Collect unique download URLs from all variants' cacheDownloads
+ * 2. For each unique URL, fire a POST to /api/model-cache (non-blocking download kickoff)
+ * 3. Poll GET /api/model-cache?spaceId=X&checkUrls=... until all COMPLETED/FAILED
+ * 4. If any URL fails or total time exceeds 10 minutes, mark those variants as FAILED
+ * 5. Proceed only when all downloads are confirmed COMPLETED (or skip failed ones with warning)
+ * 
+ * This prevents GPU worker from failing due to missing model files.
+ */
+async function ensureModelsDownloaded(
+  spaceId: string,
+  variants: Variant[],
+  gpuEnabled: boolean
+): Promise<{ failedVariants: string[]; failedUrls: string[] }> {
+  const failedVariants: string[] = []
+  const failedUrls: string[] = []
+
+  // Skip if no GPU or no variants need downloads
+  if (!gpuEnabled || variants.length === 0) return { failedVariants, failedUrls }
+
+  // Collect unique download URLs from all variants
+  const urlToFileNames = new Map<string, string[]>()
+  const urlToVariantIds = new Map<string, string[]>()
+
+  for (const variant of variants) {
+    if (!variant.cacheDownloads) continue
+    let downloads: Array<{ fileName: string; downloadUrl: string; description: string }>
+    try {
+      downloads = JSON.parse(variant.cacheDownloads)
+    } catch { continue }
+    if (!Array.isArray(downloads)) continue
+
+    for (const dl of downloads) {
+      if (!dl.downloadUrl || !dl.fileName) continue
+      // Skip obviously invalid HuggingFace URLs
+      const url = dl.downloadUrl
+      if (url.includes('huggingface.co/') && !url.match(/huggingface\.co\/[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+/)) {
+        debugLog(`[ensureModelsDownloaded] Skipping invalid URL: ${url}`)
+        continue
+      }
+      if (!urlToFileNames.has(url)) {
+        urlToFileNames.set(url, [])
+        urlToVariantIds.set(url, [])
+      }
+      const names = urlToFileNames.get(url)!
+      const ids = urlToVariantIds.get(url)!
+      if (!names.includes(dl.fileName)) names.push(dl.fileName)
+      if (!ids.includes(variant.id)) ids.push(variant.id)
+    }
+  }
+
+  if (urlToFileNames.size === 0) {
+    debugLog(`[ensureModelsDownloaded] No downloads needed for space ${spaceId}`)
+    return { failedVariants, failedUrls }
+  }
+
+  const uniqueUrls = Array.from(urlToFileNames.keys())
+  debugLog(`[ensureModelsDownloaded] Need to download ${uniqueUrls.length} unique URLs for ${variants.length} variant(s)`)
+
+  const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000'
+
+  // Step 1: Kick off downloads via POST (non-blocking)
+  // We send to the local addToCache directly (same process) for synchronous download
+  // because the API route would fork a new process that can't easily report errors back.
+  // Instead, we POST to the API which creates a DB entry (DOWNLOADING), then we poll.
+  // For actual download, we use the local addToCache which does the sync download.
+  const { addToCache } = await import('./model-cache')
+
+  const downloadPromises: Array<{ url: string; promise: Promise<any>; variantIds: string[] }> = []
+
+  for (const url of uniqueUrls) {
+    const fileNames = urlToFileNames.get(url)!
+    const variantIds = urlToVariantIds.get(url)!
+
+    // Create a DB entry via POST to the API (creates DOWNLOADING entry)
+    let dbEntryId: string | null = null
+    try {
+      const postRes = await fetch(`${baseUrl}/api/model-cache`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          spaceId,
+          fileName: fileNames[0], // Use first filename as primary
+          downloadUrl: url,
+          description: `Pre-download for GPU execution (${variantIds.length} variant(s))`,
+        }),
+      })
+      if (postRes.ok) {
+        const data = await postRes.json()
+        dbEntryId = data.entry?.id || null
+      }
+    } catch (err: any) {
+      debugLog(`[ensureModelsDownloaded] Failed to create cache entry for ${url}: ${err.message}`)
+    }
+
+    // Kick off the actual download via local addToCache (synchronous, will update DB status)
+    const dlPromise = (async () => {
+      try {
+        await addToCache({
+          spaceId,
+          fileName: fileNames[0],
+          downloadUrl: url,
+          description: `Pre-download for GPU execution`,
+        })
+        debugLog(`[ensureModelsDownloaded] Download complete: ${url}`)
+      } catch (err: any) {
+        debugLog(`[ensureModelsDownloaded] Download failed for ${url}: ${err.message}`)
+        failedUrls.push(url)
+        // Mark affected variants as FAILED
+        for (const vid of variantIds) {
+          if (!failedVariants.includes(vid)) failedVariants.push(vid)
+        }
+      }
+    })()
+
+    downloadPromises.push({ url, promise: dlPromise, variantIds })
+  }
+
+  // Step 2: Wait for all downloads with polling
+  const TIMEOUT_MS = 10 * 60 * 1000 // 10 minutes
+  const POLL_INTERVAL_MS = 10000 // 10 seconds
+  const startTime = Date.now()
+
+  // Wait for all download promises to settle (resolve or reject)
+  await Promise.allSettled(downloadPromises.map(d => d.promise))
+
+  // Step 3: Poll to confirm all DB entries are COMPLETED (in case addToCache returned before DB update)
+  debugLog(`[ensureModelsDownloaded] Waiting for DB status to reflect COMPLETED...`)
+
+  while (Date.now() - startTime < TIMEOUT_MS) {
+    const checkUrls = uniqueUrls.join(',')
+    try {
+      const pollRes = await fetch(`${baseUrl}/api/model-cache?spaceId=${encodeURIComponent(spaceId)}&checkUrls=${encodeURIComponent(checkUrls)}`)
+      if (pollRes.ok) {
+        const data = await pollRes.json()
+        const statuses = data.statuses as Record<string, string>
+
+        const allDone = uniqueUrls.every(url => {
+          const status = statuses[url] || 'NOT_FOUND'
+          return status === 'COMPLETED' || status === 'FAILED'
+        })
+
+        if (allDone) {
+          // Check for any FAILED
+          for (const url of uniqueUrls) {
+            const status = statuses[url] || 'NOT_FOUND'
+            if (status === 'FAILED') {
+              failedUrls.push(url)
+              const variantIds = urlToVariantIds.get(url) || []
+              for (const vid of variantIds) {
+                if (!failedVariants.includes(vid)) failedVariants.push(vid)
+              }
+            }
+          }
+
+          if (failedUrls.length > 0) {
+            debugLog(`[ensureModelsDownloaded] Some downloads FAILED: ${failedUrls.join(', ')}`)
+          } else {
+            debugLog(`[ensureModelsDownloaded] All ${uniqueUrls.length} downloads confirmed COMPLETED`)
+          }
+          break
+        }
+      }
+    } catch (err: any) {
+      debugLog(`[ensureModelsDownloaded] Polling error: ${err.message}`)
+    }
+
+    await sleep(POLL_INTERVAL_MS)
+  }
+
+  // Timeout check
+  if (Date.now() - startTime >= TIMEOUT_MS) {
+    debugLog(`[ensureModelsDownloaded] WARNING: Download timeout after 10 minutes — proceeding anyway`)
+  }
+
+  return { failedVariants, failedUrls }
+}
+
+/**
  * Process cacheDownloads for a variant -- fetch models/datasets referenced in the plan.
  * Calls POST /api/model-cache for each download URL. Failures are non-fatal.
  */
@@ -2617,10 +2819,51 @@ export async function executeVariantCycle(spaceId: string, variantId: string) {
   const stage = stages.find(s => s.id === variant.stageId)
   if (!stage) throw new Error('Stage not found')
 
-  // Process cache downloads (models/datasets) before execution begins
-  // If downloads fail, mark variant as FAILED rather than throwing (allows pipeline to advance)
+  // Process cache downloads (models/datasets) before execution begins.
+  // For GPU-enabled stages: use ensureModelsDownloaded which BLOCKS until downloads complete
+  // (or timeout after 10 min). This prevents GPU worker from failing on missing models.
+  // For non-GPU stages: use non-blocking processVariantCacheDownloads (failures non-fatal).
+  const useGpu = stage.gpuEnabled && ((space as any).useGpu ?? false)
   try {
-    await processVariantCacheDownloads(variant, spaceId)
+    if (useGpu) {
+      // ensureModelsDownloaded collects downloads from ALL pending variants for this stage
+      // and waits for them to complete before returning.
+      const stageVariants = state.variants.filter(v => v.stageId === stage.id && v.status === 'PENDING')
+      const { failedVariants, failedUrls } = await ensureModelsDownloaded(spaceId, stageVariants, useGpu)
+
+      if (failedUrls.length > 0) {
+        // Some downloads failed — mark those variants as FAILED immediately
+        const errorMsg = `Model download failed: ${failedUrls.join(', ')}`
+        debugLog(`[executeVariantCycle] Model pre-download FAILED for space ${spaceId}: ${errorMsg}`)
+
+        for (const vid of failedVariants) {
+          const failedVar = state.variants.find(v => v.id === vid)
+          if (!failedVar) continue
+          const updatedFailed = { ...failedVar, status: 'FAILED' as const, feedback: errorMsg }
+          const varUpdates = state.variants.map(v => v.id === vid ? updatedFailed : v)
+          updateExecutionState(spaceId, { variants: varUpdates })
+          try {
+            await prisma.variant.update({ where: { id: vid }, data: { status: 'FAILED', feedback: errorMsg } })
+          } catch {}
+          // Remove from pending variants list so pipeline moves on
+          const remaining = state.variants.filter(v => v.id !== vid)
+          updateExecutionState(spaceId, { variants: remaining })
+        }
+
+        debugLog(`[executeVariantCycle] ${failedVariants.length} variant(s) marked FAILED due to download failure — continuing pipeline`)
+        // Return a minimal failed result so executeResearchCycle can continue
+        return {
+          ...variant,
+          status: 'FAILED' as const,
+          feedback: errorMsg,
+        }
+      }
+
+      debugLog(`[executeVariantCycle] All model downloads confirmed for stage ${stage.name}`)
+    } else {
+      // Non-GPU stage: use original non-blocking download (failures non-fatal)
+      await processVariantCacheDownloads(variant, spaceId)
+    }
   } catch (err: any) {
     debugLog(`[executeVariantCycle] Download processing failed for ${variant.name}: ${err.message}`)
     const failedVariant = { ...variant, status: 'FAILED' as const, feedback: `Download failed: ${err.message}` }

@@ -14,6 +14,7 @@ export interface CacheEntry {
   downloadUrl?: string | null
   checksum?: string | null
   description?: string | null
+  status: 'DOWNLOADING' | 'COMPLETED' | 'FAILED'
   createdAt: Date
 }
 
@@ -108,6 +109,10 @@ print(path)
       }
     } catch (err) {
       console.error(`[ModelCache] Download failed for ${downloadUrl}:`, err)
+      // Mark entry as FAILED in DB so polling can detect it
+      try {
+        await prisma.modelCache.update({ where: { id: entry.id }, data: { status: 'FAILED' } })
+      } catch {}
       throw new Error(`Failed to download from ${downloadUrl}`)
     }
   }
@@ -124,7 +129,7 @@ print(path)
     }
   }
   
-  // Save to database
+  // Save to database with DOWNLOADING status
   const entry = await prisma.modelCache.create({
     data: {
       spaceId,
@@ -134,12 +139,20 @@ print(path)
       downloadUrl: downloadUrl || null,
       checksum,
       description: description || null,
+      status: 'DOWNLOADING',
     },
   })
-  
+
+  // Mark as COMPLETED after successful download (model repos skip the file existence check)
+  const isModelRepo = downloadUrl?.includes('huggingface.co') && !downloadUrl.includes('/resolve/') && !downloadUrl.includes('/blob/')
+  if (isModelRepo || (fs.existsSync(filePath) && !fs.statSync(filePath).isDirectory())) {
+    await prisma.modelCache.update({ where: { id: entry.id }, data: { status: 'COMPLETED' } })
+  }
+
   return {
     ...entry,
     fileSize: Number(entry.fileSize),
+    status: 'COMPLETED' as const,
   }
 }
 
@@ -152,6 +165,7 @@ export async function getSpaceCache(spaceId: string): Promise<CacheEntry[]> {
   return entries.map(e => ({
     ...e,
     fileSize: Number(e.fileSize),
+    status: (e.status as 'DOWNLOADING' | 'COMPLETED' | 'FAILED') || 'DOWNLOADING',
   }))
 }
 

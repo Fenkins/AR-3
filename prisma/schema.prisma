@@ -124,6 +124,7 @@ model ModelCache {
   downloadUrl String?
   checksum    String?
   description String?
+  status      String   @default("DOWNLOADING") // DOWNLOADING | COMPLETED | FAILED
   createdAt   DateTime @default(now())
   Space       Space    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
 
