@@ -214,8 +214,33 @@ def extract_gpu_command(prompt: str) -> dict:
         # AGGRESSIVE: any indented line (4+ spaces) with alphanumeric content is potential code
         leading_spaces = len(raw_line) - len(raw_line.lstrip())
         if leading_spaces >= 4:
-            # Indented line — include it as code if it has alphanumeric content
-            if any(c.isalnum() for c in stripped):
+            # SKIP: lines that look like markdown prose/doc strings, not Python code
+            _skip = False
+            _s_strip = stripped
+            # Skip long lines starting with quotes (likely doc strings in markdown)
+            if len(_s_strip) > 60 and _s_strip[0] in ('"', "'"):
+                _skip = True
+            # Skip numbered list items like "6. Uses actual tensor operations..." (both '.' and ')' formats)
+            if re_module.match(r'^\d+[.)]\s+[^=+\-|:]+$', _s_strip):
+                _skip = True
+            # Skip lines that look like parameter docs: "latent_dim  = 8192   (description)"
+            if re_module.match(r'^\s*[a-z_][a-z_0-9]*\s*=\s*\d+.*\([^)]*\)\s*$', _s_strip):
+                _skip = True
+            # Skip lines with only markdown-ish content (starts with quotes or parens)
+            if _s_strip and _s_strip[0] in ('(', '[', '{') and not any(k in _s_strip for k in ('torch.', 'nn.', 'F.', 'self.', '=')):
+                _skip = True
+            # Additional markdown prose skip patterns
+            if '    ' in raw_line and ':' in stripped and '(' not in stripped and '=' not in stripped and '->' not in stripped:
+                if not any(k in stripped for k in ('torch.', 'nn.', 'F.', 'self.', 'def ', 'class ', 'return ')):
+                    _skip = True
+            if '    ' in raw_line and stripped.startswith('(') and stripped.endswith(')'):
+                _skip = True
+            if re_module.match(r'^\s{4,}\w+\s*:\s*\w+\s*=\s*\S.*#.*$', raw_line):
+                _skip = True
+            if re_module.match(r'^\s*\|.*\|\s*$', stripped):
+                _skip = True
+
+            if not _skip and any(c.isalnum() for c in stripped):
                 in_code = True
                 code_lines.append(raw_line)
                 # Don't stop early — collect up to 50 lines
@@ -239,10 +264,69 @@ def extract_gpu_command(prompt: str) -> dict:
 
     if code_lines:
         code = ''.join(c if ord(c) < 128 else '?' for c in '\n'.join(code_lines))
+        code = strip_markdown_headers(code)
+        code_lines_final = [ln for ln in code.split(chr(10)) if ln.strip()
+                           and not re_module.match(r'^(#{1,6}\s|\*\*|\-\-\-|\d+\.\s+[A-Z])', ln.strip())]
+        code = chr(10).join(code_lines_final)
         if len(code) > 30:
-            log(f"Strategy 4: Assembled {len(code_lines)} code lines, {len(code)} chars",
-                thread_id=threading.current_thread().name)
-            return {"action": "run_python", "code": code}
+            # POST-PROCESSING VALIDATION GATE:
+            # Strategy 4 assembles indented lines that LOOK like Python but are actually
+            # markdown prose (doc strings, bullet descriptions). Reject if no real Python
+            # indicators are present, to prevent SyntaxError cascade from bad code.
+            indicators = ["import ", "from ", "def ", "class ", "torch.", "nn.", "F.",
+                         "cuda.", "tensor(", "self.", "return ", "for ", "while ",
+                         "if ", "else:", "try:", "except ", ".cpu()", ".cuda()",
+                         ".to(", "torch.nn", "torch.cuda", "= torch", "= [", "= {"]
+            n_ind = sum(1 for i in indicators if i in code)
+            has_sig = any(kw in code for kw in ["import ", "def ", "class ", "torch."])
+            if n_ind < 3 and not has_sig:
+                log(f"Strategy 4: ASSEMBLY REJECTED (n_ind={n_ind}<3, has_sig={has_sig}). "
+                    "Falling through to nvidia-smi fallback.",
+                    thread_id=threading.current_thread().name)
+            else:
+                # HEREDOC STRIP
+                _s4_lines = code.split('\n')
+                _s4_clean = []
+                for _ln in _s4_lines:
+                    _ls = _ln.strip()
+                    if _ls in ('PYEOF', 'EOF', 'PYTHON', 'BASH', 'MARKER'): continue
+                    if re_module.match(r"^'{3,}$", _ls) or re_module.match(r'^"{3,}$', _ls): continue
+                    if re_module.search(r'^\s*<<\s+["\']?[A-Z]+["\']?\s*$', _ln): continue
+                    _s4_clean.append(_ln)
+                code = '\n'.join(_s4_clean)
+
+                # AUTO-IMPORT for Strategy 4
+                if re_module.search(r'\bre\.[A-Za-z_][A-Za-z_0-9]*\b', code):
+                    if not any('import re' in c for c in _s4_clean[:5]):
+                        code = 'import re\n' + code
+                if re_module.search(r'\bnp\.[A-Za-z_][A-Za-z_0-9]*\b', code):
+                    if not any('import numpy' in c for c in _s4_clean[:5]):
+                        code = 'import numpy as np\n' + code
+                if re_module.search(r'\bplt\.[A-Za-z_][A-Za-z_0-9]*\b', code):
+                    if not any('import matplotlib' in c for c in _s4_clean[:5]):
+                        code = 'import matplotlib.pyplot as plt\n' + code
+
+                # EXPANDED VALIDATION GATE
+                indicators_s4 = ["import ", "from ", "def ", "class ", "torch.", "nn.", "F.",
+                                 "cuda.", "tensor(", "self.", "return ", "for ", "while ",
+                                 "if ", "else:", "try:", "except ", ".cpu()", ".cuda()",
+                                 ".to(", "torch.nn", "torch.cuda", "= torch", "= [", "= {",
+                                 "re.", "np.", "plt.", "dtype", "device", "shape", "grad"]
+                n_ind_s4 = sum(1 for i in indicators_s4 if i in code)
+                has_sig_s4 = any(kw in code for kw in ["import ", "def ", "class ", "torch.", "re.", "nn."])
+                if n_ind_s4 < 3 and not has_sig_s4:
+                    log(f"Strategy 4: ASSEMBLY REJECTED (n_ind_s4={n_ind_s4}<3, has_sig={has_sig_s4}). "
+                        "Falling through to nvidia-smi fallback.",
+                        thread_id=threading.current_thread().name)
+                elif 'PYEOF' in code or 'EOF' in code:
+                    log(f"Strategy 4: REJECTED -- heredoc markers still present after strip. "
+                        "Falling through to nvidia-smi fallback.",
+                        thread_id=threading.current_thread().name)
+                else:
+                    log(f"Strategy 4: Assembled {len(code_lines_final)} lines, {len(code)} chars "
+                        f"(indicators={n_ind_s4})",
+                        thread_id=threading.current_thread().name)
+                    return {"action": "run_python", "code": code}
 
     # ── Fallback: nvidia-smi diagnostic ─────────────────────────────────────
     log(f"WARNING: No valid GPU command found — falling back to nvidia-smi",
@@ -343,6 +427,7 @@ def auto_fix_code(code: str) -> str:
     """Attempt to fix common SyntaxError/IndentationError issues in one pass."""
     import re as re_module
 
+    # CRITICAL: init `fixed` BEFORE any closure referencing it (UnboundLocal bytecode bug)
     fixed = code
 
     # 1. Add missing colons after def/class/if/for/while/elif/else/try/except/finally/with
@@ -423,6 +508,8 @@ def execute_python_code(code: str, timeout: int = DEFAULT_JOB_TIMEOUT) -> dict:
     # This allows model loading to complete, then we clean up after.
     patch_wrapper = '''
 import torch
+import torch.nn as nn
+import re
 import builtins as _builtins
 _orig_getattr = torch.nn.Module.__getattr__
 def _patched_getattr(self, name, *args, **kwargs):
@@ -465,12 +552,15 @@ torch.nn.Module.__getattr__ = _patched_getattr
             if 'SyntaxError' in stderr or 'IndentationError' in stderr:
                 log(f"Syntax/IndentationError detected, attempting auto-fix",
                     thread_id=threading.current_thread().name)
-                fixed_once = auto_fix_code(code)
-                if fixed_once != code:
-                    log(f"Auto-fix applied, retrying execution",
+                fixed_once = auto_fix_code(fixed_code)
+                if fixed_once != fixed_code:
+                    log(f"Auto-fix applied (patch already in fixed_code), retrying execution",
                         thread_id=threading.current_thread().name)
                     with open(code_file, 'w') as f:
-                        f.write(patch_wrapper + fixed_once)
+                        # NOTE: fixed_code already has patch_wrapper prepended.
+                        # auto_fix_code was called on it, so fixed_once has both.
+                        # Write fixed_once directly — no need to re-add wrapper.
+                        f.write(fixed_once)
                     result = subprocess.run(
                         ['python3', code_file],
                         capture_output=True,
@@ -499,6 +589,49 @@ torch.nn.Module.__getattr__ = _patched_getattr
                     'output': result.stdout.strip(),
                     'error': 'SyntaxError/IndentationError — auto-fix could not resolve:\n' + stderr,
                 }
+            # Check for missing package — auto-install and retry once
+            if result.returncode != 0:
+                stderr = result.stderr.strip()
+                # Detect missing module: "ModuleNotFoundError: No module named 'foo'"
+                missing = re_module.search(r"No module named '(\w+)'", stderr)
+                if missing:
+                    pkg = missing.group(1)
+                    log(f"Missing module '{pkg}' detected, attempting pip install",
+                        thread_id=threading.current_thread().name)
+                    install_res = subprocess.run(
+                        ['python3', '-m', 'pip', 'install', pkg, '-q'],
+                        capture_output=True, text=True, timeout=120
+                    )
+                    if install_res.returncode == 0:
+                        log(f"Package '{pkg}' installed, retrying code execution",
+                            thread_id=threading.current_thread().name)
+                        # Write code file and retry
+                        with open(code_file, 'w') as f:
+                            f.write(fixed_code)
+                        result = subprocess.run(
+                            ['python3', code_file],
+                            capture_output=True, text=True,
+                            timeout=timeout, cwd='/tmp'
+                        )
+                        try:
+                            os.unlink(code_file)
+                        except Exception:
+                            pass
+                        if result.returncode == 0:
+                            return {
+                                'success': True,
+                                'output': result.stdout.strip(),
+                                'error': None,
+                            }
+                        else:
+                            return {
+                                'success': False,
+                                'output': result.stdout.strip(),
+                                'error': f'Failed even after installing {pkg}:\n' + result.stderr.strip(),
+                            }
+                    else:
+                        log(f"Failed to install '{pkg}': {install_res.stderr.strip()}",
+                            thread_id=threading.current_thread().name)
             return {
                 'success': False,
                 'output': result.stdout.strip(),
