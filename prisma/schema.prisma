@@ -85,7 +85,7 @@ model EmbeddingProvider {
   isActive    Boolean  @default(true)
   isDefault   Boolean  @default(false)
   createdAt   DateTime @default(now())
-  updatedAt   DateTime
+  updatedAt   DateTime @default(now()) @updatedAt
   User        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, provider])
@@ -110,7 +110,7 @@ model Experiment {
   userRating  String?
   cycleNumber Int      @default(1)
   createdAt   DateTime @default(now())
-  updatedAt   DateTime
+  updatedAt   DateTime @default(now()) @updatedAt
   Space       Space    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
   User        User?    @relation(fields: [userId], references: [id])
 }
@@ -268,6 +268,6 @@ model VariantStep {
   isAuto      Boolean  @default(true)
   autoConfig  String?
   createdAt   DateTime @default(now())
-  updatedAt   DateTime
+  updatedAt   DateTime @default(now()) @updatedAt
   Variant     Variant  @relation(fields: [variantId], references: [id], onDelete: Cascade)
 }
