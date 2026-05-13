@@ -3,7 +3,11 @@
 # Run this on your local machine to launch AR-1 on Vast.ai
 set -e
 
-API_KEY="${VAST_API_KEY:-5d2d46bd85397a2196ae40d659cfa52a6efd1e871d1377dd8b0631359115ae1e}"
+API_KEY="${VAST_API_KEY:-}"
+if [ -z "$API_KEY" ]; then
+    echo "❌ VAST_API_KEY environment variable is required"
+    exit 1
+fi
 SCRIPT_URL="https://raw.githubusercontent.com/Fenkins/AR-1/main/deploy/setup-with-tunnel.sh"
 
 echo "================================================================"
