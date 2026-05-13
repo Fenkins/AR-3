@@ -1,5 +1,6 @@
 import { prisma } from './prisma'
 import { callAI, AIConfig, AIResponse } from './ai'
+import { parseHuggingFaceDownloads } from './huggingface-utils'
 import fs from 'fs'
 
 const logFile = '/tmp/ar1_debug.log'
@@ -395,40 +396,15 @@ CRITICAL: You MUST generate AT LEAST ${numStepsTarget} steps. Replace ALL step p
       const descMatch = content.match(/^description:\s*([\s\S]+?)(?:^downloads:|^## |^step_|_metadata)/im)
       const parsedDesc = descMatch ? descMatch[1].trim() : ''
 
-      // Parse downloads — supports both HTTPS URLs and bare HuggingFace model IDs
+      // Parse downloads — supports both HTTPS URLs and bare HuggingFace model IDs.
+      // Guardrail: parser removes full URLs before looking for bare IDs, preventing
+      // fragments such as "model/resolve" and "main/file.safetensors" from being
+      // queued as bogus HuggingFace repos.
       const dlMatch = content.match(/^downloads:\s*([\s\S]+?)(?:^## STEPS|^step_|_steps)/im)
       if (dlMatch) {
         const dlText = dlMatch[1].trim()
         if (!/^none$/i.test(dlText)) {
-          // Match full HTTPS URLs that look like valid HuggingFace model file URLs
-          // Must contain huggingface.co/owner/model/...
-          const urlPattern = /https?:\/\/(?:www\.)?huggingface\.co\/[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+(?:\/[a-zA-Z0-9_.-]+)*/g
-          const urls = Array.from(dlText.matchAll(urlPattern), (m: RegExpMatchArray) => m[0])
-          for (const url of urls.slice(0, 5)) {
-            // Skip URL paths that are clearly not model files (e.g. /huggingface.co/LetsThink)
-            if (url.includes('/resolve/') || url.includes('/blob/')) {
-              const label = url.split('/').pop() || url
-              cacheDownloads.push({ fileName: label, downloadUrl: url, description: label })
-            } else if (url.match(/huggingface\.co\/[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/)) {
-              // Bare repo URL (no /resolve/) — treat as model repo, use snapshot_download
-              const modelId = url.replace('https://huggingface.co/', '')
-              cacheDownloads.push({ fileName: modelId.replace('/', '_'), downloadUrl: url, description: modelId })
-            }
-          }
-          // Also match bare HuggingFace model IDs (e.g. "GSAI-ML/LLaDA-8B-Base", "gpt2")
-          // Only match IDs that look like real model repos (owner/model format, owner is 2+ chars)
-          const modelIdPattern = /\b([a-zA-Z0-9][a-zA-Z0-9_.-]{1,50}\/[a-zA-Z0-9_.-]{1,100})\b/g
-          const seenIds = new Set(cacheDownloads.map(d => d.downloadUrl))
-          for (const m of dlText.matchAll(modelIdPattern)) {
-            const modelId = m[0]
-            // Skip garbage IDs containing URL-like parts
-            if (modelId.includes('huggingface.co') || modelId.includes('http') || modelId.includes('//')) continue
-            if (!seenIds.has(modelId)) {
-              seenIds.add(modelId)
-              const downloadUrl = 'https://huggingface.co/' + modelId
-              cacheDownloads.push({ fileName: modelId.split('/').pop(), downloadUrl, description: modelId })
-            }
-          }
+          cacheDownloads.push(...parseHuggingFaceDownloads(dlText, 5))
         }
       }
 

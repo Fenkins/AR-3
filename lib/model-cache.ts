@@ -1,4 +1,5 @@
 import { prisma } from './prisma'
+import { buildCurlDownloadInvocation, buildSnapshotDownloadInvocation, isHuggingFaceRepoUrl, modelIdFromHuggingFaceRepoUrl } from './huggingface-utils'
 import fs from 'fs'
 import path from 'path'
 import crypto from 'crypto'
@@ -73,30 +74,36 @@ export async function addToCache(options: AddCacheOptions): Promise<CacheEntry> 
 
   try {
     if (downloadUrl) {
-      const { execSync } = require('child_process')
+      const { execFileSync } = require('child_process')
       const isHfUrl = downloadUrl.includes('huggingface.co')
       const hfToken = isHfUrl ? await getHfToken() : ''
 
       // HuggingFace model repo URL (https://huggingface.co/owner/model): download the full snapshot
       // and persist the actual loadable snapshot path, not an invented cache path.
-      const isModelId = isHfUrl && !downloadUrl.includes('/resolve/') && !downloadUrl.includes('/blob/')
+      const isModelId = isHfUrl && isHuggingFaceRepoUrl(downloadUrl)
 
       if (isModelId) {
-        const modelId = downloadUrl.replace('https://huggingface.co/', '')
+        const modelId = modelIdFromHuggingFaceRepoUrl(downloadUrl)
         const spaceDir = getSpaceCacheDir(spaceId)
         if (!fs.existsSync(spaceDir)) fs.mkdirSync(spaceDir, { recursive: true })
-        const tokenEnv = hfToken ? `HF_TOKEN=${JSON.stringify(hfToken)} ` : ''
-        const cmd = `${tokenEnv}HF_HUB_CACHE=${JSON.stringify(spaceDir)} python3 -c "from huggingface_hub import snapshot_download; print(snapshot_download(repo_id=${JSON.stringify(modelId)}, local_files_only=False))"`
-        const output = execSync(cmd, { stdio: 'pipe', timeout: 300000 }).toString().trim()
+        const invocation = buildSnapshotDownloadInvocation(modelId, spaceDir, hfToken)
+        const output = execFileSync(invocation.command, invocation.args, {
+          stdio: 'pipe',
+          timeout: 300000,
+          env: { ...process.env, ...invocation.env },
+        }).toString().trim()
         const cachedPath = output.split('\n').pop()?.trim()
         if (!cachedPath) throw new Error(`snapshot_download produced no path for ${modelId}`)
         filePath = cachedPath
         fileSize = 1 // model repo; actual aggregate size is expensive to compute and not needed for loading
         console.log(`[ModelCache] Downloaded model ${modelId} to ${cachedPath}`)
       } else {
-        const authHeader = hfToken ? '-H ' + JSON.stringify('Authorization: Bearer ' + hfToken) : ''
-        const cmd = `curl -L ${authHeader} -o ${JSON.stringify(filePath)} ${JSON.stringify(downloadUrl)} 2>/dev/null`
-        execSync(cmd, { stdio: 'pipe', timeout: 300000 })
+        const invocation = buildCurlDownloadInvocation(downloadUrl, filePath, hfToken)
+        execFileSync(invocation.command, invocation.args, {
+          stdio: 'pipe',
+          timeout: 300000,
+          env: { ...process.env, ...invocation.env },
+        })
         if (!fs.existsSync(filePath)) throw new Error(`download did not create ${filePath}`)
         const stats = fs.statSync(filePath)
         fileSize = stats.size
