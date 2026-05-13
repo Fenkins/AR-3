@@ -1,5 +1,9 @@
 export type StrictGpuCommand = { action: 'run_python'; dependencies: string[]; code: string }
 
+export function shouldUseAutonomousPreparationFallback(stageName: string): boolean {
+  return ['Investigation', 'Planning'].includes(stageName)
+}
+
 type StrictGpuResult = { ok: true; command: StrictGpuCommand } | { ok: false; reason: string }
 
 type FallbackInput = {
@@ -99,7 +103,7 @@ function asPyTripleQuoted(value: string): string {
 }
 
 export function selectGpuSubmissionCommand(input: GpuSubmissionInput): GpuSubmissionResult {
-  const preparationStage = ['Investigation', 'Planning'].includes(input.stageName)
+  const preparationStage = shouldUseAutonomousPreparationFallback(input.stageName)
   if (preparationStage && input.manifestValidatedThisCycle) {
     const reason = 'preparation manifest validated; running autonomous preparation probe instead of submitting raw manifest JSON'
     return {
@@ -138,8 +142,7 @@ step_description = ${stepDescription}
 stage_name = ${stageName}
 contract_failure_reason = ${reason}
 workbench_root = Path(os.environ.get("AR3_WORKBENCH_ROOT", "/tmp/ar3-workbenches"))
-space_key = re.sub(r"[^a-zA-Z0-9_.-]+", "-", (research_goal[:80] or "general-research")).strip("-").lower()
-workbench = workbench_root / space_key
+workbench = Path(os.environ.get("AR3_WORKBENCH_DIR") or (workbench_root / "general-research"))
 workbench.mkdir(parents=True, exist_ok=True)
 
 def discover_model_ids(text):

@@ -76,7 +76,27 @@ function testPreparationStageWithValidatedManifestSubmitsExecutableFallbackInste
   assert.match(selected.reason, /preparation manifest/i)
 }
 
+function testAutonomousPreparationFallbackIsLimitedToPreparationStages() {
+  assert.equal(contract.shouldUseAutonomousPreparationFallback('Investigation'), true)
+  assert.equal(contract.shouldUseAutonomousPreparationFallback('Planning'), true)
+  assert.equal(contract.shouldUseAutonomousPreparationFallback('Implementation'), false)
+  assert.equal(contract.shouldUseAutonomousPreparationFallback('Testing'), false)
+}
+
+function testFallbackUsesWorkerProvidedWorkbenchDirectory() {
+  const fallback = contract.buildAutonomousPreparationCommand({
+    researchGoal: 'Any arbitrary model research goal',
+    stepDescription: 'Prepare reusable sandbox',
+    stageName: 'Planning',
+    reason: 'invalid model output',
+  })
+  assert.match(fallback.code, /AR3_WORKBENCH_DIR/)
+  assert.doesNotMatch(fallback.code, /research_goal\[:80\]/)
+}
+
 testExtractsJsonAfterUnclosedThink()
 testFallbackPreparationCommandIsExecutableAndPromptIndependent()
 testPreparationStageWithValidatedManifestSubmitsExecutableFallbackInsteadOfRawManifestJson()
+testAutonomousPreparationFallbackIsLimitedToPreparationStages()
+testFallbackUsesWorkerProvidedWorkbenchDirectory()
 console.log('strict gpu contract tests passed')

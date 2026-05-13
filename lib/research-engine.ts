@@ -3,7 +3,7 @@ import { callAI, AIConfig, AIMessage } from './ai'
 import { generateVariants, gradeVariant, selectBestVariant, saveVariantsToDatabase, updateVariantStepDb, updateVariantDb, selectBestVariantFromDb, loadVariantsFromDb, reEvaluateStepCount, Variant, Step } from './variant-engine'
 import { buildEmbeddingContext } from './embeddings'
 import { addToCache } from './model-cache'
-import { buildAutonomousPreparationCommand, extractStrictGpuCommand, selectGpuSubmissionCommand } from './gpu-command-contract'
+import { buildAutonomousPreparationCommand, extractStrictGpuCommand, selectGpuSubmissionCommand, shouldUseAutonomousPreparationFallback } from './gpu-command-contract'
 import { buildPreparationManifestInstructions, buildPreparationRetryMessage, extractPreparationManifestCandidate, validatePreparationManifest } from './preparation-manifest'
 import fs from 'fs'
 
@@ -870,6 +870,20 @@ ${useGpu ? STRICT_GPU_CODE_CONTRACT : 'Execute this step and provide concrete re
 
         if (!strictCommand.ok) {
           const strictReason = (strictCommand as { ok: false; reason: string }).reason
+          if (!shouldUseAutonomousPreparationFallback(stageName)) {
+            const failure = `[GPU CONTRACT FAILED]: ${strictReason}\n\nThe ${stageName} stage must return executable JSON {"action":"run_python","dependencies":[],"code":"..."}. Autonomous preparation fallback is intentionally limited to Investigation/Planning so prose or pseudocode cannot be recorded as a completed GPU experiment.`
+            debugLog(`[executeVariant] Strict GPU code contract failed after ${strictAttempts + 1} attempt(s); failing ${stageName} step without fallback: ${strictReason}`)
+            step.status = 'FAILED'
+            step.result = failure
+            step.grade = 0
+            await updateVariantStepDb(step.id, {
+              result: failure,
+              grade: 0,
+              status: 'FAILED',
+            })
+            variant.failureMode = 'GPU_CONTRACT_INVALID_OUTPUT'
+            continue
+          }
           debugLog(`[executeVariant] Strict GPU code contract failed after ${strictAttempts + 1} attempt(s); submitting autonomous preparation fallback: ${strictReason}`)
           strictCommand = {
             ok: true,
