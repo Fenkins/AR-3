@@ -108,7 +108,7 @@ function extractSearchKeywords(prompt: string): string {
   const words = prompt
     .toLowerCase()
     .replace(/[^a-z0-9 ]/g, ' ')
-    .split()
+    .split(/\s+/)
     .filter(w => w.length >= 3 && !stopwords.has(w))
     .slice(0, 15)
   return words.join(' ').substring(0, 60) || 'diffusion language model'

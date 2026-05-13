@@ -328,12 +328,12 @@ def extract_gpu_command(prompt: str) -> dict:
                         thread_id=threading.current_thread().name)
                     return {"action": "run_python", "code": code}
 
-    # ── Fallback: nvidia-smi diagnostic ─────────────────────────────────────
-    log(f"WARNING: No valid GPU command found — falling back to nvidia-smi",
+    # ── No valid GPU command: fail fast instead of masking bad model output as nvidia-smi success ──
+    log(f"ERROR: No valid GPU command found — refusing nvidia-smi fallback for research jobs",
         thread_id=threading.current_thread().name)
     log(f"  Prompt preview (200 chars): {prompt[:200]}",
         thread_id=threading.current_thread().name)
-    return {"action": "nvidia_smi"}
+    return {"action": "invalid", "error": "No executable GPU command found. Expected JSON {action:'run_python', code:'...'} with real Python code."}
 
 
 

@@ -41,6 +41,57 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+
+const STRICT_GPU_CODE_CONTRACT = `
+
+GPU OUTPUT CONTRACT (MANDATORY)
+Return ONLY a single JSON object, no markdown, no prose, no <think> tags:
+{"action":"run_python","dependencies":["package-or-pip-spec"],"code":"<complete executable Python>"}
+
+The code must be self-contained for this step, must import its dependencies, must print measurable outputs, and must not contain placeholders or pseudocode. If a model is needed, use the loadable paths from Model Cache context when present; otherwise write a short smoke-test that discovers/validates the missing requirement and fails clearly.
+`
+
+type StrictGpuCommand = { action: 'run_python'; dependencies: string[]; code: string }
+
+function stripCodeFence(text: string): string {
+  return text.trim().replace(/^```(?:json|python)?\s*/i, '').replace(/```$/i, '').trim()
+}
+
+function extractStrictGpuCommand(text: string): { ok: true; command: StrictGpuCommand } | { ok: false; reason: string } {
+  const cleaned = stripCodeFence(text.replace(/<thought>[\s\S]*?<\/thought>/gi, '').replace(/<think>[\s\S]*?<\/think>/gi, ''))
+  const candidates: string[] = [cleaned]
+  const jsonBlock = text.match(/```json\s*([\s\S]*?)```/i)
+  if (jsonBlock?.[1]) candidates.push(jsonBlock[1].trim())
+  const objectMatch = cleaned.match(/\{[\s\S]*\}/)
+  if (objectMatch?.[0]) candidates.push(objectMatch[0])
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate)
+      const code = typeof parsed?.code === 'string' ? parsed.code.trim() : ''
+      if (parsed?.action !== 'run_python') return { ok: false, reason: 'JSON action must be "run_python"' }
+      if (!code) return { ok: false, reason: 'JSON is missing non-empty code string' }
+      const codeLines = code.split('\n').map((l: string) => l.trim()).filter(Boolean)
+      const hasPython = /(^|\n)\s*(import |from |def |class |for |while |try:|with |print\(|[A-Za-z_][A-Za-z0-9_]*\s*=)/m.test(code)
+      const hasMeasurableOutput = /print\(|json\.dump|json\.dumps|logging\./.test(code)
+      const hasPlaceholder = /TODO|pass\s*(#|$)|pseudocode|your code here|placeholder|\.\.\./i.test(code)
+      if (codeLines.length < 5) return { ok: false, reason: `code too short (${codeLines.length} non-empty lines)` }
+      if (!hasPython) return { ok: false, reason: 'code lacks Python syntax indicators' }
+      if (!hasMeasurableOutput) return { ok: false, reason: 'code must print/log measurable outputs' }
+      if (hasPlaceholder) return { ok: false, reason: 'code contains placeholder/pseudocode markers' }
+      return { ok: true, command: { action: 'run_python', dependencies: Array.isArray(parsed.dependencies) ? parsed.dependencies.map(String).slice(0, 20) : [], code } }
+    } catch {}
+  }
+  return { ok: false, reason: 'response did not parse as the required JSON object' }
+}
+
+function buildStrictGpuRetryMessage(stepDescription: string, reason: string, previous: string): AIMessage {
+  return {
+    role: 'user',
+    content: `Your previous response was rejected before GPU execution. Reason: ${reason}\n\nStep: ${stepDescription}\n\nReturn ONLY valid JSON matching this exact schema, with complete executable Python and measurable print outputs:\n{"action":"run_python","dependencies":[],"code":"..."}\n\nRejected response preview:\n${previous.substring(0, 1800)}`,
+  }
+}
+
 export interface SpaceExecutionState {
   spaceId: string
   isRunning: boolean
@@ -753,7 +804,7 @@ Research Goal: ${space.initialPrompt}
 ## Prior Stage Results (for scope detection)
 ${space.Experiment.slice(0, 8).map((e: any) => `[${e.phase || e.stageName || 'experiment'}]: ${(e.result || e.response || '').substring(0, 800)}`).join('\n\n')}
 
-Execute this step and provide concrete results. Be concise -- focus on findings and deliverables.` },
+${useGpu ? STRICT_GPU_CODE_CONTRACT : 'Execute this step and provide concrete results. Be concise -- focus on findings and deliverables.'}` },
     ]
 
     try {
@@ -764,7 +815,31 @@ Execute this step and provide concrete results. Be concise -- focus on findings 
         debugLog(`[executeVariant] GPU stage "${stageName}", calling AI then submitting to GPU worker`)
         response = await callAI(agentConfig, messages)
 
-        // Submit LLM output to GPU worker for execution
+        // Strict pre-submit contract: weak models must repair invalid prose/pseudocode before GPU time is spent.
+        let strictCommand = extractStrictGpuCommand(response.content)
+        let strictAttempts = 0
+        while (!strictCommand.ok && strictAttempts < 2) {
+          strictAttempts++
+          const strictReason = (strictCommand as { ok: false; reason: string }).reason
+          debugLog(`[executeVariant] Strict GPU code contract failed for "${stageName}" step "${step.name}": ${strictReason}; retry ${strictAttempts}/2`)
+          response = await callAI(agentConfig, [...messages, buildStrictGpuRetryMessage(step.description, strictReason, response.content)])
+          strictCommand = extractStrictGpuCommand(response.content)
+        }
+
+        if (!strictCommand.ok) {
+          const strictReason = (strictCommand as { ok: false; reason: string }).reason
+          const failure = `[GPU CONTRACT FAILED]: ${strictReason}. The implementer did not return executable JSON/Python after ${strictAttempts + 1} attempt(s).`
+          step.status = 'FAILED'
+          step.result = `${failure}\n\nLast output preview:\n${response.content.substring(0, 1500)}`
+          step.grade = 0
+          await updateVariantStepDb(step.id, { result: step.result, grade: 0, status: 'FAILED' })
+          variant.failureMode = 'GPU_CONTRACT_FAILED'
+          continue
+        }
+
+        response.content = JSON.stringify(strictCommand.command)
+
+        // Submit validated LLM output to GPU worker for execution
         try {
           const gpuResponse = await fetch(`${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/api/jobs/gpu`, {
             method: 'POST',
@@ -793,12 +868,12 @@ Execute this step and provide concrete results. Be concise -- focus on findings 
               if (statusRes.ok) {
                 const statusData = await statusRes.json()
                 if (statusData.status === 'completed') {
-                  const jobId = statusData.result.jobId || jobId
+                  const completedJobId = statusData.result.jobId || jobId
                   const code = statusData.result.code || ''
                   const codeBlock = code ? `\n[CODE]\n${code}\n[/CODE]` : ''
                   gpuResult = statusData.result.success
-                    ? `[GPU Execution Result] job:${jobId}${codeBlock}\n${statusData.result.output}`
-                    : `[GPU Execution Error] job:${jobId}: ${statusData.result.error}${codeBlock}`
+                    ? `[GPU Execution Result] job:${completedJobId}${codeBlock}\n${statusData.result.output}`
+                    : `[GPU Execution Error] job:${completedJobId}: ${statusData.result.error}${codeBlock}`
                   debugLog(`[executeVariant] GPU job completed`)
                   break
                 } else if (statusData.status === 'failed') {
@@ -829,10 +904,10 @@ Execute this step and provide concrete results. Be concise -- focus on findings 
       // After GPU execution, check if the LLM output was a thinking block vs real Python code.
       // If the thinking block contains numbered lists but no real Python imports/functions,
       // this means code extraction failed and we got thinking instead of code.
-      const gpuResultMatch = response.content.match(/\[GPU (Error|Result)\]:\s*([^\[]*)/i)
+      const gpuResultMatch = response.content.match(/\[GPU (?:Execution )?(Error|Result)\](?::|\s*)\s*([^\[]*)/i)
       const gpuResultText = gpuResultMatch ? gpuResultMatch[2].trim() : ''
-      const hasGpuError = /\[GPU Error\]:/.test(response.content)
-      const hasGpuResult = /\[GPU Result\]:/.test(response.content) && gpuResultText.length > 10
+      const hasGpuError = /\[GPU (?:Execution )?Error\]/.test(response.content)
+      const hasGpuResult = /\[GPU (?:Execution )?Result\]/.test(response.content) && gpuResultText.length > 10
 
       if (stageName === 'Implementation' && useGpu) {
         // Check for indicators that thinking was stored instead of real code

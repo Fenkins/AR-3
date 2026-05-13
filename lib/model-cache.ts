@@ -51,108 +51,87 @@ function ensureSpaceDir(spaceId: string): void {
 
 export async function addToCache(options: AddCacheOptions): Promise<CacheEntry> {
   const { spaceId, fileName, downloadUrl, description, expectedChecksum } = options
-  
+
   ensureSpaceDir(spaceId)
-  const filePath = path.join(getSpaceCacheDir(spaceId), fileName)
-  
+  let filePath = path.join(getSpaceCacheDir(spaceId), fileName)
   let fileSize = 0
-  
-  // If downloadUrl provided, download the file
-  if (downloadUrl) {
-    const { execSync } = require('child_process')
-    try {
-      const isHfUrl = downloadUrl.includes('huggingface.co')
-      const hfToken = isHfUrl ? await getHfToken() : ''
-
-      // Check if this is a HuggingFace model ID (e.g. "gpt2", "llada-8b") vs a direct file URL
-      const isModelId = isHfUrl && !downloadUrl.includes('/resolve/') && !downloadUrl.includes('/blob/')
-
-      if (isModelId) {
-        // Use huggingface_hub snapshot_download for full model repo download
-        // Set HF_HUB_CACHE so download goes directly to our space cache
-        const modelId = downloadUrl.replace('https://huggingface.co/', '')
-        const spaceDir = getSpaceCacheDir(spaceId)
-        if (!fs.existsSync(spaceDir)) fs.mkdirSync(spaceDir, { recursive: true })
-        const tokenEnv = hfToken ? `HF_TOKEN=${hfToken}` : ''
-        const cmd = `${tokenEnv} HF_HUB_CACHE=${spaceDir} python3 -c "
-from huggingface_hub import snapshot_download
-path = snapshot_download(repo_id='${modelId}', local_files_only=False)
-print(path)
-"`
-        try {
-          const output = execSync(cmd, { stdio: 'pipe', timeout: 300000 }).toString().trim()
-          const cachedPath = output.split('\n').pop().trim()
-          // cachedPath is like: /space_cache/models--Qwen--Qwen2.5-1.5B/snapshots/<hash>/
-          // The model repo root (with config.json, model.safetensors) is:
-          //   /space_cache/models--Qwen--Qwen2.5-1.5B/snapshots/<hash>/
-          // We store this path as the "file path" so GPU code can load directly from it.
-          // The structure mirrors standard HF cache: owner/model/snapshots/hash/ files
-          const destModelDir = path.join(spaceDir, modelId.replace('/', '_'))
-          if (!fs.existsSync(destModelDir)) {
-            fs.mkdirSync(destModelDir, { recursive: true })
-          }
-          fileSize = 1  // Model repo — size tracked separately
-          console.log(`[ModelCache] Downloaded model ${modelId} to ${cachedPath}`)
-        } catch (err: any) {
-          console.error(`[ModelCache] snapshot_download failed for ${modelId}:`, err.message)
-          throw new Error(`Failed to download model ${modelId}: ${err.message}`)
-        }
-      } else {
-        // Direct file URL — use curl with auth header
-        const authHeader = hfToken ? `-H "Authorization: Bearer ${hfToken}"` : ''
-        const cmd = `curl -L ${authHeader} -o "${filePath}" "${downloadUrl}" 2>/dev/null`
-        execSync(cmd, { stdio: 'pipe', timeout: 300000 })
-        if (fs.existsSync(filePath)) {
-          const stats = fs.statSync(filePath)
-          fileSize = stats.size
-        }
-      }
-    } catch (err) {
-      console.error(`[ModelCache] Download failed for ${downloadUrl}:`, err)
-      // Mark entry as FAILED in DB so polling can detect it
-      try {
-        await prisma.modelCache.update({ where: { id: entry.id }, data: { status: 'FAILED' } })
-      } catch {}
-      throw new Error(`Failed to download from ${downloadUrl}`)
-    }
-  }
-  
-  // Calculate checksum if file exists and is a file (not a directory/model repo)
   let checksum: string | null = null
-  if (fs.existsSync(filePath) && !fs.statSync(filePath).isDirectory()) {
-    const fileBuffer = fs.readFileSync(filePath)
-    checksum = crypto.createHash('sha256').update(fileBuffer).digest('hex')
 
-    if (expectedChecksum && checksum !== expectedChecksum) {
-      fs.unlinkSync(filePath)
-      throw new Error(`Checksum mismatch for ${fileName}: expected ${expectedChecksum}, got ${checksum}`)
-    }
-  }
-  
-  // Save to database with DOWNLOADING status
+  // Create the DB row before any network work so callers can poll DOWNLOADING/FAILED/COMPLETED.
   const entry = await prisma.modelCache.create({
     data: {
       spaceId,
       fileName,
       filePath,
-      fileSize: fileSize,
+      fileSize: 0,
       downloadUrl: downloadUrl || null,
-      checksum,
+      checksum: null,
       description: description || null,
-      status: 'DOWNLOADING',
+      status: downloadUrl ? 'DOWNLOADING' : 'COMPLETED',
     },
   })
 
-  // Mark as COMPLETED after successful download (model repos skip the file existence check)
-  const isModelRepo = downloadUrl?.includes('huggingface.co') && !downloadUrl.includes('/resolve/') && !downloadUrl.includes('/blob/')
-  if (isModelRepo || (fs.existsSync(filePath) && !fs.statSync(filePath).isDirectory())) {
-    await prisma.modelCache.update({ where: { id: entry.id }, data: { status: 'COMPLETED' } })
-  }
+  try {
+    if (downloadUrl) {
+      const { execSync } = require('child_process')
+      const isHfUrl = downloadUrl.includes('huggingface.co')
+      const hfToken = isHfUrl ? await getHfToken() : ''
 
-  return {
-    ...entry,
-    fileSize: Number(entry.fileSize),
-    status: 'COMPLETED' as const,
+      // HuggingFace model repo URL (https://huggingface.co/owner/model): download the full snapshot
+      // and persist the actual loadable snapshot path, not an invented cache path.
+      const isModelId = isHfUrl && !downloadUrl.includes('/resolve/') && !downloadUrl.includes('/blob/')
+
+      if (isModelId) {
+        const modelId = downloadUrl.replace('https://huggingface.co/', '')
+        const spaceDir = getSpaceCacheDir(spaceId)
+        if (!fs.existsSync(spaceDir)) fs.mkdirSync(spaceDir, { recursive: true })
+        const tokenEnv = hfToken ? `HF_TOKEN=${JSON.stringify(hfToken)} ` : ''
+        const cmd = `${tokenEnv}HF_HUB_CACHE=${JSON.stringify(spaceDir)} python3 -c "from huggingface_hub import snapshot_download; print(snapshot_download(repo_id=${JSON.stringify(modelId)}, local_files_only=False))"`
+        const output = execSync(cmd, { stdio: 'pipe', timeout: 300000 }).toString().trim()
+        const cachedPath = output.split('\n').pop()?.trim()
+        if (!cachedPath) throw new Error(`snapshot_download produced no path for ${modelId}`)
+        filePath = cachedPath
+        fileSize = 1 // model repo; actual aggregate size is expensive to compute and not needed for loading
+        console.log(`[ModelCache] Downloaded model ${modelId} to ${cachedPath}`)
+      } else {
+        const authHeader = hfToken ? '-H ' + JSON.stringify('Authorization: Bearer ' + hfToken) : ''
+        const cmd = `curl -L ${authHeader} -o ${JSON.stringify(filePath)} ${JSON.stringify(downloadUrl)} 2>/dev/null`
+        execSync(cmd, { stdio: 'pipe', timeout: 300000 })
+        if (!fs.existsSync(filePath)) throw new Error(`download did not create ${filePath}`)
+        const stats = fs.statSync(filePath)
+        fileSize = stats.size
+      }
+    }
+
+    // Calculate checksum if file exists and is a file (not a directory/model repo)
+    if (fs.existsSync(filePath) && !fs.statSync(filePath).isDirectory()) {
+      const fileBuffer = fs.readFileSync(filePath)
+      checksum = crypto.createHash('sha256').update(fileBuffer).digest('hex')
+
+      if (expectedChecksum && checksum !== expectedChecksum) {
+        fs.unlinkSync(filePath)
+        throw new Error(`Checksum mismatch for ${fileName}: expected ${expectedChecksum}, got ${checksum}`)
+      }
+    }
+
+    await prisma.modelCache.update({
+      where: { id: entry.id },
+      data: { filePath, fileSize, checksum, status: 'COMPLETED' },
+    })
+
+    return {
+      ...entry,
+      filePath,
+      fileSize,
+      checksum,
+      status: 'COMPLETED' as const,
+    }
+  } catch (err) {
+    console.error(`[ModelCache] Download failed for ${downloadUrl}:`, err)
+    try {
+      await prisma.modelCache.update({ where: { id: entry.id }, data: { status: 'FAILED' } })
+    } catch {}
+    throw new Error(`Failed to download from ${downloadUrl}: ${err instanceof Error ? err.message : String(err)}`)
   }
 }
 
@@ -221,3 +200,4 @@ export function formatBytes(bytes: number): string {
   const i = Math.floor(Math.log(bytes) / Math.log(k))
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`
 }
+
