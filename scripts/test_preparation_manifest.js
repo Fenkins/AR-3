@@ -84,4 +84,20 @@ function validManifest(overrides = {}) {
   assert.equal(result.ok, true, result.errors.join('\n'))
 }
 
+{
+  const aliasManifest = validManifest()
+  aliasManifest.models = [{ modelId: 'GSAI-Research/LLaDA-8B-Base', purpose: 'primary target', smokeTest: 'python -c "print(1)"' }]
+  aliasManifest.dependencies = [{ package: 'torch>=2.0.0', purpose: 'tensor execution' }]
+  aliasManifest.resources = [{ resourceType: 'gpu-memory', specification: '12GB VRAM', purpose: 'load model' }]
+  aliasManifest.smokeTests = [{ test: 'python -c "print(1)"', expectedEvidence: 'prints 1' }]
+  aliasManifest.gradingCriteria = [{ criterion: 'Code runs', evidence: 'stdout exists' }]
+  delete aliasManifest.workbench
+  const result = validatePreparationManifest(aliasManifest)
+  assert.equal(result.ok, true)
+  assert.equal(result.manifest.models[0].id, 'GSAI-Research/LLaDA-8B-Base')
+  assert.equal(result.manifest.models[0].source, 'huggingface')
+  assert.equal(result.manifest.dependencies[0].name, 'torch>=2.0.0')
+  assert.equal(result.manifest.smokeTests[0].command, 'python -c "print(1)"')
+}
+
 console.log('preparation manifest tests passed')

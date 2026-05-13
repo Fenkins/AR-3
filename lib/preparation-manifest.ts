@@ -79,9 +79,83 @@ function pushStringError(errors: string[], path: string, value: unknown) {
   if (!nonEmptyString(value)) errors.push(`${path} must be a non-empty string`)
 }
 
+function normalizePreparationManifest(value: Record<string, unknown>): Record<string, unknown> {
+  const normalized: Record<string, unknown> = { ...value }
+
+  if (Array.isArray(normalized.models)) {
+    normalized.models = normalized.models.map((model: unknown) => {
+      if (!isPlainObject(model)) return model
+      const id = model.id ?? model.modelId ?? model.repoId ?? model.huggingFaceId
+      return {
+        ...model,
+        id,
+        source: model.source ?? (nonEmptyString(id) && validHuggingFaceRepoId(id) ? 'huggingface' : 'url'),
+        required: typeof model.required === 'boolean' ? model.required : true,
+      }
+    })
+  }
+
+  if (Array.isArray(normalized.dependencies)) {
+    normalized.dependencies = normalized.dependencies.map((dep: unknown) => {
+      if (!isPlainObject(dep)) return dep
+      return {
+        ...dep,
+        name: dep.name ?? dep.package ?? dep.pip ?? dep.pipPackage,
+        required: typeof dep.required === 'boolean' ? dep.required : true,
+      }
+    })
+  }
+
+  if (Array.isArray(normalized.resources)) {
+    normalized.resources = normalized.resources.map((resource: unknown) => {
+      if (!isPlainObject(resource)) return resource
+      return {
+        ...resource,
+        kind: resource.kind ?? resource.resourceType ?? 'other',
+        name: resource.name ?? resource.specification ?? resource.resourceType ?? 'resource',
+        required: typeof resource.required === 'boolean' ? resource.required : true,
+      }
+    })
+  }
+
+  if (Array.isArray(normalized.smokeTests)) {
+    normalized.smokeTests = normalized.smokeTests.map((test: unknown, i: number) => {
+      if (!isPlainObject(test)) return test
+      const evidence = test.expectedEvidence
+      return {
+        ...test,
+        name: test.name ?? `smoke-${i + 1}`,
+        command: test.command ?? test.test,
+        expectedEvidence: Array.isArray(evidence) ? evidence : (nonEmptyString(evidence) ? [evidence] : evidence),
+        timeoutSeconds: typeof test.timeoutSeconds === 'number' ? test.timeoutSeconds : 300,
+      }
+    })
+  }
+
+  if (Array.isArray(normalized.gradingCriteria)) {
+    normalized.gradingCriteria = normalized.gradingCriteria.map((criterion: unknown) => {
+      if (nonEmptyString(criterion)) return criterion
+      if (isPlainObject(criterion)) {
+        return [criterion.criterion, criterion.evidence].filter(nonEmptyString).join(' — ')
+      }
+      return criterion
+    })
+  }
+
+  if (!isPlainObject(normalized.workbench)) {
+    normalized.workbench = {
+      reuseKey: `${String(normalized.researchType || 'research')}-workbench`,
+      expectedArtifacts: ['stdout', 'metrics.json', 'preparation_manifest.json'],
+    }
+  }
+
+  return normalized
+}
+
 export function validatePreparationManifest(value: unknown): PreparationManifestValidation {
   const errors: string[] = []
   if (!isPlainObject(value)) return { ok: false, errors: ['manifest must be a JSON object'] }
+  value = normalizePreparationManifest(value)
 
   if (value.schemaVersion !== PREPARATION_MANIFEST_SCHEMA_VERSION) {
     errors.push(`schemaVersion must equal ${PREPARATION_MANIFEST_SCHEMA_VERSION}`)
