@@ -144,7 +144,7 @@ Visit http://localhost:3000
 
 ## 📄 License
 
-MIT License - see [LICENSE](LICENSE) file
+agpl=3 License - contact https://www.linkedin.com/in/anatolii-kovalev-5296961a6/ for sales and inquries
 
 ## 🌟 Acknowledgments
 
