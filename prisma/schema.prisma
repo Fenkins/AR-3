@@ -131,6 +131,25 @@ model ModelCache {
   @@index([spaceId])
 }
 
+model GpuJob {
+  id          String   @id @default(cuid())
+  jobId       String   @unique
+  spaceId     String
+  stageName   String
+  prompt      String
+  context     String   @default("")
+  status      String   @default("queued") // queued | preparing | running | failed_validation | failed_runtime | completed | cancelled
+  resultJson  String?
+  eventsJson  String   @default("[]")
+  submittedAt DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  Space       Space    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+
+  @@index([spaceId])
+  @@index([status])
+  @@index([submittedAt])
+}
+
 model ServiceProvider {
   id        String   @id @default(cuid())
   userId    String
@@ -175,6 +194,7 @@ model Space {
   Breakthrough           Breakthrough[]
   Experiment             Experiment[]
   ModelCache             ModelCache[]
+  GpuJob                 GpuJob[]
   Technique              Technique[]
   FailedApproach         FailedApproach[]
   User                   User           @relation(fields: [userId], references: [id], onDelete: Cascade)

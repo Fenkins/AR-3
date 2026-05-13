@@ -1,10 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { authMiddleware } from '../../middleware'
 import { prisma } from '@/lib/prisma'
+import {
+  applyWorkerResultToJob,
+  buildGpuJobRecord,
+  GpuJobRecord,
+  GpuJobStatus,
+  isGpuJobStatus,
+  parseJobEvents,
+  parseWorkerResult,
+  pruneFileQueueForSpace,
+  workerQueueJob,
+} from '@/lib/gpu-job-state'
 import fs from 'fs'
-import path from 'path'
 
-// File-based job queue (stored in /tmp/gpu_jobs.json on the Vast.ai instance)
+export const dynamic = 'force-dynamic'
+
+// Legacy worker bridge. The Python GPU worker still polls these files; the API
+// now treats Prisma as the source of truth and mirrors queued jobs/results here
+// until the worker can read from the DB directly.
 const JOB_QUEUE_FILE = '/tmp/gpu_jobs.json'
 const JOB_RESULTS_FILE = '/tmp/gpu_results.json'
 const GPU_CONFIG_FILE = '/tmp/gpu_config.json'
@@ -29,46 +43,130 @@ function writeGPUConfig(config: GPUConfig) {
   fs.writeFileSync(GPU_CONFIG_FILE, JSON.stringify(config, null, 2))
 }
 
-interface GPUJob {
-  jobId: string
-  spaceId: string
-  stageName: string
-  prompt: string
-  context: string
-  submittedAt: string
-  status: 'pending' | 'running' | 'completed' | 'failed'
-}
-
-interface GPUResult {
-  jobId: string
-  output: string
-  code?: string
-  error?: string
-  tokensUsed?: number
-  cost?: number
-  completedAt: string
-}
-
-function readQueue(): GPUJob[] {
+function readQueue(): any[] {
   try {
     if (!fs.existsSync(JOB_QUEUE_FILE)) return []
-    return JSON.parse(fs.readFileSync(JOB_QUEUE_FILE, 'utf-8'))
+    const parsed = JSON.parse(fs.readFileSync(JOB_QUEUE_FILE, 'utf-8'))
+    return Array.isArray(parsed) ? parsed : []
   } catch { return [] }
 }
 
-function writeQueue(jobs: GPUJob[]) {
+function writeQueue(jobs: any[]) {
   fs.writeFileSync(JOB_QUEUE_FILE, JSON.stringify(jobs, null, 2))
 }
 
-function readResults(): Record<string, GPUResult> {
+function readResults(): Record<string, any> {
   try {
     if (!fs.existsSync(JOB_RESULTS_FILE)) return {}
-    return JSON.parse(fs.readFileSync(JOB_RESULTS_FILE, 'utf-8'))
+    const parsed = JSON.parse(fs.readFileSync(JOB_RESULTS_FILE, 'utf-8'))
+    return parsed && typeof parsed === 'object' ? parsed : {}
   } catch { return {} }
 }
 
-function writeResults(results: Record<string, GPUResult>) {
-  fs.writeFileSync(JOB_RESULTS_FILE, JSON.stringify(results, null, 2))
+function gpuJobDelegate(): any | null {
+  return (prisma as any).gpuJob || null
+}
+
+function rowToRecord(row: any): GpuJobRecord {
+  const status = isGpuJobStatus(row.status) ? row.status : 'queued'
+  return {
+    jobId: row.jobId,
+    spaceId: row.spaceId,
+    stageName: row.stageName,
+    prompt: row.prompt,
+    context: row.context || '',
+    submittedAt: row.submittedAt instanceof Date ? row.submittedAt.toISOString() : String(row.submittedAt),
+    updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : String(row.updatedAt || row.submittedAt),
+    status,
+    events: parseJobEvents(row.eventsJson),
+    result: parseWorkerResult(row.resultJson),
+  }
+}
+
+function dbDataFromRecord(record: GpuJobRecord) {
+  return {
+    jobId: record.jobId,
+    spaceId: record.spaceId,
+    stageName: record.stageName,
+    prompt: record.prompt,
+    context: record.context || '',
+    status: record.status,
+    submittedAt: new Date(record.submittedAt),
+    resultJson: record.result ? JSON.stringify(record.result) : null,
+    eventsJson: JSON.stringify(record.events || []),
+  }
+}
+
+async function createDbJob(record: GpuJobRecord) {
+  const delegate = gpuJobDelegate()
+  if (!delegate) return null
+  return delegate.create({ data: dbDataFromRecord(record) })
+}
+
+async function updateDbJob(record: GpuJobRecord) {
+  const delegate = gpuJobDelegate()
+  if (!delegate) return null
+  return delegate.update({
+    where: { jobId: record.jobId },
+    data: {
+      status: record.status,
+      resultJson: record.result ? JSON.stringify(record.result) : null,
+      eventsJson: JSON.stringify(record.events || []),
+    },
+  })
+}
+
+async function getDbJob(jobId: string): Promise<GpuJobRecord | null> {
+  const delegate = gpuJobDelegate()
+  if (!delegate) return null
+  const row = await delegate.findUnique({ where: { jobId } })
+  return row ? rowToRecord(row) : null
+}
+
+async function syncWorkerResultToDb(jobId: string): Promise<GpuJobRecord | null> {
+  const record = await getDbJob(jobId)
+  if (!record || record.result) return record
+  const result = readResults()[jobId]
+  if (!result) return record
+  const completedAt = result.completedAt || new Date().toISOString()
+  const updated = applyWorkerResultToJob(record, { ...result, jobId, completedAt })
+  await updateDbJob(updated)
+  return updated
+}
+
+async function syncAllWorkerResultsForSpace(spaceId: string): Promise<void> {
+  const delegate = gpuJobDelegate()
+  if (!delegate) return
+  const rows = await delegate.findMany({ where: { spaceId }, orderBy: { submittedAt: 'desc' }, take: 100 })
+  const results = readResults()
+  for (const row of rows) {
+    if (row.resultJson || !results[row.jobId]) continue
+    const record = rowToRecord(row)
+    const result = results[row.jobId]
+    const updated = applyWorkerResultToJob(record, { ...result, jobId: row.jobId, completedAt: result.completedAt || new Date().toISOString() })
+    await updateDbJob(updated)
+  }
+}
+
+function mirrorJobToFileQueue(record: GpuJobRecord) {
+  const queue = readQueue()
+  if (!queue.some((job) => job.jobId === record.jobId)) {
+    queue.push(workerQueueJob(record))
+    writeQueue(queue)
+  }
+}
+
+function responseForRecord(record: GpuJobRecord) {
+  if (record.result) {
+    const completed = record.status === 'completed'
+    return {
+      status: completed ? 'completed' : record.status,
+      result: { success: completed, ...record.result },
+      job: record,
+      error: record.result.error,
+    }
+  }
+  return { status: record.status === 'queued' ? 'pending' : record.status, job: record }
 }
 
 // GET: poll for job result OR get GPU config
@@ -87,15 +185,23 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ config: getGPUConfig() })
   }
 
-  // GET ?action=bySpace&spaceId=xxx — return all GPU results for a space
+  // GET ?action=bySpace&spaceId=xxx — return all GPU results/jobs for a space
   if (action === 'bySpace') {
     const spaceId = searchParams.get('spaceId')
     if (!spaceId) return NextResponse.json({ error: 'spaceId required' }, { status: 400 })
+
+    const delegate = gpuJobDelegate()
+    if (delegate) {
+      await syncAllWorkerResultsForSpace(spaceId)
+      const rows = await delegate.findMany({ where: { spaceId }, orderBy: { submittedAt: 'desc' }, take: 100 })
+      return NextResponse.json({ results: rows.map(rowToRecord) })
+    }
+
     const results = readResults()
     const spaceResults = Object.entries(results)
       .filter(([jobId]) => jobId.includes(spaceId))
       .map(([jobId, r]) => ({ jobId, ...r }))
-      .sort((a, b) => (b.completedAt || '').localeCompare(a.completedAt || ''))
+      .sort((a: any, b: any) => (b.completedAt || '').localeCompare(a.completedAt || ''))
     return NextResponse.json({ results: spaceResults })
   }
 
@@ -105,11 +211,14 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'jobId required' }, { status: 400 })
   }
 
+  const dbRecord = await syncWorkerResultToDb(jobId)
+  if (dbRecord) return NextResponse.json(responseForRecord(dbRecord))
+
+  // Legacy fallback while deployments migrate.
   const results = readResults()
   const result = results[jobId]
 
   if (!result) {
-    // Check if job is still in queue
     const queue = readQueue()
     const job = queue.find(j => j.jobId === jobId)
     if (job) {
@@ -118,7 +227,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Job not found' }, { status: 404 })
   }
 
-  return NextResponse.json({ status: 'completed', result })
+  return NextResponse.json({ status: result.success === false || result.error ? 'failed_runtime' : 'completed', result })
 }
 
 // POST: submit a GPU job
@@ -138,23 +247,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'spaceId, stageName, and prompt required' }, { status: 400 })
     }
 
-    const jobId = `gpu_${spaceId}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+    const record = buildGpuJobRecord({ spaceId, stageName, prompt, context: context || '' })
+    await createDbJob(record)
+    mirrorJobToFileQueue(record)
 
-    const job: GPUJob = {
-      jobId,
-      spaceId,
-      stageName,
-      prompt,
-      context: context || '',
-      submittedAt: new Date().toISOString(),
-      status: 'pending',
-    }
-
-    const queue = readQueue()
-    queue.push(job)
-    writeQueue(queue)
-
-    return NextResponse.json({ jobId, status: 'pending', message: 'GPU job queued' })
+    return NextResponse.json({ jobId: record.jobId, status: 'pending', job: record, message: 'GPU job queued' })
   } catch (error) {
     console.error('[GPU Jobs API] Error:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
@@ -197,21 +294,25 @@ export async function PUT(request: NextRequest) {
   }
 }
 
-// DELETE: clear GPU jobs for a space (called when space is deleted/stopped)
+// DELETE: cancel GPU jobs for a space (called when space is deleted/stopped)
 export async function DELETE(request: NextRequest) {
   const spaceId = new URL(request.url).searchParams.get('spaceId')
   if (!spaceId) {
     return NextResponse.json({ error: 'spaceId required' }, { status: 400 })
   }
 
-  const queue = readQueue()
-  const initialLen = queue.length
-  const remaining = queue.filter(j => j.spaceId !== spaceId)
-  const removed = initialLen - remaining.length
+  const { remaining, removed } = pruneFileQueueForSpace(readQueue(), spaceId)
+  if (removed > 0) writeQueue(remaining)
 
-  if (removed > 0) {
-    writeQueue(remaining)
+  let dbRemoved = 0
+  const delegate = gpuJobDelegate()
+  if (delegate) {
+    const result = await delegate.updateMany({
+      where: { spaceId, status: { in: ['queued', 'preparing', 'running'] } },
+      data: { status: 'cancelled' as GpuJobStatus },
+    })
+    dbRemoved = result.count || 0
   }
 
-  return NextResponse.json({ removed, message: `Removed ${removed} GPU jobs for space ${spaceId}` })
+  return NextResponse.json({ removed: Math.max(removed, dbRemoved), fileRemoved: removed, dbRemoved, message: `Cancelled GPU jobs for space ${spaceId}` })
 }

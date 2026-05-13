@@ -4,6 +4,7 @@ import { generateVariants, gradeVariant, selectBestVariant, saveVariantsToDataba
 import { buildEmbeddingContext } from './embeddings'
 import { addToCache } from './model-cache'
 import { buildAutonomousPreparationCommand, extractStrictGpuCommand } from './gpu-command-contract'
+import { buildPreparationManifestInstructions, buildPreparationRetryMessage, extractPreparationManifestCandidate, validatePreparationManifest } from './preparation-manifest'
 import fs from 'fs'
 
 const logFile = '/tmp/ar1_debug.log'
@@ -445,6 +446,9 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
 
   // Get context from previous experiments
   const previousExperiments = space.Experiment.slice(0, 10)
+  if (((space as any).useGpu ?? false) && currentStage.name === 'Implementation' && space.setupStatus !== 'VALIDATED') {
+    throw new Error(`Implementation blocked until preparation manifest validates (setupStatus=${space.setupStatus || 'missing'})`)
+  }
   const messages = await generateStagePrompt(space, currentStage, previousExperiments, agent)
 
   debugLog(`[executeResearchCycle] Calling AI for stage: ${currentStage.name}`)
@@ -457,9 +461,49 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
     response = await callAI(agentConfig, messages)
     debugLog(`[executeResearchCycle] AI call succeeded, tokens: ${response.tokensUsed}, cost: ${response.cost}`)
 
+    const useGpu = (space as any).useGpu ?? false
+    if (useGpu && ['Investigation', 'Planning'].includes(currentStage.name)) {
+      const manifestCandidate = extractPreparationManifestCandidate(response.content)
+      let manifestValidation = validatePreparationManifest(manifestCandidate)
+      if (!manifestValidation.ok) {
+        debugLog(`[executeResearchCycle] Preparation manifest rejected: ${manifestValidation.errors.join('; ')}`)
+        const retryMessages = [
+          ...messages,
+          { role: 'user' as const, content: buildPreparationRetryMessage(space.initialPrompt, manifestValidation.errors) },
+        ]
+        const retryResponse = await callAI(agentConfig, retryMessages)
+        const retryCandidate = extractPreparationManifestCandidate(retryResponse.content)
+        manifestValidation = validatePreparationManifest(retryCandidate)
+        response = retryResponse
+      }
+      if (manifestValidation.ok) {
+        response.content += `\n\n[PREPARATION_MANIFEST_VALIDATED]: ${JSON.stringify(manifestValidation.manifest)}`
+        try {
+          await prisma.space.update({
+            where: { id: spaceId },
+            data: {
+              setupStatus: 'VALIDATED',
+              setupError: null,
+              setupStep: JSON.stringify(manifestValidation.manifest).substring(0, 8000),
+            },
+          })
+        } catch (e: any) {
+          debugLog(`[executeResearchCycle] Failed to persist preparation manifest: ${e.message}`)
+        }
+      } else {
+        const errorText = manifestValidation.errors.join('; ')
+        response.content += `\n\n[PREPARATION_MANIFEST_REJECTED]: ${errorText}`
+        try {
+          await prisma.space.update({
+            where: { id: spaceId },
+            data: { setupStatus: 'FAILED', setupError: errorText.substring(0, 2000), setupStep: 'preparation-manifest-validation' },
+          })
+        } catch {}
+      }
+    }
+
     // If stage has gpuEnabled AND space has useGpu enabled, submit to GPU worker
     // The LLM's response text contains GPU commands in structured format
-    const useGpu = (space as any).useGpu ?? false
     if (currentStage.gpuEnabled && useGpu) {
       debugLog(`[executeResearchCycle] GPU-enabled stage, submitting LLM output to GPU worker`)
 
@@ -483,6 +527,11 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
         response.content += warning
       }
 
+      const preparationManifest = (() => {
+        if (space.setupStatus !== 'VALIDATED' || !space.setupStep) return null
+        try { return JSON.parse(space.setupStep) } catch { return null }
+      })()
+
       try {
         const gpuResponse = await fetch(`${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/api/jobs/gpu`, {
           method: 'POST',
@@ -492,7 +541,10 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
             spaceName: space.name,
             stageName: currentStage.name,
             prompt: response.content,  // LLM's GPU command instructions
-            context: JSON.stringify({ previousExperiments: previousExperiments.slice(0, 5) }),
+            context: JSON.stringify({
+              previousExperiments: previousExperiments.slice(0, 5),
+              preparationManifest,
+            }),
           }),
         })
         if (gpuResponse.ok) {
@@ -518,7 +570,7 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
                 response.content += '\n\n' + gpuResultText
                 debugLog(`[executeResearchCycle] GPU job completed: ${gpuResultText.substring(0, 100)}`)
                 break
-              } else if (statusData.status === 'failed') {
+              } else if (statusData.status === 'failed' || statusData.status === 'failed_runtime' || statusData.status === 'failed_validation') {
                 debugLog(`[executeResearchCycle] GPU job failed: ${statusData.error}`)
                 response.content += `\n\n[GPU Error]: ${statusData.error}`
                 break
@@ -820,7 +872,10 @@ ${useGpu ? STRICT_GPU_CODE_CONTRACT : 'Execute this step and provide concrete re
               spaceName: space.name,
               stageName,
               prompt: response.content,
-              context: JSON.stringify({ previousExperiments: space.Experiment.slice(0, 5) }),
+              context: JSON.stringify({
+                previousExperiments: space.Experiment.slice(0, 5),
+                preparationManifest: (() => { try { return space.setupStep ? JSON.parse(space.setupStep) : undefined } catch { return undefined } })(),
+              }),
             }),
           })
           if (gpuResponse.ok) {
@@ -847,7 +902,7 @@ ${useGpu ? STRICT_GPU_CODE_CONTRACT : 'Execute this step and provide concrete re
                     : `[GPU Execution Error] job:${completedJobId}: ${statusData.result.error}${codeBlock}`
                   debugLog(`[executeVariant] GPU job completed`)
                   break
-                } else if (statusData.status === 'failed') {
+                } else if (statusData.status === 'failed' || statusData.status === 'failed_runtime' || statusData.status === 'failed_validation') {
                   gpuResult = `[GPU Error]: ${statusData.error}`
                   break
                 }
@@ -1105,7 +1160,11 @@ async function generateStagePrompt(space: any, stage: ResearchStage, previousExp
     }
   }
 
-  const fullPrompt = `${activePrompt}${contextFromPrevious}${embeddingContext}
+  const preparationContext = useGpu && ['Investigation', 'Planning'].includes(stage.name)
+    ? `\n\n## Mandatory Preparation Manifest\n${buildPreparationManifestInstructions(space.initialPrompt)}\nThe next GPU Implementation stage is blocked until this manifest validates. Be concrete: no vague dependencies, no HuggingFace path fragments, include executable smoke tests and expected evidence.\n`
+    : ''
+
+  const fullPrompt = `${activePrompt}${contextFromPrevious}${embeddingContext}${preparationContext}
 
 Research Goal: ${space.initialPrompt}
 

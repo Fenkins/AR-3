@@ -51,7 +51,56 @@ def test_strategy4_line_assembly_does_not_crash_on_markdown_headers():
     assert "Candidate implementation" not in command["code"]
 
 
+def test_extract_preparation_manifest_from_context_and_prompt():
+    manifest = {
+        "schemaVersion": "ar3.preparation-manifest.v1",
+        "dependencies": [{"name": "numpy", "required": True}],
+        "smokeTests": [{"name": "manifest-smoke", "command": "python -c 'print(123)'", "timeoutSeconds": 5}],
+        "workbench": {"reuseKey": "bench-a"},
+    }
+    job = {
+        "context": '{"preparationManifest": ' + __import__("json").dumps(manifest) + '}',
+        "prompt": "prose [PREPARATION_MANIFEST_VALIDATED]: {}",
+    }
+    extracted = gpu_worker.extract_preparation_manifest(job)
+    assert extracted["workbench"]["reuseKey"] == "bench-a"
+    assert extracted["dependencies"][0]["name"] == "numpy"
+
+
+def test_run_manifest_smoke_tests_executes_in_workbench_and_records_manifest_file():
+    root = tempfile.mkdtemp(prefix="ar3-worker-manifest-test-")
+    old_root = os.environ.get("AR3_WORKBENCH_ROOT")
+    os.environ["AR3_WORKBENCH_ROOT"] = root
+    try:
+        job = {"jobId": "gpu_space-manifest_1", "spaceId": "space manifest"}
+        context = gpu_worker.prepare_workbench(job)
+        manifest = {
+            "dependencies": [],
+            "smokeTests": [
+                {
+                    "name": "writes-artifact",
+                    "command": "python -c \"from pathlib import Path; import os; Path(os.environ['AR3_ARTIFACTS_DIR'], 'smoke.txt').write_text('ok'); print('SMOKE_OK')\"",
+                    "expectedEvidence": ["SMOKE_OK"],
+                    "timeoutSeconds": 10,
+                }
+            ],
+        }
+        result = gpu_worker.prepare_manifest_environment(manifest, context)
+        assert result["success"] is True, result
+        assert "SMOKE_OK" in result["output"]
+        assert Path(context["workbench_dir"], "preparation_manifest.json").is_file()
+        assert Path(context["artifacts_dir"], "smoke.txt").read_text() == "ok"
+    finally:
+        if old_root is None:
+            os.environ.pop("AR3_WORKBENCH_ROOT", None)
+        else:
+            os.environ["AR3_WORKBENCH_ROOT"] = old_root
+        shutil.rmtree(root, ignore_errors=True)
+
+
 if __name__ == "__main__":
     test_prepare_workbench_is_stable_per_space_and_sets_cache_env()
     test_strategy4_line_assembly_does_not_crash_on_markdown_headers()
+    test_extract_preparation_manifest_from_context_and_prompt()
+    test_run_manifest_smoke_tests_executes_in_workbench_and_records_manifest_file()
     print("gpu worker workbench tests passed")

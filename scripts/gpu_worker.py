@@ -143,11 +143,21 @@ def prepare_workbench(job: dict) -> dict:
     }
 
 
+def _dependency_to_pip_spec(dep) -> str:
+    """Normalize a command/manifest dependency into a concrete pip spec."""
+    if isinstance(dep, dict):
+        name = str(dep.get('name') or '').strip()
+        version_spec = str(dep.get('versionSpec') or '').strip()
+        dep = name + version_spec
+    dep = str(dep).strip()
+    return dep
+
+
 def install_declared_dependencies(dependencies, context: dict, timeout: int = 900) -> dict:
     """Install JSON-declared Python deps into the space workbench, not globally."""
     deps = []
     for dep in dependencies or []:
-        dep = str(dep).strip()
+        dep = _dependency_to_pip_spec(dep)
         if not dep or dep.lower() in {'python', 'pip'}:
             continue
         # Dependencies are pip specs, not shell commands.
@@ -182,6 +192,139 @@ def strip_markdown_headers(code: str) -> str:
             continue
         kept.append(line)
     return '\n'.join(kept).strip()
+
+
+def _extract_first_json_object(text: str):
+    """Return the first valid JSON object embedded in text, using quote-aware braces."""
+    in_str = False
+    escape_next = False
+    brace_depth = 0
+    json_start = -1
+    for i, ch in enumerate(str(text or '')):
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == '\\' and in_str:
+            escape_next = True
+            continue
+        if ch == '"' and not escape_next:
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if ch == '{':
+            if brace_depth == 0:
+                json_start = i
+            brace_depth += 1
+        elif ch == '}':
+            brace_depth -= 1
+            if brace_depth == 0 and json_start >= 0:
+                try:
+                    parsed = json.loads(text[json_start:i + 1])
+                    if isinstance(parsed, dict):
+                        return parsed
+                except Exception:
+                    pass
+                json_start = -1
+    return None
+
+
+def extract_preparation_manifest(job: dict):
+    """Extract a validated preparation manifest from job context or prompt markers.
+
+    The Next.js side persists a PreparationManifest in Space.setupStep and passes it
+    through job context. Older jobs may only contain the appended
+    [PREPARATION_MANIFEST_VALIDATED] marker in the prompt, so support both.
+    """
+    context = job.get('context') or ''
+    if isinstance(context, dict):
+        candidate = context.get('preparationManifest') or context.get('manifest')
+        if isinstance(candidate, dict):
+            return candidate
+    if isinstance(context, str) and context.strip():
+        try:
+            parsed = json.loads(context)
+            if isinstance(parsed, dict):
+                candidate = parsed.get('preparationManifest') or parsed.get('manifest')
+                if isinstance(candidate, dict):
+                    return candidate
+        except Exception:
+            marker_obj = _extract_first_json_object(context)
+            if isinstance(marker_obj, dict) and marker_obj.get('schemaVersion') == 'ar3.preparation-manifest.v1':
+                return marker_obj
+
+    prompt = job.get('prompt') or ''
+    marker = '[PREPARATION_MANIFEST_VALIDATED]:'
+    if marker in prompt:
+        after_marker = prompt.split(marker, 1)[1]
+        candidate = _extract_first_json_object(after_marker)
+        if isinstance(candidate, dict):
+            return candidate
+    return None
+
+
+def _safe_smoke_command(command: str):
+    command = str(command or '').strip()
+    if not command:
+        return None, 'empty smoke test command'
+    try:
+        argv = shlex.split(command)
+    except Exception as exc:
+        return None, f'invalid smoke test command: {exc}'
+    if not argv:
+        return None, 'empty smoke test command'
+    allowed = {'python', 'python3', 'pytest', 'node', 'bash', 'sh', 'nvidia-smi'}
+    executable = Path(argv[0]).name
+    if executable not in allowed:
+        return None, f'unsupported smoke test executable {argv[0]!r}'
+    return argv, None
+
+
+def prepare_manifest_environment(manifest: dict, context: dict, timeout: int = 900) -> dict:
+    """Install manifest dependencies and run smoke tests before experiment code."""
+    if not isinstance(manifest, dict):
+        return {'success': True, 'output': 'no preparation manifest supplied', 'error': None}
+
+    manifest_path = Path(context['workbench_dir']) / 'preparation_manifest.json'
+    with open(manifest_path, 'w') as f:
+        json.dump(manifest, f, indent=2, sort_keys=True)
+
+    dep_result = install_declared_dependencies(manifest.get('dependencies') or [], context, timeout=timeout)
+    output_parts = [f'preparation_manifest={manifest_path}']
+    if dep_result.get('output'):
+        output_parts.append('dependency_install:\n' + dep_result.get('output', ''))
+    if not dep_result.get('success'):
+        return {
+            'success': False,
+            'output': '\n'.join(output_parts),
+            'error': 'Preparation dependency installation failed: ' + str(dep_result.get('error', 'unknown')),
+        }
+
+    for smoke in manifest.get('smokeTests') or []:
+        if not isinstance(smoke, dict):
+            return {'success': False, 'output': '\n'.join(output_parts), 'error': 'Invalid smoke test entry in preparation manifest'}
+        name = str(smoke.get('name') or 'smoke-test')
+        argv, err = _safe_smoke_command(smoke.get('command') or '')
+        if err:
+            return {'success': False, 'output': '\n'.join(output_parts), 'error': f'Preparation smoke test {name!r} rejected: {err}'}
+        smoke_timeout = int(smoke.get('timeoutSeconds') or min(timeout, 300))
+        smoke_timeout = max(5, min(smoke_timeout, timeout))
+        result = subprocess.run(argv, capture_output=True, text=True, timeout=smoke_timeout, cwd=context['workbench_dir'], env=context['env'])
+        stdout = result.stdout.strip()
+        stderr = result.stderr.strip()
+        output_parts.append(f'smoke_test {name} exit={result.returncode}\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}')
+        if result.returncode != 0:
+            return {'success': False, 'output': '\n'.join(output_parts), 'error': f'Preparation smoke test {name!r} failed'}
+        expected = [str(e) for e in smoke.get('expectedEvidence') or []]
+        combined = stdout + '\n' + stderr
+        missing = [e for e in expected if e and e not in combined]
+        if missing:
+            return {
+                'success': False,
+                'output': '\n'.join(output_parts),
+                'error': f'Preparation smoke test {name!r} missing expected evidence: {missing}',
+            }
+    return {'success': True, 'output': '\n'.join(output_parts), 'error': None}
 
 
 def extract_gpu_command(prompt: str) -> dict:
@@ -793,11 +936,25 @@ def execute_gpu_command(job: dict, timeout: int = DEFAULT_JOB_TIMEOUT) -> dict:
         gpu_command = extract_gpu_command(prompt)
         action = gpu_command.get('action', 'run_python')
         context_info = prepare_workbench(job)
+        preparation_manifest = extract_preparation_manifest(job)
         result_metadata = {
             'workbenchDir': context_info['workbench_dir'],
             'artifactsDir': context_info['artifacts_dir'],
             'dependencies': gpu_command.get('dependencies', []),
+            'preparationManifestApplied': bool(preparation_manifest),
         }
+        preparation_output = ''
+        if preparation_manifest:
+            log('Applying preparation manifest before experiment execution', thread_id=tid)
+            prep_result = prepare_manifest_environment(preparation_manifest, context_info, timeout=min(timeout, 1800))
+            preparation_output = prep_result.get('output', '')
+            if not prep_result.get('success'):
+                return {
+                    'success': False,
+                    'output': preparation_output,
+                    'error': prep_result.get('error') or 'Preparation manifest failed',
+                    **result_metadata,
+                }
 
         if action == 'run_python':
             code = gpu_command.get('code', '')
@@ -808,7 +965,12 @@ def execute_gpu_command(job: dict, timeout: int = DEFAULT_JOB_TIMEOUT) -> dict:
                     'error': 'No valid Python code found in LLM response',
                 }
             log(f"Running Python code, {len(code)} chars", thread_id=tid)
-            result = execute_python_code(code, timeout=timeout, context=context_info, dependencies=gpu_command.get('dependencies', []))
+            result = execute_python_code(
+                code,
+                timeout=timeout,
+                context=context_info,
+                dependencies=[*(preparation_manifest or {}).get('dependencies', []), *gpu_command.get('dependencies', [])],
+            )
 
         elif action == 'run_quantized':
             # bitsandbytes 8-bit quantization path
@@ -861,6 +1023,8 @@ def execute_gpu_command(job: dict, timeout: int = DEFAULT_JOB_TIMEOUT) -> dict:
             }
 
         result['code'] = gpu_command.get('code', '')
+        if preparation_output:
+            result['output'] = (preparation_output + '\n' + result.get('output', '')).strip()
         result.update(result_metadata)
         cleanup_gpu_memory()
         return result
@@ -903,6 +1067,7 @@ def process_job(job: dict, timeout: int) -> dict:
             'workbenchDir': result.get('workbenchDir'),
             'artifactsDir': result.get('artifactsDir'),
             'dependencies': result.get('dependencies', []),
+            'preparationManifestApplied': result.get('preparationManifestApplied', False),
             'completedAt': datetime.now().isoformat(),
         }
         write_results(results)

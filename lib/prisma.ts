@@ -60,6 +60,20 @@ export async function validatePrismaSchema(): Promise<{
       errors.push("missing 'cyclePromptDelta' on Agent")
     }
   }
+
+  // Test 5: GpuJob model for DB-backed GPU job state machine
+  try {
+    const gpuJobDelegate = (prisma as any).gpuJob
+    if (!gpuJobDelegate) {
+      errors.push("missing 'GpuJob' model — run prisma generate after schema update")
+    } else {
+      await gpuJobDelegate.findFirst({ select: { id: true, jobId: true, status: true, eventsJson: true } })
+    }
+  } catch (e: any) {
+    if (e.message?.includes('Unknown argument') || e.message?.includes('does not exist')) {
+      errors.push("missing GpuJob columns — run prisma db push/migrate and restart server")
+    }
+  }
   
   return { valid: errors.length === 0, errors }
 }
