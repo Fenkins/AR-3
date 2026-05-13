@@ -462,6 +462,7 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
     debugLog(`[executeResearchCycle] AI call succeeded, tokens: ${response.tokensUsed}, cost: ${response.cost}`)
 
     const useGpu = (space as any).useGpu ?? false
+    let preparationManifestValidatedThisCycle = false
     if (useGpu && ['Investigation', 'Planning'].includes(currentStage.name)) {
       const manifestCandidate = extractPreparationManifestCandidate(response.content)
       let manifestValidation = validatePreparationManifest(manifestCandidate)
@@ -477,6 +478,7 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
         response = retryResponse
       }
       if (manifestValidation.ok) {
+        preparationManifestValidatedThisCycle = true
         response.content += `\n\n[PREPARATION_MANIFEST_VALIDATED]: ${JSON.stringify(manifestValidation.manifest)}`
         try {
           await prisma.space.update({
@@ -505,6 +507,15 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
     // If stage has gpuEnabled AND space has useGpu enabled, submit to GPU worker
     // The LLM's response text contains GPU commands in structured format
     if (currentStage.gpuEnabled && useGpu) {
+      const parsedGpuCommand = extractStrictGpuCommand(response.content)
+      const manifestOnlyPreparation = preparationManifestValidatedThisCycle
+        && ['Investigation', 'Planning'].includes(currentStage.name)
+        && parsedGpuCommand.action === 'invalid'
+
+      if (manifestOnlyPreparation) {
+        debugLog(`[executeResearchCycle] Preparation manifest validated for ${currentStage.name}; skipping GPU submission until executable implementation/test command is available`)
+        response.content += '\n\n[GPU Skipped]: Preparation manifest validated; no executable GPU command was present in this preparation response.'
+      } else {
       debugLog(`[executeResearchCycle] GPU-enabled stage, submitting LLM output to GPU worker`)
 
       // ── Pre-execution code quality gate ─────────────────────────────────────────
@@ -589,6 +600,7 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
       } catch (gpuError: any) {
         debugLog(`[executeResearchCycle] GPU worker error: ${gpuError.message}`)
         response.content += `\n\n[GPU Error]: ${gpuError.message}`
+      }
       }
     }
   } catch (error: any) {
