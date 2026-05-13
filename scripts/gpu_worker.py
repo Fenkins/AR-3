@@ -678,6 +678,16 @@ torch.nn.Module.__getattr__ = _patched_getattr
 
 
 
+def repair_embedded_newline_string_literals(code: str) -> str:
+    """Repair common LLM/JSON escape damage: "<physical newline>".join(...).
+
+    Generated GPU commands sometimes intend `"\\n".join(xs)` but the string arrives
+    as a physical newline between quotes, causing `SyntaxError: unterminated string
+    literal`. Keep this repair narrow so normal multi-line code is untouched.
+    """
+    return re_module.sub(r'([\"\'])\n\1(?=\s*\.join\s*\()', r'\1\\n\1', code)
+
+
 def auto_fix_code(code: str) -> str:
     """Attempt to fix common SyntaxError/IndentationError issues in one pass."""
     import re as re_module
@@ -764,6 +774,8 @@ def execute_python_code(code: str, timeout: int = DEFAULT_JOB_TIMEOUT, context: 
                   + m.group(4) + 'f}' + m.group(5) + "'",
         code
     )
+
+    fixed_code = repair_embedded_newline_string_literals(fixed_code)
 
     # ── Patch: Handle LLaDA transformers 5.x compatibility ────────────────────
     # LLaDA's custom model code (modeling_llada.py) is missing `all_tied_weights_keys`
