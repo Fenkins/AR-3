@@ -16,6 +16,8 @@ import subprocess
 import traceback
 import threading
 import re as re_module
+import hashlib
+import shlex
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -27,6 +29,7 @@ GPU_INFO_FILE = '/tmp/gpu_info.json'
 POLL_INTERVAL = 3  # seconds
 DEFAULT_MAX_CONCURRENT = 1
 DEFAULT_JOB_TIMEOUT = 3600  # 1 hour default
+DEFAULT_WORKBENCH_ROOT = '/tmp/ar3-workbenches'
 
 # Thread-safe lock for queue file operations
 queue_lock = threading.Lock()
@@ -90,6 +93,95 @@ def _safe_float(val, default=0.0):
         except Exception:
             return default
     return default
+
+
+def _safe_slug(value: str, fallback: str = 'space') -> str:
+    """Return a stable filesystem-safe slug for a space/job value."""
+    value = str(value or '').strip().lower()
+    slug = re_module.sub(r'[^a-z0-9_.-]+', '-', value).strip('-._')
+    return slug[:80] or fallback
+
+
+def prepare_workbench(job: dict) -> dict:
+    """Create/reuse a persistent per-space workbench and execution env.
+
+    Research jobs need to download models, datasets, wheels, and artifacts over
+    multiple cycles. Running every job in /tmp with global pip installs loses
+    that context and causes repeated downloads. This function gives each space a
+    stable sandbox directory and redirects common ML caches into it.
+    """
+    root = Path(os.environ.get('AR3_WORKBENCH_ROOT', DEFAULT_WORKBENCH_ROOT))
+    space_key_source = job.get('spaceId') or job.get('spaceName') or job.get('jobId') or 'space'
+    space_slug = _safe_slug(space_key_source)
+    digest = hashlib.sha1(str(space_key_source).encode('utf-8')).hexdigest()[:8]
+    workbench = root / f'{space_slug}-{digest}'
+    packages_dir = workbench / 'python-packages'
+    cache_dir = workbench / 'cache'
+    artifacts_dir = workbench / 'artifacts'
+    for directory in (workbench, packages_dir, cache_dir, artifacts_dir):
+        directory.mkdir(parents=True, exist_ok=True)
+
+    existing_pythonpath = os.environ.get('PYTHONPATH', '')
+    pythonpath = str(packages_dir) + ((os.pathsep + existing_pythonpath) if existing_pythonpath else '')
+    env = {
+        **os.environ,
+        'AR3_WORKBENCH_DIR': str(workbench),
+        'AR3_ARTIFACTS_DIR': str(artifacts_dir),
+        'HF_HOME': str(cache_dir / 'huggingface'),
+        'HUGGINGFACE_HUB_CACHE': str(cache_dir / 'huggingface' / 'hub'),
+        'TRANSFORMERS_CACHE': str(cache_dir / 'huggingface' / 'transformers'),
+        'TORCH_HOME': str(cache_dir / 'torch'),
+        'PIP_CACHE_DIR': str(cache_dir / 'pip'),
+        'PYTHONPATH': pythonpath,
+        'LD_LIBRARY_PATH': '/usr/local/cuda/lib64:' + os.environ.get('LD_LIBRARY_PATH', ''),
+    }
+    return {
+        'workbench_dir': str(workbench),
+        'packages_dir': str(packages_dir),
+        'artifacts_dir': str(artifacts_dir),
+        'env': env,
+    }
+
+
+def install_declared_dependencies(dependencies, context: dict, timeout: int = 900) -> dict:
+    """Install JSON-declared Python deps into the space workbench, not globally."""
+    deps = []
+    for dep in dependencies or []:
+        dep = str(dep).strip()
+        if not dep or dep.lower() in {'python', 'pip'}:
+            continue
+        # Dependencies are pip specs, not shell commands.
+        if re_module.search(r'[;&|`$<>\n\r]', dep):
+            return {'success': False, 'error': f'Unsafe dependency spec rejected: {dep!r}'}
+        deps.append(dep)
+    if not deps:
+        return {'success': True, 'output': 'no declared dependencies', 'error': None}
+
+    cmd = [sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', '--target', context['packages_dir'], *deps]
+    log('Installing declared dependencies into workbench: ' + ' '.join(shlex.quote(d) for d in deps),
+        thread_id=threading.current_thread().name)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=context['env'])
+    if result.returncode != 0:
+        return {
+            'success': False,
+            'output': result.stdout.strip(),
+            'error': result.stderr.strip() or f'pip exited {result.returncode}',
+        }
+    return {'success': True, 'output': result.stdout.strip(), 'error': None}
+
+
+def strip_markdown_headers(code: str) -> str:
+    """Remove markdown/table/header lines accidentally captured around code."""
+    kept = []
+    for line in code.split('\n'):
+        stripped = line.strip()
+        if not stripped:
+            kept.append(line)
+            continue
+        if re_module.match(r'^(#{1,6}\s|[-*]\s+|\|.*\|$|```)', stripped):
+            continue
+        kept.append(line)
+    return '\n'.join(kept).strip()
 
 
 def extract_gpu_command(prompt: str) -> dict:
@@ -486,10 +578,19 @@ def auto_fix_code(code: str) -> str:
     return fixed
 
 
-def execute_python_code(code: str, timeout: int = DEFAULT_JOB_TIMEOUT) -> dict:
-    """Execute Python code and return result/error."""
-    log(f"Executing Python code ({len(code)} chars)",
+def execute_python_code(code: str, timeout: int = DEFAULT_JOB_TIMEOUT, context: dict = None, dependencies=None) -> dict:
+    """Execute Python code inside a persistent per-space workbench."""
+    context = context or prepare_workbench({'spaceId': 'default'})
+    log(f"Executing Python code ({len(code)} chars) in {context['workbench_dir']}",
         thread_id=threading.current_thread().name)
+
+    dep_result = install_declared_dependencies(dependencies or [], context)
+    if not dep_result.get('success'):
+        return {
+            'success': False,
+            'output': dep_result.get('output', ''),
+            'error': 'Dependency installation failed: ' + str(dep_result.get('error', 'unknown')),
+        }
 
     # ── Pre-process: coerce f-string tensor.item():.Nf patterns ────────────────
     # .item() can return int/str/float — wrapping with float() prevents format errors
@@ -533,7 +634,8 @@ torch.nn.Module.__getattr__ = _patched_getattr
             capture_output=True,
             text=True,
             timeout=timeout,
-            cwd='/tmp'
+            cwd=context['workbench_dir'],
+            env=context['env'],
         )
         try:
             os.unlink(code_file)
@@ -566,7 +668,8 @@ torch.nn.Module.__getattr__ = _patched_getattr
                         capture_output=True,
                         text=True,
                         timeout=timeout,
-                        cwd='/tmp'
+                        cwd=context['workbench_dir'],
+                        env=context['env'],
                     )
                     try:
                         os.unlink(code_file)
@@ -599,8 +702,8 @@ torch.nn.Module.__getattr__ = _patched_getattr
                     log(f"Missing module '{pkg}' detected, attempting pip install",
                         thread_id=threading.current_thread().name)
                     install_res = subprocess.run(
-                        ['python3', '-m', 'pip', 'install', pkg, '-q'],
-                        capture_output=True, text=True, timeout=120
+                        [sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', '--target', context['packages_dir'], pkg],
+                        capture_output=True, text=True, timeout=120, env=context['env']
                     )
                     if install_res.returncode == 0:
                         log(f"Package '{pkg}' installed, retrying code execution",
@@ -611,7 +714,9 @@ torch.nn.Module.__getattr__ = _patched_getattr
                         result = subprocess.run(
                             ['python3', code_file],
                             capture_output=True, text=True,
-                            timeout=timeout, cwd='/tmp'
+                            timeout=timeout,
+                            cwd=context['workbench_dir'],
+                            env=context['env'],
                         )
                         try:
                             os.unlink(code_file)
@@ -687,6 +792,12 @@ def execute_gpu_command(job: dict, timeout: int = DEFAULT_JOB_TIMEOUT) -> dict:
     try:
         gpu_command = extract_gpu_command(prompt)
         action = gpu_command.get('action', 'run_python')
+        context_info = prepare_workbench(job)
+        result_metadata = {
+            'workbenchDir': context_info['workbench_dir'],
+            'artifactsDir': context_info['artifacts_dir'],
+            'dependencies': gpu_command.get('dependencies', []),
+        }
 
         if action == 'run_python':
             code = gpu_command.get('code', '')
@@ -697,7 +808,7 @@ def execute_gpu_command(job: dict, timeout: int = DEFAULT_JOB_TIMEOUT) -> dict:
                     'error': 'No valid Python code found in LLM response',
                 }
             log(f"Running Python code, {len(code)} chars", thread_id=tid)
-            result = execute_python_code(code, timeout=timeout)
+            result = execute_python_code(code, timeout=timeout, context=context_info, dependencies=gpu_command.get('dependencies', []))
 
         elif action == 'run_quantized':
             # bitsandbytes 8-bit quantization path
@@ -750,6 +861,7 @@ def execute_gpu_command(job: dict, timeout: int = DEFAULT_JOB_TIMEOUT) -> dict:
             }
 
         result['code'] = gpu_command.get('code', '')
+        result.update(result_metadata)
         cleanup_gpu_memory()
         return result
 
@@ -787,6 +899,10 @@ def process_job(job: dict, timeout: int) -> dict:
             'output': result.get('output', ''),
             'error': result.get('error'),
             'success': result.get('success', False),
+            'code': result.get('code', ''),
+            'workbenchDir': result.get('workbenchDir'),
+            'artifactsDir': result.get('artifactsDir'),
+            'dependencies': result.get('dependencies', []),
             'completedAt': datetime.now().isoformat(),
         }
         write_results(results)
