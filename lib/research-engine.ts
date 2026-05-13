@@ -3,7 +3,7 @@ import { callAI, AIConfig, AIMessage } from './ai'
 import { generateVariants, gradeVariant, selectBestVariant, saveVariantsToDatabase, updateVariantStepDb, updateVariantDb, selectBestVariantFromDb, loadVariantsFromDb, reEvaluateStepCount, Variant, Step } from './variant-engine'
 import { buildEmbeddingContext } from './embeddings'
 import { addToCache } from './model-cache'
-import { buildAutonomousPreparationCommand, extractStrictGpuCommand, selectGpuSubmissionCommand, shouldUseAutonomousPreparationFallback } from './gpu-command-contract'
+import { assessGpuExecutionEvidence, buildAutonomousPreparationCommand, extractStrictGpuCommand, selectGpuSubmissionCommand, shouldUseAutonomousPreparationFallback } from './gpu-command-contract'
 import { buildPreparationManifestInstructions, buildPreparationRetryMessage, extractPreparationManifestCandidate, validatePreparationManifest } from './preparation-manifest'
 import fs from 'fs'
 
@@ -456,6 +456,7 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
 
   // Call LLM API
   let response: { content: string; tokensUsed: number; cost: number } | null = null
+  let gpuEvidenceInvalidReasonForExperiment = ''
   try {
     debugLog(`[executeResearchCycle] About to call callAI, config:`, JSON.stringify({provider: agentConfig.provider, model: agentConfig.model, hasKey: !!agentConfig.apiKey}))
     response = await callAI(agentConfig, messages)
@@ -589,6 +590,18 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
                 const gpuResultText = result.success
                   ? `[GPU Execution Result]: ${result.output}`
                   : `[GPU Execution Error]: ${result.error}`
+                const evidence = assessGpuExecutionEvidence({
+                  stageName: currentStage.name,
+                  fallbackUsed: selectedGpuCommand.fallbackUsed,
+                  success: result.success,
+                  output: result.output,
+                  error: result.error,
+                })
+                if (!evidence.valid) {
+                  gpuEvidenceInvalidReasonForExperiment = evidence.reason
+                  response.content += `\n\n[GPU EVIDENCE INVALID]: ${evidence.reason}`
+                  debugLog(`[executeResearchCycle] GPU evidence gate failed: ${evidence.reason}`)
+                }
                 response.content += '\n\n' + gpuResultText
                 debugLog(`[executeResearchCycle] GPU job completed: ${gpuResultText.substring(0, 100)}`)
                 break
@@ -635,7 +648,7 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
       response: response.content,
       tokensUsed: response.tokensUsed,
       cost: response.cost,
-      status: 'COMPLETED',
+      status: gpuEvidenceInvalidReasonForExperiment ? 'FAILED' : 'COMPLETED',
       updatedAt: new Date(),
       cycleNumber: currentCycle,
       result: stripThinkingTags(response.content),
@@ -665,7 +678,11 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
   debugLog(`[executeResearchCycle] Space updated with ${response.tokensUsed} tokens, total: ${space.totalTokens + response.tokensUsed}`)
 
   // Update execution state
-  const nextStageId = getNextStageId(stages, currentStage.id)
+  let nextStageId = getNextStageId(stages, currentStage.id)
+  if (gpuEvidenceInvalidReasonForExperiment) {
+    nextStageId = currentStage.id
+    debugLog(`[executeResearchCycle] Holding stage ${currentStage.name} for retry because GPU evidence was invalid`)
+  }
   
   // Check if we just completed Evaluation (last stage) -- this means a full cycle completed
   // Next stage will be Investigation (first stage), so increment cycle counter
@@ -860,6 +877,7 @@ ${useGpu ? STRICT_GPU_CODE_CONTRACT : 'Execute this step and provide concrete re
         // Strict pre-submit contract: weak models must repair invalid prose/pseudocode before GPU time is spent.
         let strictCommand = extractStrictGpuCommand(response.content)
         let strictAttempts = 0
+        let gpuSubmissionUsedFallback = false
         while (!strictCommand.ok && strictAttempts < 2) {
           strictAttempts++
           const strictReason = (strictCommand as { ok: false; reason: string }).reason
@@ -885,6 +903,7 @@ ${useGpu ? STRICT_GPU_CODE_CONTRACT : 'Execute this step and provide concrete re
             continue
           }
           debugLog(`[executeVariant] Strict GPU code contract failed after ${strictAttempts + 1} attempt(s); submitting autonomous preparation fallback: ${strictReason}`)
+          gpuSubmissionUsedFallback = true
           strictCommand = {
             ok: true,
             command: buildAutonomousPreparationCommand({
@@ -924,6 +943,7 @@ ${useGpu ? STRICT_GPU_CODE_CONTRACT : 'Execute this step and provide concrete re
             const pollInterval = 5000
             let waited = 0
             let gpuResult = ''
+            let gpuEvidenceInvalidReason = ''
             while (waited < maxWait) {
               await new Promise(r => setTimeout(r, pollInterval))
               waited += pollInterval
@@ -937,6 +957,14 @@ ${useGpu ? STRICT_GPU_CODE_CONTRACT : 'Execute this step and provide concrete re
                   gpuResult = statusData.result.success
                     ? `[GPU Execution Result] job:${completedJobId}${codeBlock}\n${statusData.result.output}`
                     : `[GPU Execution Error] job:${completedJobId}: ${statusData.result.error}${codeBlock}`
+                  const evidence = assessGpuExecutionEvidence({
+                    stageName,
+                    fallbackUsed: gpuSubmissionUsedFallback,
+                    success: statusData.result.success,
+                    output: statusData.result.output,
+                    error: statusData.result.error,
+                  })
+                  if (!evidence.valid) gpuEvidenceInvalidReason = evidence.reason
                   debugLog(`[executeVariant] GPU job completed`)
                   break
                 } else if (statusData.status === 'failed' || statusData.status === 'failed_runtime' || statusData.status === 'failed_validation') {
@@ -950,6 +978,19 @@ ${useGpu ? STRICT_GPU_CODE_CONTRACT : 'Execute this step and provide concrete re
               }
             }
             response.content += '\n\n' + gpuResult
+            if (gpuEvidenceInvalidReason) {
+              debugLog(`[executeVariant] GPU evidence gate failed for "${variant.name}": ${gpuEvidenceInvalidReason}`)
+              step.status = 'FAILED'
+              step.result = `[GPU EVIDENCE INVALID]: ${gpuEvidenceInvalidReason}\n\n${response.content}`
+              step.grade = 0
+              await updateVariantStepDb(step.id, {
+                result: step.result,
+                grade: 0,
+                status: 'FAILED',
+              })
+              variant.failureMode = gpuSubmissionUsedFallback ? 'GPU_CONTRACT_FALLBACK_PREPARATION' : 'GPU_EVIDENCE_INVALID'
+              continue
+            }
           } else {
             debugLog(`[executeVariant] GPU job submission failed: ${gpuResponse.status}`)
             response.content += '\n\n[GPU Error]: Failed to submit GPU job'

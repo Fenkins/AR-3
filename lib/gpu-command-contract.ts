@@ -25,6 +25,45 @@ type GpuSubmissionResult =
   | { ok: true; command: StrictGpuCommand; fallbackUsed: boolean; reason: string }
   | { ok: false; reason: string }
 
+type GpuEvidenceInput = {
+  stageName: string
+  fallbackUsed?: boolean
+  success?: boolean
+  output?: string | null
+  error?: string | null
+}
+
+type GpuEvidenceResult = { valid: true; reason: string } | { valid: false; reason: string }
+
+export function assessGpuExecutionEvidence(input: GpuEvidenceInput): GpuEvidenceResult {
+  if (!input.success) {
+    return { valid: false, reason: input.error || 'GPU execution failed' }
+  }
+
+  const output = String(input.output || '').trim()
+  let parsedOutput: any = null
+  try {
+    parsedOutput = output.startsWith('{') ? JSON.parse(output) : null
+  } catch {}
+  const looksLikePreparationProbe = Boolean(
+    input.fallbackUsed ||
+    parsedOutput?.type === 'autonomous_preparation_manifest' ||
+    parsedOutput?.contract_failure_reason
+  )
+  if (looksLikePreparationProbe) {
+    return {
+      valid: false,
+      reason: `Autonomous preparation probe ran for ${input.stageName}, but it is not a completed executable experiment. The original LLM output violated the GPU contract; use the probe evidence as retry feedback instead of marking the step complete.`,
+    }
+  }
+
+  if (output.length < 20) {
+    return { valid: false, reason: 'GPU execution produced too little evidence' }
+  }
+
+  return { valid: true, reason: 'GPU execution produced evidence' }
+}
+
 function stripCodeFence(text: string): string {
   return text.trim().replace(/^```(?:json|python)?\s*/i, '').replace(/```$/i, '').trim()
 }

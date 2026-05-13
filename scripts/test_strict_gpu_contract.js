@@ -94,9 +94,42 @@ function testFallbackUsesWorkerProvidedWorkbenchDirectory() {
   assert.doesNotMatch(fallback.code, /research_goal\[:80\]/)
 }
 
+function testAutonomousPreparationFallbackDoesNotCompleteExperimentSteps() {
+  const assessed = contract.assessGpuExecutionEvidence({
+    stageName: 'Investigation',
+    fallbackUsed: true,
+    success: true,
+    output: JSON.stringify({
+      type: 'autonomous_preparation_manifest',
+      contract_failure_reason: 'code contains placeholder/pseudocode markers',
+      gpu: { cuda_available: true },
+    }),
+  })
+  assert.equal(assessed.valid, false)
+  assert.match(assessed.reason, /preparation probe/i)
+  assert.match(assessed.reason, /not a completed executable experiment/i)
+}
+
+function testPreparationProbeShapeIsInvalidEvenIfFallbackFlagIsLost() {
+  const assessed = contract.assessGpuExecutionEvidence({
+    stageName: 'Investigation',
+    fallbackUsed: false,
+    success: true,
+    output: JSON.stringify({
+      type: 'autonomous_preparation_manifest',
+      contract_failure_reason: 'response did not parse as the required JSON object',
+      gpu: { cuda_available: true },
+    }),
+  })
+  assert.equal(assessed.valid, false)
+  assert.match(assessed.reason, /preparation probe/i)
+}
+
 testExtractsJsonAfterUnclosedThink()
 testFallbackPreparationCommandIsExecutableAndPromptIndependent()
 testPreparationStageWithValidatedManifestSubmitsExecutableFallbackInsteadOfRawManifestJson()
 testAutonomousPreparationFallbackIsLimitedToPreparationStages()
 testFallbackUsesWorkerProvidedWorkbenchDirectory()
+testAutonomousPreparationFallbackDoesNotCompleteExperimentSteps()
+testPreparationProbeShapeIsInvalidEvenIfFallbackFlagIsLost()
 console.log('strict gpu contract tests passed')
