@@ -1731,6 +1731,40 @@ async function processEvaluationResults(spaceId: string, content: string) {
  * 
  * This prevents GPU worker from failing due to missing model files.
  */
+export function summarizeModelDownloadStatuses(
+  entries: Array<{ downloadUrl: string | null; status?: string | null; createdAt?: Date | string | number | null }>,
+  uniqueUrls: string[]
+): { allDone: boolean; failedUrls: string[]; pendingUrls: string[]; missingUrls: string[] } {
+  const latestByUrl = new Map<string, { status: string; createdAt: number }>()
+  for (const entry of entries) {
+    if (!entry.downloadUrl) continue
+    const createdAt = entry.createdAt ? new Date(entry.createdAt).getTime() : 0
+    const existing = latestByUrl.get(entry.downloadUrl)
+    if (!existing || createdAt >= existing.createdAt) {
+      latestByUrl.set(entry.downloadUrl, { status: entry.status || 'DOWNLOADING', createdAt })
+    }
+  }
+
+  const failedUrls: string[] = []
+  const pendingUrls: string[] = []
+  const missingUrls: string[] = []
+
+  for (const url of uniqueUrls) {
+    const status = latestByUrl.get(url)?.status || 'NOT_FOUND'
+    if (status === 'COMPLETED') continue
+    if (status === 'FAILED') failedUrls.push(url)
+    else if (status === 'NOT_FOUND') missingUrls.push(url)
+    else pendingUrls.push(url)
+  }
+
+  return {
+    allDone: pendingUrls.length === 0 && missingUrls.length === 0,
+    failedUrls,
+    pendingUrls,
+    missingUrls,
+  }
+}
+
 async function ensureModelsDownloaded(
   spaceId: string,
   variants: Variant[],
@@ -1781,43 +1815,16 @@ async function ensureModelsDownloaded(
   const uniqueUrls = Array.from(urlToFileNames.keys())
   debugLog(`[ensureModelsDownloaded] Need to download ${uniqueUrls.length} unique URLs for ${variants.length} variant(s)`)
 
-  const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000'
-
-  // Step 1: Kick off downloads via POST (non-blocking)
-  // We send to the local addToCache directly (same process) for synchronous download
-  // because the API route would fork a new process that can't easily report errors back.
-  // Instead, we POST to the API which creates a DB entry (DOWNLOADING), then we poll.
-  // For actual download, we use the local addToCache which does the sync download.
-  const { addToCache } = await import('./model-cache')
-
+  // Step 1: Start downloads directly in-process. Avoid unauthenticated calls to
+  // /api/model-cache from the background worker: that route requires a bearer
+  // token, so polling it from here can stall a research cycle for the full
+  // timeout even after addToCache has already completed.
   const downloadPromises: Array<{ url: string; promise: Promise<any>; variantIds: string[] }> = []
 
   for (const url of uniqueUrls) {
     const fileNames = urlToFileNames.get(url)!
     const variantIds = urlToVariantIds.get(url)!
 
-    // Create a DB entry via POST to the API (creates DOWNLOADING entry)
-    let dbEntryId: string | null = null
-    try {
-      const postRes = await fetch(`${baseUrl}/api/model-cache`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          spaceId,
-          fileName: fileNames[0], // Use first filename as primary
-          downloadUrl: url,
-          description: `Pre-download for GPU execution (${variantIds.length} variant(s))`,
-        }),
-      })
-      if (postRes.ok) {
-        const data = await postRes.json()
-        dbEntryId = data.entry?.id || null
-      }
-    } catch (err: any) {
-      debugLog(`[ensureModelsDownloaded] Failed to create cache entry for ${url}: ${err.message}`)
-    }
-
-    // Kick off the actual download via local addToCache (synchronous, will update DB status)
     const dlPromise = (async () => {
       try {
         await addToCache({
@@ -1848,47 +1855,34 @@ async function ensureModelsDownloaded(
   // Wait for all download promises to settle (resolve or reject)
   await Promise.allSettled(downloadPromises.map(d => d.promise))
 
-  // Step 3: Poll to confirm all DB entries are COMPLETED (in case addToCache returned before DB update)
-  debugLog(`[ensureModelsDownloaded] Waiting for DB status to reflect COMPLETED...`)
+  // Step 3: Confirm directly against Prisma instead of calling authenticated API routes.
+  debugLog(`[ensureModelsDownloaded] Confirming model-cache status in DB...`)
 
   while (Date.now() - startTime < TIMEOUT_MS) {
-    const checkUrls = uniqueUrls.join(',')
-    try {
-      const pollRes = await fetch(`${baseUrl}/api/model-cache?spaceId=${encodeURIComponent(spaceId)}&checkUrls=${encodeURIComponent(checkUrls)}`)
-      if (pollRes.ok) {
-        const data = await pollRes.json()
-        const statuses = data.statuses as Record<string, string>
+    const entries = await prisma.modelCache.findMany({
+      where: { spaceId, downloadUrl: { in: uniqueUrls } },
+      orderBy: { createdAt: 'desc' },
+    })
+    const summary = summarizeModelDownloadStatuses(entries, uniqueUrls)
 
-        const allDone = uniqueUrls.every(url => {
-          const status = statuses[url] || 'NOT_FOUND'
-          return status === 'COMPLETED' || status === 'FAILED'
-        })
-
-        if (allDone) {
-          // Check for any FAILED
-          for (const url of uniqueUrls) {
-            const status = statuses[url] || 'NOT_FOUND'
-            if (status === 'FAILED') {
-              failedUrls.push(url)
-              const variantIds = urlToVariantIds.get(url) || []
-              for (const vid of variantIds) {
-                if (!failedVariants.includes(vid)) failedVariants.push(vid)
-              }
-            }
-          }
-
-          if (failedUrls.length > 0) {
-            debugLog(`[ensureModelsDownloaded] Some downloads FAILED: ${failedUrls.join(', ')}`)
-          } else {
-            debugLog(`[ensureModelsDownloaded] All ${uniqueUrls.length} downloads confirmed COMPLETED`)
-          }
-          break
-        }
+    for (const url of summary.failedUrls) {
+      if (!failedUrls.includes(url)) failedUrls.push(url)
+      const variantIds = urlToVariantIds.get(url) || []
+      for (const vid of variantIds) {
+        if (!failedVariants.includes(vid)) failedVariants.push(vid)
       }
-    } catch (err: any) {
-      debugLog(`[ensureModelsDownloaded] Polling error: ${err.message}`)
     }
 
+    if (summary.allDone) {
+      if (failedUrls.length > 0) {
+        debugLog(`[ensureModelsDownloaded] Some downloads FAILED: ${failedUrls.join(', ')}`)
+      } else {
+        debugLog(`[ensureModelsDownloaded] All ${uniqueUrls.length} downloads confirmed COMPLETED`)
+      }
+      break
+    }
+
+    debugLog(`[ensureModelsDownloaded] Waiting on model cache: pending=${summary.pendingUrls.length}, missing=${summary.missingUrls.length}`)
     await sleep(POLL_INTERVAL_MS)
   }
 
