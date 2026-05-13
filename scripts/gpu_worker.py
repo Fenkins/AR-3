@@ -685,7 +685,9 @@ def repair_embedded_newline_string_literals(code: str) -> str:
     as a physical newline between quotes, causing `SyntaxError: unterminated string
     literal`. Keep this repair narrow so normal multi-line code is untouched.
     """
-    return re_module.sub(r'([\"\'])\n\1(?=\s*\.join\s*\()', r'\1\\n\1', code)
+    # Handle both `"\n".join(xs)` and `"\n" + text` when the backslash
+    # has been decoded into a physical newline between two quotes.
+    return re_module.sub(r'([\"\'])\n\1(?=\s*(?:\.join\s*\(|\+|,|\)|\]))', r'\1\\n\1', code)
 
 
 def auto_fix_code(code: str) -> str:
