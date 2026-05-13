@@ -694,8 +694,20 @@ def auto_fix_code(code: str) -> str:
     """Attempt to fix common SyntaxError/IndentationError issues in one pass."""
     import re as re_module
 
-    # CRITICAL: init `fixed` BEFORE any closure referencing it (UnboundLocal bytecode bug)
-    fixed = code
+    def _compiles(candidate: str) -> bool:
+        try:
+            compile(candidate, '<gpu-worker-auto-fix>', 'exec')
+            return True
+        except SyntaxError:
+            return False
+
+    # CRITICAL: init `fixed` BEFORE any closure referencing it (UnboundLocal bytecode bug).
+    # Repair physical-newline string literals before delimiter balancing. The line-by-line
+    # delimiter fixer is intentionally broad and can corrupt valid multi-line dict calls
+    # (e.g. item.update({ ... })) when the only real syntax error is a decoded "\n".
+    fixed = repair_embedded_newline_string_literals(code)
+    if fixed != code and _compiles(fixed):
+        return fixed
 
     # 1. Add missing colons after def/class/if/for/while/elif/else/try/except/finally/with
     # Pattern: line ending with keyword followed by newline (no colon)
