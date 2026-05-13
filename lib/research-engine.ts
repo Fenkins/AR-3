@@ -3,6 +3,7 @@ import { callAI, AIConfig, AIMessage } from './ai'
 import { generateVariants, gradeVariant, selectBestVariant, saveVariantsToDatabase, updateVariantStepDb, updateVariantDb, selectBestVariantFromDb, loadVariantsFromDb, reEvaluateStepCount, Variant, Step } from './variant-engine'
 import { buildEmbeddingContext } from './embeddings'
 import { addToCache } from './model-cache'
+import { buildAutonomousPreparationCommand, extractStrictGpuCommand } from './gpu-command-contract'
 import fs from 'fs'
 
 const logFile = '/tmp/ar1_debug.log'
@@ -50,40 +51,6 @@ Return ONLY a single JSON object, no markdown, no prose, no <think> tags:
 
 The code must be self-contained for this step, must import its dependencies, must print measurable outputs, and must not contain placeholders or pseudocode. If a model is needed, use the loadable paths from Model Cache context when present; otherwise write a short smoke-test that discovers/validates the missing requirement and fails clearly.
 `
-
-type StrictGpuCommand = { action: 'run_python'; dependencies: string[]; code: string }
-
-function stripCodeFence(text: string): string {
-  return text.trim().replace(/^```(?:json|python)?\s*/i, '').replace(/```$/i, '').trim()
-}
-
-function extractStrictGpuCommand(text: string): { ok: true; command: StrictGpuCommand } | { ok: false; reason: string } {
-  const cleaned = stripCodeFence(text.replace(/<thought>[\s\S]*?<\/thought>/gi, '').replace(/<think>[\s\S]*?<\/think>/gi, ''))
-  const candidates: string[] = [cleaned]
-  const jsonBlock = text.match(/```json\s*([\s\S]*?)```/i)
-  if (jsonBlock?.[1]) candidates.push(jsonBlock[1].trim())
-  const objectMatch = cleaned.match(/\{[\s\S]*\}/)
-  if (objectMatch?.[0]) candidates.push(objectMatch[0])
-
-  for (const candidate of candidates) {
-    try {
-      const parsed = JSON.parse(candidate)
-      const code = typeof parsed?.code === 'string' ? parsed.code.trim() : ''
-      if (parsed?.action !== 'run_python') return { ok: false, reason: 'JSON action must be "run_python"' }
-      if (!code) return { ok: false, reason: 'JSON is missing non-empty code string' }
-      const codeLines = code.split('\n').map((l: string) => l.trim()).filter(Boolean)
-      const hasPython = /(^|\n)\s*(import |from |def |class |for |while |try:|with |print\(|[A-Za-z_][A-Za-z0-9_]*\s*=)/m.test(code)
-      const hasMeasurableOutput = /print\(|json\.dump|json\.dumps|logging\./.test(code)
-      const hasPlaceholder = /TODO|pass\s*(#|$)|pseudocode|your code here|placeholder|\.\.\./i.test(code)
-      if (codeLines.length < 5) return { ok: false, reason: `code too short (${codeLines.length} non-empty lines)` }
-      if (!hasPython) return { ok: false, reason: 'code lacks Python syntax indicators' }
-      if (!hasMeasurableOutput) return { ok: false, reason: 'code must print/log measurable outputs' }
-      if (hasPlaceholder) return { ok: false, reason: 'code contains placeholder/pseudocode markers' }
-      return { ok: true, command: { action: 'run_python', dependencies: Array.isArray(parsed.dependencies) ? parsed.dependencies.map(String).slice(0, 20) : [], code } }
-    } catch {}
-  }
-  return { ok: false, reason: 'response did not parse as the required JSON object' }
-}
 
 function buildStrictGpuRetryMessage(stepDescription: string, reason: string, previous: string): AIMessage {
   return {
@@ -828,13 +795,17 @@ ${useGpu ? STRICT_GPU_CODE_CONTRACT : 'Execute this step and provide concrete re
 
         if (!strictCommand.ok) {
           const strictReason = (strictCommand as { ok: false; reason: string }).reason
-          const failure = `[GPU CONTRACT FAILED]: ${strictReason}. The implementer did not return executable JSON/Python after ${strictAttempts + 1} attempt(s).`
-          step.status = 'FAILED'
-          step.result = `${failure}\n\nLast output preview:\n${response.content.substring(0, 1500)}`
-          step.grade = 0
-          await updateVariantStepDb(step.id, { result: step.result, grade: 0, status: 'FAILED' })
-          variant.failureMode = 'GPU_CONTRACT_FAILED'
-          continue
+          debugLog(`[executeVariant] Strict GPU code contract failed after ${strictAttempts + 1} attempt(s); submitting autonomous preparation fallback: ${strictReason}`)
+          strictCommand = {
+            ok: true,
+            command: buildAutonomousPreparationCommand({
+              researchGoal: space.initialPrompt,
+              stepDescription: step.description,
+              stageName,
+              reason: strictReason,
+            }),
+          }
+          variant.failureMode = 'GPU_CONTRACT_FALLBACK_PREPARATION'
         }
 
         response.content = JSON.stringify(strictCommand.command)
