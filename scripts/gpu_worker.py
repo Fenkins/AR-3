@@ -771,16 +771,19 @@ def execute_python_code(code: str, timeout: int = DEFAULT_JOB_TIMEOUT, context: 
     # return {} (empty dict) when that attribute is missing, instead of AttributeError.
     # This allows model loading to complete, then we clean up after.
     patch_wrapper = '''
-import torch
-import torch.nn as nn
-import re
-import builtins as _builtins
-_orig_getattr = torch.nn.Module.__getattr__
-def _patched_getattr(self, name, *args, **kwargs):
-    if name == 'all_tied_weights_keys':
-        return {}
-    return _orig_getattr(self, name, *args, **kwargs)
-torch.nn.Module.__getattr__ = _patched_getattr
+try:
+    import torch
+    import torch.nn as nn
+    import re
+    import builtins as _builtins
+    _orig_getattr = torch.nn.Module.__getattr__
+    def _patched_getattr(self, name, *args, **kwargs):
+        if name == 'all_tied_weights_keys':
+            return {}
+        return _orig_getattr(self, name, *args, **kwargs)
+    torch.nn.Module.__getattr__ = _patched_getattr
+except ModuleNotFoundError:
+    torch = None
 '''
     needs_llada_patch = any(token in fixed_code for token in ('import torch', 'from torch', 'transformers', 'from_pretrained', 'LLaDA', 'llada'))
     if needs_llada_patch:
