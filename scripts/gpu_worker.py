@@ -277,6 +277,8 @@ def _safe_smoke_command(command: str):
     executable = Path(argv[0]).name
     if executable not in allowed:
         return None, f'unsupported smoke test executable {argv[0]!r}'
+    if executable in {'python', 'python3'}:
+        argv[0] = sys.executable or argv[0]
     return argv, None
 
 
@@ -299,6 +301,24 @@ def prepare_manifest_environment(manifest: dict, context: dict, timeout: int = 9
             'output': '\n'.join(output_parts),
             'error': 'Preparation dependency installation failed: ' + str(dep_result.get('error', 'unknown')),
         }
+
+    for model in manifest.get('models') or []:
+        if not isinstance(model, dict):
+            return {'success': False, 'output': '\n'.join(output_parts), 'error': 'Invalid model entry in preparation manifest'}
+        if model.get('required') is not True:
+            continue
+        model_id = str(model.get('id') or 'required-model')
+        smoke_command = model.get('smokeTest') or ''
+        argv, err = _safe_smoke_command(smoke_command)
+        if err:
+            return {'success': False, 'output': '\n'.join(output_parts), 'error': f'Required model smoke test {model_id!r} rejected: {err}'}
+        smoke_timeout = max(5, min(int(model.get('timeoutSeconds') or 300), timeout))
+        result = subprocess.run(argv, capture_output=True, text=True, timeout=smoke_timeout, cwd=context['workbench_dir'], env=context['env'])
+        stdout = result.stdout.strip()
+        stderr = result.stderr.strip()
+        output_parts.append(f'model_smoke {model_id} exit={result.returncode}\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}')
+        if result.returncode != 0:
+            return {'success': False, 'output': '\n'.join(output_parts), 'error': f'Required model smoke test {model_id!r} failed'}
 
     for smoke in manifest.get('smokeTests') or []:
         if not isinstance(smoke, dict):
@@ -579,7 +599,7 @@ def execute_quantized_code(code: str, timeout: int = DEFAULT_JOB_TIMEOUT) -> dic
 
     # ── Pre-process: coerce f-string tensor.item():.Nf patterns ─────────────
     fixed_code = re_module.sub(
-        r"f(['\"])(.+?)\{(.+?)\.item\(\):\.(\\d+)f\}(.*?)\\1",
+        r"f(['\"])([^'\"]*?)\{([^{}]+?)\.item\(\):\.(\d+)f\}([^'\"]*?)\1",
         lambda m: "f'" + m.group(2) + '{float(' + m.group(3) + '.item()):.'
                   + m.group(4) + 'f}' + m.group(5) + "'",
         code
@@ -739,7 +759,7 @@ def execute_python_code(code: str, timeout: int = DEFAULT_JOB_TIMEOUT, context: 
     # .item() can return int/str/float — wrapping with float() prevents format errors
     # Matches: f'{expr.item():.4f}' → f'{float(expr.item()):.4f}'
     fixed_code = re_module.sub(
-        r"f(['\"])(.+?)\{(.+?)\.item\(\):\.(\d+)f\}(.*?)\1",
+        r"f(['\"])([^'\"]*?)\{([^{}]+?)\.item\(\):\.(\d+)f\}([^'\"]*?)\1",
         lambda m: "f'" + m.group(2) + '{float(' + m.group(3) + '.item()):.'
                   + m.group(4) + 'f}' + m.group(5) + "'",
         code
@@ -762,7 +782,9 @@ def _patched_getattr(self, name, *args, **kwargs):
     return _orig_getattr(self, name, *args, **kwargs)
 torch.nn.Module.__getattr__ = _patched_getattr
 '''
-    fixed_code = patch_wrapper + fixed_code
+    needs_llada_patch = any(token in fixed_code for token in ('import torch', 'from torch', 'transformers', 'from_pretrained', 'LLaDA', 'llada'))
+    if needs_llada_patch:
+        fixed_code = patch_wrapper + fixed_code
     if fixed_code != code:
         log(f"Format-string coercion applied",
             thread_id=threading.current_thread().name)
