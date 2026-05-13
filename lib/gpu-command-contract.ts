@@ -9,6 +9,18 @@ type FallbackInput = {
   reason?: string
 }
 
+type GpuSubmissionInput = {
+  stageName: string
+  llmResponse: string
+  researchGoal: string
+  stepDescription: string
+  manifestValidatedThisCycle?: boolean
+}
+
+type GpuSubmissionResult =
+  | { ok: true; command: StrictGpuCommand; fallbackUsed: boolean; reason: string }
+  | { ok: false; reason: string }
+
 function stripCodeFence(text: string): string {
   return text.trim().replace(/^```(?:json|python)?\s*/i, '').replace(/```$/i, '').trim()
 }
@@ -84,6 +96,28 @@ export function extractStrictGpuCommand(text: string): StrictGpuResult {
 
 function asPyTripleQuoted(value: string): string {
   return JSON.stringify(value).replace(/\\n/g, '\\n')
+}
+
+export function selectGpuSubmissionCommand(input: GpuSubmissionInput): GpuSubmissionResult {
+  const preparationStage = ['Investigation', 'Planning'].includes(input.stageName)
+  if (preparationStage && input.manifestValidatedThisCycle) {
+    const reason = 'preparation manifest validated; running autonomous preparation probe instead of submitting raw manifest JSON'
+    return {
+      ok: true,
+      fallbackUsed: true,
+      reason,
+      command: buildAutonomousPreparationCommand({
+        researchGoal: input.researchGoal,
+        stepDescription: input.stepDescription,
+        stageName: input.stageName,
+        reason,
+      }),
+    }
+  }
+
+  const strict = extractStrictGpuCommand(input.llmResponse)
+  if (strict.ok) return { ok: true, command: strict.command, fallbackUsed: false, reason: 'strict GPU command validated' }
+  return { ok: false, reason: (strict as { ok: false; reason: string }).reason }
 }
 
 export function buildAutonomousPreparationCommand(input: FallbackInput): StrictGpuCommand {

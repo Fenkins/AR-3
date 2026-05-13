@@ -51,6 +51,32 @@ function testFallbackPreparationCommandIsExecutableAndPromptIndependent() {
   assert.equal(extracted.ok, true, extracted.reason)
 }
 
+function testPreparationStageWithValidatedManifestSubmitsExecutableFallbackInsteadOfRawManifestJson() {
+  const selected = contract.selectGpuSubmissionCommand({
+    stageName: 'Investigation',
+    llmResponse: JSON.stringify({
+      schemaVersion: 'ar3.preparation-manifest.v1',
+      researchType: 'model-behavior',
+      objective: 'prepare workbench',
+      models: [],
+      dependencies: [],
+      resources: [],
+      smokeTests: [{ name: 'gpu', command: 'python smoke.py', expectedEvidence: ['cuda_available'], timeoutSeconds: 30 }],
+      gradingCriteria: ['prints JSON evidence'],
+      workbench: { reuseKey: 'model-behavior', expectedArtifacts: ['metrics.json'] },
+    }),
+    researchGoal: 'Explore an arbitrary model with GPU evidence.',
+    stepDescription: 'Validated preparation manifest',
+    manifestValidatedThisCycle: true,
+  })
+  assert.equal(selected.ok, true, selected.reason)
+  assert.equal(selected.command.action, 'run_python')
+  assert.match(selected.command.code, /autonomous_preparation_manifest/)
+  assert.equal(selected.fallbackUsed, true)
+  assert.match(selected.reason, /preparation manifest/i)
+}
+
 testExtractsJsonAfterUnclosedThink()
 testFallbackPreparationCommandIsExecutableAndPromptIndependent()
+testPreparationStageWithValidatedManifestSubmitsExecutableFallbackInsteadOfRawManifestJson()
 console.log('strict gpu contract tests passed')
