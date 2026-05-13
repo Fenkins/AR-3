@@ -222,6 +222,69 @@ export interface StageConfig {
   }
 }
 
+export function parseGeneratedVariantPlan(content: string, numStepsTarget = 25): {
+  name: string
+  description: string
+  downloadsText: string
+  parsedSteps: string[]
+  validSteps: string[]
+} {
+  const cleaned = String(content || '')
+    .replace(/<thought>[\s\S]*?<\/thought>/gi, '')
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, '')
+    .replace(/^```(?:markdown|md|text)?\s*/i, '')
+    .replace(/```$/i, '')
+    .trim()
+
+  const nameMatch = cleaned.match(/^\s*(?:name|variant_name)\s*:\s*(.+)$/im)
+  const name = nameMatch ? nameMatch[1].replace(/^[-*]\s*/, '').trim() : ''
+
+  const descMatch =
+    cleaned.match(/^\s*(?:description|variant_description)\s*:\s*([\s\S]+?)(?=^\s*(?:downloads?|##\s*steps|steps\b|step[_\s-]*\d+|\d+\.\s+|-\s*(?:step[_\s-]*\d+|\w)))/im)
+  const description = descMatch ? descMatch[1].trim() : ''
+
+  const dlMatch = cleaned.match(/^\s*downloads?\s*:\s*([\s\S]+?)(?=^\s*(?:##\s*steps|steps\b|step[_\s-]*\d+|\d+\.\s+|-\s*(?:step[_\s-]*\d+|\w)))/im)
+  const downloadsText = dlMatch ? dlMatch[1].trim() : ''
+
+  const stepMap = new Map<number, string>()
+  const orderedSteps: string[] = []
+  const stepPatterns = [
+    /^\s*(?:[-*]\s*)?step[_\s-]*(\d+)\s*:\s*(.+)$/gim,
+    /^\s*(\d+)\.\s+(.+)$/gim,
+    /^\s*[-*]\s+(?!name\s*:|description\s*:|downloads?\s*:)(.+)$/gim,
+  ]
+
+  for (const m of Array.from(cleaned.matchAll(stepPatterns[0]))) {
+    const n = parseInt(m[1], 10)
+    const txt = m[2].trim()
+    if (n > 0) stepMap.set(n, txt)
+  }
+  for (const m of Array.from(cleaned.matchAll(stepPatterns[1]))) {
+    const n = parseInt(m[1], 10)
+    const txt = m[2].trim()
+    if (n > 0 && !stepMap.has(n)) stepMap.set(n, txt)
+  }
+  if (stepMap.size === 0) {
+    for (const m of Array.from(cleaned.matchAll(stepPatterns[2]))) {
+      const txt = m[1].trim()
+      if (txt.length > 0) orderedSteps.push(txt)
+    }
+  }
+
+  const parsedSteps = stepMap.size > 0
+    ? Array.from(stepMap.entries()).sort((a, b) => a[0] - b[0]).map(([, text]) => text)
+    : orderedSteps
+
+  const badStepPatterns = /^(placeholder|example|continue|additional exploration|null|undefined|step \d|<)/i
+  const validSteps = parsedSteps
+    .map(s => s.replace(/^[-*]\s*/, '').trim())
+    .filter(s => s.length > 10 && !badStepPatterns.test(s))
+    .slice(0, numStepsTarget)
+
+  return { name, description, downloadsText, parsedSteps, validSteps }
+}
+
 export async function generateVariants(
   spaceId: string,
   stageId: string,
@@ -388,37 +451,16 @@ CRITICAL: You MUST generate AT LEAST ${numStepsTarget} steps. Replace ALL step p
         .replace(/<think>[\s\S]*?<\/think>/gi, '')
         .replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, '')
 
-      // Parse name
-      const nameMatch = content.match(/^name:\s*(.+)$/im) || content.match(/VARIANT_NAME:\s*(.+?)(?:\n|$)/i)
-      const parsedName = nameMatch ? nameMatch[1].trim() : ''
+      const parsedPlan = parseGeneratedVariantPlan(content, numStepsTarget)
+      const parsedName = parsedPlan.name
+      const parsedDesc = parsedPlan.description
 
-      // Parse description
-      const descMatch = content.match(/^description:\s*([\s\S]+?)(?:^downloads:|^## |^step_|_metadata)/im)
-      const parsedDesc = descMatch ? descMatch[1].trim() : ''
-
-      // Parse downloads — supports both HTTPS URLs and bare HuggingFace model IDs.
-      // Guardrail: parser removes full URLs before looking for bare IDs, preventing
-      // fragments such as "model/resolve" and "main/file.safetensors" from being
-      // queued as bogus HuggingFace repos.
-      const dlMatch = content.match(/^downloads:\s*([\s\S]+?)(?:^## STEPS|^step_|_steps)/im)
-      if (dlMatch) {
-        const dlText = dlMatch[1].trim()
-        if (!/^none$/i.test(dlText)) {
-          cacheDownloads.push(...parseHuggingFaceDownloads(dlText, 5))
-        }
+      if (parsedPlan.downloadsText && !/^none$/i.test(parsedPlan.downloadsText)) {
+        cacheDownloads.push(...parseHuggingFaceDownloads(parsedPlan.downloadsText, 5))
       }
 
-      // Parse step_N lines
-      const stepMap = new Map<number, string>()
-      for (const m of Array.from(content.matchAll(/^step_(\d+):\s*(.+)$/gm))) {
-        const n = parseInt(m[1])
-        const txt = m[2].trim()
-        // Only keep the last occurrence of each step number
-        stepMap.set(n, txt)
-      }
-      const parsedSteps = Array.from(stepMap.entries())
-        .sort((a, b) => a[0] - b[0])
-        .map(([, text]) => text)
+      const parsedSteps = parsedPlan.parsedSteps
+      const validSteps = parsedPlan.validSteps
 
       // Quality checks
       const hasPlaceholderBrackets = /<(.*?)>/i.test(parsedName) || /<(.*?)>/i.test(parsedDesc)
@@ -427,8 +469,6 @@ CRITICAL: You MUST generate AT LEAST ${numStepsTarget} steps. Replace ALL step p
       const descOk = parsedDesc.length >= 10
 
       // Step quality: require >= 5 real steps, no placeholders, no duplicated header artifacts
-      const badStepPatterns = /^(write|placeholder|example|continue|additional exploration|null|undefined|step \d|<)/i
-      const validSteps = parsedSteps.filter(s => s.length > 10 && !badStepPatterns.test(s))
       const stepsOk = validSteps.length >= 5
 
       debugLog(`[generateVariants] Variant ${i + 1} attempt ${attempt + 1}: nameOk=${nameOk}(${parsedName.substring(0,25)}), descOk=${descOk}, stepsOk=${stepsOk}(${validSteps.length} valid of ${parsedSteps.length} parsed)`)
