@@ -194,7 +194,7 @@ class SearchHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
-        if parsed.path == '/health':
+        if parsed.path in ('/health', '/healthz'):
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b'OK')

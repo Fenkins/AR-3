@@ -226,12 +226,44 @@ def discover_model_ids(text):
     return found[:10]
 
 def gpu_snapshot():
-    info = {"cuda_available": False, "torch_version": None, "gpu_name": None, "gpu_memory_gb": None}
+    info = {
+        "cuda_available": False,
+        "torch_cuda_available": False,
+        "torch_version": None,
+        "gpu_name": None,
+        "gpu_memory_gb": None,
+        "nvidia_smi": None,
+    }
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name,memory.total,driver_version,utilization.gpu", "--format=csv,noheader,nounits"],
+            text=True,
+            capture_output=True,
+            timeout=20,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            first = result.stdout.strip().splitlines()[0]
+            parts = [part.strip() for part in first.split(",")]
+            info["nvidia_smi"] = {"raw": first}
+            if len(parts) >= 4:
+                info["gpu_name"] = parts[0]
+                try:
+                    info["gpu_memory_gb"] = round(float(parts[1]) / 1024, 2)
+                except Exception:
+                    info["gpu_memory_gb"] = parts[1]
+                info["nvidia_smi"].update({"driver_version": parts[2], "utilization_gpu_percent": parts[3]})
+            info["cuda_available"] = True
+        else:
+            info["nvidia_smi"] = {"error": (result.stderr or result.stdout).strip()[:500], "returncode": result.returncode}
+    except Exception as exc:
+        info["nvidia_smi"] = {"error": repr(exc)}
+
     try:
         import torch
         info["torch_version"] = torch.__version__
-        info["cuda_available"] = bool(torch.cuda.is_available())
-        if info["cuda_available"]:
+        info["torch_cuda_available"] = bool(torch.cuda.is_available())
+        info["cuda_available"] = bool(info["cuda_available"] or info["torch_cuda_available"])
+        if info["torch_cuda_available"]:
             props = torch.cuda.get_device_properties(0)
             info["gpu_name"] = props.name
             info["gpu_memory_gb"] = round(props.total_memory / (1024 ** 3), 2)
