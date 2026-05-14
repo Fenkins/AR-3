@@ -1072,13 +1072,19 @@ def validate_execution_result_evidence(result: dict) -> dict:
     print a JSON sentinel such as {"contract_failure_reason": "..."}. Treating
     that as success records a non-experiment as completed work and breaks retry
     feedback. This post-run gate promotes those sentinels to hard failures.
+
+    Also require actual runtime GPU evidence in stdout/stderr. Static code checks
+    only prove that the script mentioned CUDA; the completed job should show the
+    GPU path really executed so graders can distinguish real experiments from
+    wrappers that merely print "done".
     """
     if not result.get('success'):
         return result
 
     output = result.get('output', '')
     failure_keys = ('contract_failure_reason', 'contractFailureReason', 'failure_reason')
-    for obj in _iter_json_objects_from_output(output):
+    json_objects = list(_iter_json_objects_from_output(output))
+    for obj in json_objects:
         for key in failure_keys:
             value = obj.get(key)
             if value:
@@ -1090,6 +1096,32 @@ def validate_execution_result_evidence(result: dict) -> dict:
             result['success'] = False
             result['error'] = f'Experiment output self-reported failure status: {status}'
             return result
+
+    evidence_keys = {
+        'cuda_available', 'gpu_name', 'gpu_count', 'gpu_memory', 'gpu_memory_total',
+        'vram', 'device', 'device_name', 'torch_cuda_version', 'nvidia_driver',
+    }
+    for obj in json_objects:
+        lowered_keys = {str(key).lower() for key in obj.keys()}
+        if lowered_keys & evidence_keys:
+            return result
+        if any(str(obj.get(key)).lower().startswith('cuda') for key in ('device', 'runtime', 'backend')):
+            return result
+
+    evidence_patterns = [
+        r'\bcuda[_ -]?(available|device|version)\b',
+        r'\bgpu[_ -]?(name|count|memory|util|device)\b',
+        r'\bvram\b',
+        r'\bnvidia\b',
+        r'\brtx\s*\d+',
+        r'\btesla\b',
+        r'\ba\d{2,3}\b',
+    ]
+    if any(re_module.search(pattern, str(output), flags=re_module.IGNORECASE) for pattern in evidence_patterns):
+        return result
+
+    result['success'] = False
+    result['error'] = 'Experiment output missing runtime GPU evidence (e.g. cuda_available, gpu_name, VRAM, or nvidia-smi output)'
     return result
 
 

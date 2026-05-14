@@ -147,6 +147,16 @@ def test_self_reported_contract_failure_output_fails_job(tmp_path, monkeypatch):
     assert "contract_failure_reason" in result["error"]
 
 
+def test_successful_output_must_contain_runtime_gpu_evidence():
+    result = gpu_worker.validate_execution_result_evidence({
+        "success": True,
+        "output": "experiment completed successfully",
+        "error": None,
+    })
+    assert result["success"] is False
+    assert "runtime GPU evidence" in result["error"]
+
+
 def json_escape(value: str) -> str:
     import json
     return json.dumps(value)
