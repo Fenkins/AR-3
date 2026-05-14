@@ -113,6 +113,27 @@ function testAutonomousPreparationFallbackIsAcceptedForPreparationStages() {
   assert.match(assessed.reason, /accepted/i)
 }
 
+function testAutonomousPreparationFallbackAcceptsWorkerPrefixedOutput() {
+  const assessed = contract.assessGpuExecutionEvidence({
+    stageName: 'Investigation',
+    fallbackUsed: true,
+    success: true,
+    output: 'torch_cuda_smoke initial exit=1\n' + JSON.stringify({
+      torch_cuda_available: false,
+      torch_error: 'ModuleNotFoundError("No module named torch")',
+    }) + '\ntorch_cuda_repair install exit=0\n' + JSON.stringify({
+      type: 'autonomous_preparation_manifest',
+      contract_failure_reason: 'JSON action must be run_python',
+      gpu: { cuda_available: true, gpu_name: 'RTX 3060', gpu_memory_gb: 12 },
+      model_ids: ['GSAI-ML/LLaDA-8B-Base'],
+      installed_dependencies: ['torch==2.5.1+cu124'],
+      workbench: '/tmp/ar3-workbenches/cmp5nqaxb-abc',
+      recommended_experiment: { objective: 'Run latent trajectory probe', metrics: ['cuda_available', 'trajectory_cosine_similarity'] },
+    }, null, 2),
+  })
+  assert.equal(assessed.valid, true, assessed.reason)
+}
+
 function testAutonomousPreparationFallbackDoesNotCompleteImplementationSteps() {
   const assessed = contract.assessGpuExecutionEvidence({
     stageName: 'Implementation',
@@ -344,6 +365,7 @@ testPreparationStageWithValidatedManifestSubmitsExecutableFallbackInsteadOfRawMa
 testAutonomousPreparationFallbackIsLimitedToPreparationStages()
 testFallbackUsesWorkerProvidedWorkbenchDirectory()
 testAutonomousPreparationFallbackIsAcceptedForPreparationStages()
+testAutonomousPreparationFallbackAcceptsWorkerPrefixedOutput()
 testAutonomousPreparationFallbackDoesNotCompleteImplementationSteps()
 testExtractsPersistablePreparationManifestFromFallbackGpuOutput()
 testDeterministicGpuExperimentFallbackUsesManifestAndPassesEvidenceGate()

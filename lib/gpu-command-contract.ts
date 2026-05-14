@@ -130,16 +130,50 @@ export function extractPersistablePreparationManifest(output: string): Persistab
   return { ok: false, reason: 'no autonomous preparation manifest found in GPU output' }
 }
 
+function parseGpuEvidenceJson(output: string): any {
+  const trimmed = String(output || '').trim()
+  if (!trimmed) return null
+  try {
+    return trimmed.startsWith('{') ? JSON.parse(trimmed) : null
+  } catch {}
+
+  const candidates: any[] = []
+  for (let start = 0; start < trimmed.length; start++) {
+    if (trimmed[start] !== '{') continue
+    let depth = 0
+    let inString = false
+    let escaped = false
+    for (let end = start; end < trimmed.length; end++) {
+      const ch = trimmed[end]
+      if (inString) {
+        if (escaped) escaped = false
+        else if (ch === '\\') escaped = true
+        else if (ch === '"') inString = false
+        continue
+      }
+      if (ch === '"') inString = true
+      else if (ch === '{') depth += 1
+      else if (ch === '}') {
+        depth -= 1
+        if (depth === 0) {
+          try {
+            candidates.push(JSON.parse(trimmed.slice(start, end + 1)))
+          } catch {}
+          break
+        }
+      }
+    }
+  }
+  return candidates.reverse().find(obj => obj && typeof obj === 'object' && (obj.type || obj.gpu || obj.model_ids || obj.installed_dependencies)) || candidates[candidates.length - 1] || null
+}
+
 export function assessGpuExecutionEvidence(input: GpuEvidenceInput): GpuEvidenceResult {
   if (!input.success) {
     return { valid: false, reason: input.error || 'GPU execution failed' }
   }
 
   const output = String(input.output || '').trim()
-  let parsedOutput: any = null
-  try {
-    parsedOutput = output.startsWith('{') ? JSON.parse(output) : null
-  } catch {}
+  const parsedOutput = parseGpuEvidenceJson(output)
   const looksLikePreparationProbe = Boolean(
     input.fallbackUsed ||
     parsedOutput?.type === 'autonomous_preparation_manifest' ||
@@ -148,8 +182,13 @@ export function assessGpuExecutionEvidence(input: GpuEvidenceInput): GpuEvidence
   if (looksLikePreparationProbe) {
     if (shouldUseAutonomousPreparationFallback(input.stageName)) {
       const hasProbeEvidence = Boolean(
-        parsedOutput?.type === 'autonomous_preparation_manifest' &&
-        (parsedOutput?.gpu || parsedOutput?.model_ids || parsedOutput?.huggingface || parsedOutput?.installed_dependencies || parsedOutput?.workbench)
+        (
+          parsedOutput?.type === 'autonomous_preparation_manifest' &&
+          (parsedOutput?.gpu || parsedOutput?.model_ids || parsedOutput?.huggingface || parsedOutput?.installed_dependencies || parsedOutput?.workbench)
+        ) || (
+          /autonomous_preparation_manifest/.test(output) &&
+          /gpu|cuda|model_ids|huggingface|installed_dependencies|workbench|recommended_experiment/i.test(output)
+        )
       )
       if (hasProbeEvidence && hasMeasurableGpuEvidence(output, parsedOutput)) {
         return {
