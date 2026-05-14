@@ -338,8 +338,7 @@ function sanitizeReasonForGeneratedPython(value: string): string {
 
 function looksLikePreparationManifestWrapper(command: StrictGpuCommand): boolean {
   const code = String(command.code || '')
-  return /ar3\.preparation-manifest\.v1|preparation_manifest|smokeTests|smokeTest/i.test(code) &&
-    /manifest\s*=|json\.dumps\(manifest|preparation_manifest\s*=/.test(code)
+  return /ar3\.preparation-manifest\.v1|preparation_manifest|"smokeTests"|"smokeTest"|research_findings/i.test(code)
 }
 
 export function selectGpuSubmissionCommand(input: GpuSubmissionInput): GpuSubmissionResult {
