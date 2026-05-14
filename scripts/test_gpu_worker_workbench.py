@@ -115,6 +115,58 @@ PY"""
     assert argv == [sys.executable, "-c", 'import json\nprint(json.dumps({"ok": True}))']
 
 
+def test_manifest_torch_dependencies_are_smoked_and_repaired_before_manifest_smoke_tests():
+    root = tempfile.mkdtemp(prefix="ar3-worker-manifest-torch-repair-test-")
+    old_root = os.environ.get("AR3_WORKBENCH_ROOT")
+    old_install = gpu_worker.install_declared_dependencies
+    old_resolve = gpu_worker.resolve_manifest_models
+    old_ensure = gpu_worker.ensure_torch_cuda_workbench
+    old_run = gpu_worker.subprocess.run
+    os.environ["AR3_WORKBENCH_ROOT"] = root
+    ensured = {"called": False}
+
+    class FakeCompleted:
+        returncode = 0
+        stdout = "TORCH_SMOKE_OK"
+        stderr = ""
+
+    def fake_run(cmd, *args, **kwargs):
+        if isinstance(cmd, list) and len(cmd) >= 3 and cmd[1] == "-c" and "import torch" in cmd[2]:
+            assert ensured["called"], "manifest smoke test ran before torch CUDA repair/smoke"
+            return FakeCompleted()
+        return old_run(cmd, *args, **kwargs)
+
+    try:
+        gpu_worker.install_declared_dependencies = lambda deps, context, timeout=900, job_id='': {"success": True, "output": "installed", "error": None}
+        gpu_worker.resolve_manifest_models = lambda manifest, context, timeout=900: {"success": True, "output": "", "error": None}
+
+        def fake_ensure(context, force=False, timeout=600):
+            ensured["called"] = True
+            return {"success": True, "output": "torch_cuda_smoke initial exit=0", "error": None}
+
+        gpu_worker.ensure_torch_cuda_workbench = fake_ensure
+        gpu_worker.subprocess.run = fake_run
+        context = gpu_worker.prepare_workbench({"jobId": "gpu_space-manifest-torch_1", "spaceId": "space manifest torch"})
+        manifest = {
+            "dependencies": ["torch"],
+            "smokeTests": [{"name": "torch-smoke", "command": "python -c 'import torch; print(\"TORCH_SMOKE_OK\")'"}],
+        }
+        result = gpu_worker.prepare_manifest_environment(manifest, context)
+        assert result["success"] is True, result
+        assert ensured["called"] is True
+        assert "torch_cuda_smoke initial exit=0" in result["output"]
+    finally:
+        gpu_worker.install_declared_dependencies = old_install
+        gpu_worker.resolve_manifest_models = old_resolve
+        gpu_worker.ensure_torch_cuda_workbench = old_ensure
+        gpu_worker.subprocess.run = old_run
+        if old_root is None:
+            os.environ.pop("AR3_WORKBENCH_ROOT", None)
+        else:
+            os.environ["AR3_WORKBENCH_ROOT"] = old_root
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def test_required_model_without_smoke_test_does_not_block_research_execution():
     root = tempfile.mkdtemp(prefix="ar3-worker-empty-model-smoke-test-")
     old_root = os.environ.get("AR3_WORKBENCH_ROOT")
@@ -412,6 +464,8 @@ if __name__ == "__main__":
     test_extract_preparation_manifest_from_context_and_prompt()
     test_run_manifest_smoke_tests_executes_in_workbench_and_records_manifest_file()
     test_safe_smoke_command_uses_current_python_interpreter()
+    test_safe_smoke_command_converts_python_heredoc_to_inline_code()
+    test_manifest_torch_dependencies_are_smoked_and_repaired_before_manifest_smoke_tests()
     test_huggingface_models_are_resolved_into_workbench_before_smoke_tests()
     test_fstring_item_coercion_does_not_cross_other_braces()
     test_execute_python_code_injects_missing_common_stdlib_imports()

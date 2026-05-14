@@ -630,6 +630,25 @@ def prepare_manifest_environment(manifest: dict, context: dict, timeout: int = 9
             'error': 'Preparation dependency installation failed: ' + str(dep_result.get('error', 'unknown')),
         }
 
+    manifest_needs_torch = _code_or_deps_need_torch(
+        '\n'.join(
+            [str(smoke.get('command') or '') for smoke in manifest.get('smokeTests') or [] if isinstance(smoke, dict)]
+            + [str(model.get('smokeTest') or '') for model in manifest.get('models') or [] if isinstance(model, dict)]
+        ),
+        manifest.get('dependencies') or [],
+    )
+    if manifest_needs_torch:
+        torch_result = ensure_torch_cuda_workbench(context, timeout=min(timeout, 600))
+        if torch_result.get('output'):
+            output_parts.append('torch_cuda_workbench:\n' + torch_result.get('output', ''))
+        if not torch_result.get('success'):
+            return {
+                'success': False,
+                'output': '\n'.join(output_parts),
+                'error': 'Preparation torch CUDA workbench validation failed: ' + str(torch_result.get('error', 'unknown')),
+            }
+        context['env'] = _without_cuda_toolkit_ld_path(context['env'])
+
     model_resolution = resolve_manifest_models(manifest, context, timeout=timeout)
     if model_resolution.get('output'):
         output_parts.append('model_resolution:\n' + model_resolution.get('output', ''))
