@@ -1307,12 +1307,31 @@ def validate_execution_result_evidence(result: dict) -> dict:
         'cuda_available', 'gpu_name', 'gpu_count', 'gpu_memory', 'gpu_memory_total',
         'vram', 'device', 'device_name', 'torch_cuda_version', 'nvidia_driver',
     }
+    smoke_only_keys = {
+        'cuda_device', 'cuda_tensor_sum', 'torch_cuda_available', 'torch_cuda_version',
+        'torch_version',
+    }
+    saw_preparation_contract_failure = False
+    saw_non_prelude_json = False
     for obj in json_objects:
+        is_autonomous_preparation_probe = obj.get('type') == 'autonomous_preparation_manifest'
+        saw_preparation_contract_failure = saw_preparation_contract_failure or bool(
+            is_autonomous_preparation_probe and any(obj.get(key) for key in failure_keys)
+        )
         lowered_keys = {str(key).lower() for key in obj.keys()}
+        is_worker_torch_smoke = bool(lowered_keys) and lowered_keys <= smoke_only_keys
+        if is_autonomous_preparation_probe or is_worker_torch_smoke:
+            continue
+        saw_non_prelude_json = True
         if lowered_keys & evidence_keys:
             return result
         if any(str(obj.get(key)).lower().startswith('cuda') for key in ('device', 'runtime', 'backend')):
             return result
+
+    if saw_preparation_contract_failure and saw_non_prelude_json:
+        result['success'] = False
+        result['error'] = 'Experiment output missing structured runtime GPU evidence outside the failed preparation probe'
+        return result
 
     evidence_patterns = [
         r'\bcuda[_ -]?(available|device|version)\b',

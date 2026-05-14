@@ -364,6 +364,24 @@ torch_cuda_smoke initial exit=0
     assert "contract_failure_reason" in result["error"]
 
 
+def test_validation_rejects_preparation_probe_plus_unstructured_prose():
+    output = """
+torch_cuda_smoke initial exit=0
+{"cuda_device": "NVIDIA GeForce RTX 3060", "torch_cuda_available": true}
+{"type":"autonomous_preparation_manifest","contract_failure_reason":"JSON action must be run_python","gpu":{"cuda_available":true,"gpu_name":"NVIDIA GeForce RTX 3060"}}
+=== INVESTIGATION ===
+GPU WORKBENCH VERIFICATION
+PyTorch version: 2.5.1+cu124
+CUDA available: True
+GPU: NVIDIA GeForce RTX 3060
+### RESEARCH_JSON_OUTPUT ###
+{"research_complete": true, "key_findings": ["prose-only research"], "recommended_approach": "try later"}
+"""
+    result = gpu_worker.validate_execution_result_evidence({"success": True, "output": output, "error": None})
+    assert result["success"] is False
+    assert "structured runtime GPU evidence" in result["error"]
+
+
 def test_process_job_marks_validation_failures_as_failed_validation():
     root = tempfile.mkdtemp(prefix="ar3-worker-status-test-")
     old_queue = gpu_worker.JOB_QUEUE_FILE
