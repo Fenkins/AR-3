@@ -3,7 +3,7 @@ import { callAI, AIConfig, AIMessage } from './ai'
 import { generateVariants, gradeVariant, selectBestVariant, saveVariantsToDatabase, updateVariantStepDb, updateVariantDb, selectBestVariantFromDb, loadVariantsFromDb, reEvaluateStepCount, Variant, Step } from './variant-engine'
 import { buildEmbeddingContext } from './embeddings'
 import { addToCache } from './model-cache'
-import { assessGpuExecutionEvidence, buildAutonomousPreparationCommand, extractStrictGpuCommand, selectGpuSubmissionCommand, shouldUseAutonomousPreparationFallback } from './gpu-command-contract'
+import { assessGpuExecutionEvidence, buildAutonomousPreparationCommand, buildDeterministicGpuExperimentCommand, extractStrictGpuCommand, selectGpuSubmissionCommand, shouldUseAutonomousPreparationFallback } from './gpu-command-contract'
 import { buildPreparationManifestInstructions, buildPreparationRetryMessage, extractPreparationManifestCandidate, validatePreparationManifest } from './preparation-manifest'
 import fs from 'fs'
 
@@ -927,31 +927,48 @@ ${useGpu && shouldUseAutonomousPreparationFallback(stageName) ? `## Preparation 
         if (!strictCommand.ok) {
           const strictReason = (strictCommand as { ok: false; reason: string }).reason
           if (!shouldUseAutonomousPreparationFallback(stageName)) {
-            const failure = `[GPU CONTRACT FAILED]: ${strictReason}\n\nThe ${stageName} stage must return executable JSON {"action":"run_python","dependencies":[],"code":"..."}. Autonomous preparation fallback is intentionally limited to Investigation/Planning so prose or pseudocode cannot be recorded as a completed GPU experiment.`
-            debugLog(`[executeVariant] Strict GPU code contract failed after ${strictAttempts + 1} attempt(s); failing ${stageName} step without fallback: ${strictReason}`)
-            step.status = 'FAILED'
-            step.result = failure
-            step.grade = 0
-            await updateVariantStepDb(step.id, {
-              result: failure,
-              grade: 0,
-              status: 'FAILED',
-            })
-            variant.failureMode = 'GPU_CONTRACT_INVALID_OUTPUT'
-            continue
+            const preparationManifest = (() => { try { return space.setupStep ? JSON.parse(space.setupStep) : null } catch { return null } })()
+            if (stageName === 'Implementation' && preparationManifest) {
+              debugLog(`[executeVariant] Strict GPU code contract failed after ${strictAttempts + 1} attempt(s); submitting deterministic GPU experiment fallback from validated preparation manifest: ${strictReason}`)
+              strictCommand = {
+                ok: true,
+                command: buildDeterministicGpuExperimentCommand({
+                  researchGoal: space.initialPrompt,
+                  stepDescription: step.description,
+                  stageName,
+                  reason: strictReason,
+                  preparationManifest,
+                }),
+              }
+              variant.failureMode = 'GPU_CONTRACT_DETERMINISTIC_EXPERIMENT_FALLBACK'
+            } else {
+              const failure = `[GPU CONTRACT FAILED]: ${strictReason}\n\nThe ${stageName} stage must return executable JSON {"action":"run_python","dependencies":[],"code":"..."}. No validated preparation manifest was available for deterministic rescue, so prose or pseudocode cannot be recorded as a completed GPU experiment.`
+              debugLog(`[executeVariant] Strict GPU code contract failed after ${strictAttempts + 1} attempt(s); failing ${stageName} step without deterministic fallback: ${strictReason}`)
+              step.status = 'FAILED'
+              step.result = failure
+              step.grade = 0
+              await updateVariantStepDb(step.id, {
+                result: failure,
+                grade: 0,
+                status: 'FAILED',
+              })
+              variant.failureMode = 'GPU_CONTRACT_INVALID_OUTPUT'
+              continue
+            }
+          } else {
+            debugLog(`[executeVariant] Strict GPU code contract failed after ${strictAttempts + 1} attempt(s); submitting autonomous preparation fallback: ${strictReason}`)
+            gpuSubmissionUsedFallback = true
+            strictCommand = {
+              ok: true,
+              command: buildAutonomousPreparationCommand({
+                researchGoal: space.initialPrompt,
+                stepDescription: step.description,
+                stageName,
+                reason: strictReason,
+              }),
+            }
+            variant.failureMode = 'GPU_CONTRACT_FALLBACK_PREPARATION'
           }
-          debugLog(`[executeVariant] Strict GPU code contract failed after ${strictAttempts + 1} attempt(s); submitting autonomous preparation fallback: ${strictReason}`)
-          gpuSubmissionUsedFallback = true
-          strictCommand = {
-            ok: true,
-            command: buildAutonomousPreparationCommand({
-              researchGoal: space.initialPrompt,
-              stepDescription: step.description,
-              stageName,
-              reason: strictReason,
-            }),
-          }
-          variant.failureMode = 'GPU_CONTRACT_FALLBACK_PREPARATION'
         }
 
         response.content = JSON.stringify(strictCommand.command)

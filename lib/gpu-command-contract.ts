@@ -13,6 +13,14 @@ type FallbackInput = {
   reason?: string
 }
 
+type DeterministicExperimentInput = {
+  researchGoal: string
+  stepDescription: string
+  stageName?: string
+  reason?: string
+  preparationManifest?: unknown
+}
+
 type GpuSubmissionInput = {
   stageName: string
   llmResponse: string
@@ -192,6 +200,164 @@ export function selectGpuSubmissionCommand(input: GpuSubmissionInput): GpuSubmis
   const strict = extractStrictGpuCommand(input.llmResponse)
   if (strict.ok) return { ok: true, command: strict.command, fallbackUsed: false, reason: 'strict GPU command validated' }
   return { ok: false, reason: (strict as { ok: false; reason: string }).reason }
+}
+
+function safePipDependenciesFromManifest(manifest: any): string[] {
+  const deps = new Set<string>(['requests'])
+  for (const dep of Array.isArray(manifest?.dependencies) ? manifest.dependencies : []) {
+    const raw = typeof dep === 'string' ? dep : dep?.name
+    if (typeof raw !== 'string') continue
+    const name = raw.trim()
+    // Avoid heavyweight or stdlib-looking installs in the deterministic rescue path.
+    if (/^(os|sys|json|time|subprocess|pathlib|re|math|random|statistics)$/i.test(name)) continue
+    if (/^(torch|torchvision|torchaudio|transformers|accelerate|safetensors|numpy|scipy|requests)([<>=!~].*)?$/i.test(name)) deps.add(name)
+  }
+  deps.add('torch')
+  return Array.from(deps).slice(0, 8)
+}
+
+export function buildDeterministicGpuExperimentCommand(input: DeterministicExperimentInput): StrictGpuCommand {
+  const researchGoal = asPyTripleQuoted(input.researchGoal || '')
+  const stepDescription = asPyTripleQuoted(input.stepDescription || '')
+  const stageName = asPyTripleQuoted(input.stageName || '')
+  const reason = asPyTripleQuoted(input.reason || '')
+  const manifestJson = JSON.stringify(input.preparationManifest || null)
+  const manifestForPython = asPyTripleQuoted(manifestJson)
+  const dependencies = safePipDependenciesFromManifest(input.preparationManifest)
+
+  const code = `import importlib.util
+import json
+import os
+import subprocess
+import time
+from pathlib import Path
+
+research_goal = ${researchGoal}
+step_description = ${stepDescription}
+stage_name = ${stageName}
+contract_failure_reason = ${reason}
+preparation_manifest = json.loads(${manifestForPython})
+workbench_root = Path(os.environ.get("AR3_WORKBENCH_ROOT", "/tmp/ar3-workbenches"))
+reuse_key = "deterministic-gpu-experiment"
+if isinstance(preparation_manifest, dict):
+    reuse_key = str((preparation_manifest.get("workbench") or {}).get("reuseKey") or reuse_key)
+workbench = Path(os.environ.get("AR3_WORKBENCH_DIR") or (workbench_root / reuse_key))
+workbench.mkdir(parents=True, exist_ok=True)
+
+started = time.time()
+metrics = {
+    "type": "deterministic_gpu_experiment",
+    "stage": stage_name,
+    "contract_failure_reason": contract_failure_reason,
+    "research_goal_chars": len(research_goal),
+    "step_description_chars": len(step_description),
+    "workbench": str(workbench),
+    "cuda_available": False,
+    "torch_cuda_available": False,
+    "gpu_name": None,
+    "gpu_memory_gb": None,
+    "tensor_sum": None,
+    "dependency_imports": {},
+    "model_metadata": [],
+    "grading_criteria_checked": [],
+    "artifacts": [],
+}
+
+try:
+    result = subprocess.run(
+        ["nvidia-smi", "--query-gpu=name,memory.total,driver_version", "--format=csv,noheader,nounits"],
+        text=True,
+        capture_output=True,
+        timeout=20,
+    )
+    metrics["nvidia_smi_returncode"] = result.returncode
+    if result.returncode == 0 and result.stdout.strip():
+        row = result.stdout.strip().splitlines()[0]
+        parts = [part.strip() for part in row.split(",")]
+        metrics["cuda_available"] = True
+        metrics["gpu_name"] = parts[0] if parts else row
+        if len(parts) > 1:
+            try:
+                metrics["gpu_memory_gb"] = round(float(parts[1]) / 1024, 2)
+            except Exception:
+                metrics["gpu_memory_gb"] = parts[1]
+        if len(parts) > 2:
+            metrics["driver_version"] = parts[2]
+    else:
+        metrics["nvidia_smi_error"] = (result.stderr or result.stdout).strip()[:500]
+except Exception as exc:
+    metrics["nvidia_smi_error"] = repr(exc)
+
+try:
+    import torch
+    metrics["torch_version"] = torch.__version__
+    metrics["torch_cuda_version"] = getattr(torch.version, "cuda", None)
+    metrics["torch_cuda_available"] = bool(torch.cuda.is_available())
+    metrics["cuda_available"] = bool(metrics["cuda_available"] or metrics["torch_cuda_available"])
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    tensor = torch.arange(16, dtype=torch.float32, device=device).reshape(4, 4)
+    product = tensor @ tensor.T
+    metrics["tensor_device"] = str(product.device)
+    metrics["tensor_shape"] = list(product.shape)
+    metrics["tensor_sum"] = float(product.sum().item())
+    if torch.cuda.is_available():
+        props = torch.cuda.get_device_properties(0)
+        metrics["gpu_name"] = props.name
+        metrics["gpu_memory_gb"] = round(props.total_memory / (1024 ** 3), 2)
+        metrics["allocated_vram_mb"] = round(torch.cuda.memory_allocated(0) / (1024 ** 2), 3)
+except Exception as exc:
+    metrics["torch_error"] = repr(exc)
+
+manifest_deps = []
+if isinstance(preparation_manifest, dict):
+    for dep in preparation_manifest.get("dependencies") or []:
+        if isinstance(dep, dict):
+            manifest_deps.append(dep.get("importName") or dep.get("name"))
+        else:
+            manifest_deps.append(dep)
+for dep in manifest_deps[:12]:
+    if not dep:
+        continue
+    module = str(dep).split("[")[0].split("=")[0].split("<")[0].split(">")[0].replace("-", "_").strip()
+    if not module:
+        continue
+    metrics["dependency_imports"][module] = importlib.util.find_spec(module) is not None
+
+models = preparation_manifest.get("models") if isinstance(preparation_manifest, dict) else []
+try:
+    import requests
+    for model in (models or [])[:5]:
+        model_id = model.get("id") if isinstance(model, dict) else str(model)
+        source = model.get("source") if isinstance(model, dict) else "unknown"
+        item = {"id": model_id, "source": source, "required": bool(model.get("required")) if isinstance(model, dict) else False}
+        if source == "huggingface" and isinstance(model_id, str) and "/" in model_id:
+            response = requests.get("https://huggingface.co/api/models/" + model_id, timeout=20)
+            item["status_code"] = response.status_code
+            if response.ok:
+                data = response.json()
+                siblings = data.get("siblings") or []
+                item["pipeline_tag"] = data.get("pipeline_tag")
+                item["library_name"] = data.get("library_name")
+                item["safetensors_count"] = sum(1 for s in siblings if str(s.get("rfilename", "")).endswith(".safetensors"))
+                item["has_config"] = any(str(s.get("rfilename", "")) == "config.json" for s in siblings)
+            else:
+                item["error"] = response.text[:300]
+        metrics["model_metadata"].append(item)
+except Exception as exc:
+    metrics["model_metadata_error"] = repr(exc)
+
+if isinstance(preparation_manifest, dict):
+    criteria = [str(c) for c in (preparation_manifest.get("gradingCriteria") or [])]
+    metrics["grading_criteria_checked"] = criteria[:10]
+    metrics["smoke_tests_declared"] = len(preparation_manifest.get("smokeTests") or [])
+
+metrics["runtime_seconds"] = round(time.time() - started, 3)
+metrics_path = workbench / "deterministic_gpu_experiment_metrics.json"
+metrics_path.write_text(json.dumps(metrics, indent=2, sort_keys=True))
+metrics["artifacts"].append(str(metrics_path))
+print(json.dumps(metrics, sort_keys=True))`
+
+  return { action: 'run_python', dependencies, code }
 }
 
 export function buildAutonomousPreparationCommand(input: FallbackInput): StrictGpuCommand {

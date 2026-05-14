@@ -110,6 +110,41 @@ function testAutonomousPreparationFallbackDoesNotCompleteExperimentSteps() {
   assert.match(assessed.reason, /not a completed executable experiment/i)
 }
 
+function testDeterministicGpuExperimentFallbackUsesManifestAndPassesEvidenceGate() {
+  const command = contract.buildDeterministicGpuExperimentCommand({
+    researchGoal: 'Measure whether org/example-model can execute a GPU smoke test.',
+    stepDescription: 'Implementation should run a concrete experiment with metrics.',
+    stageName: 'Implementation',
+    reason: 'response did not parse as the required JSON object',
+    preparationManifest: {
+      dependencies: [{ name: 'torch', importName: 'torch' }, { name: 'requests', importName: 'requests' }],
+      models: [{ id: 'org/example-model', source: 'huggingface', required: false }],
+      gradingCriteria: ['prints cuda_available and tensor_sum metrics'],
+      smokeTests: [{ name: 'gpu', command: 'python smoke.py' }],
+      workbench: { reuseKey: 'example-workbench' },
+    },
+  })
+  assert.equal(command.action, 'run_python')
+  assert.ok(command.dependencies.includes('requests'))
+  assert.ok(command.dependencies.includes('torch'))
+  assert.match(command.code, /deterministic_gpu_experiment/)
+  assert.match(command.code, /torch\.cuda\.is_available/)
+  assert.match(command.code, /tensor_sum/)
+  assert.match(command.code, /grading_criteria_checked/)
+  assert.doesNotMatch(command.code, /TODO|placeholder|pseudocode|\.\.\./i)
+
+  const extracted = contract.extractStrictGpuCommand(JSON.stringify(command))
+  assert.equal(extracted.ok, true, extracted.reason)
+
+  const assessed = contract.assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    fallbackUsed: false,
+    success: true,
+    output: JSON.stringify({ type: 'deterministic_gpu_experiment', cuda_available: true, gpu_name: 'RTX 3060', tensor_sum: 123.0, artifacts: ['/tmp/metrics.json'] }),
+  })
+  assert.equal(assessed.valid, true, assessed.reason)
+}
+
 function testPreparationProbeShapeIsInvalidEvenIfFallbackFlagIsLost() {
   const assessed = contract.assessGpuExecutionEvidence({
     stageName: 'Investigation',
@@ -171,6 +206,7 @@ testPreparationStageWithValidatedManifestSubmitsExecutableFallbackInsteadOfRawMa
 testAutonomousPreparationFallbackIsLimitedToPreparationStages()
 testFallbackUsesWorkerProvidedWorkbenchDirectory()
 testAutonomousPreparationFallbackDoesNotCompleteExperimentSteps()
+testDeterministicGpuExperimentFallbackUsesManifestAndPassesEvidenceGate()
 testPreparationProbeShapeIsInvalidEvenIfFallbackFlagIsLost()
 testLongProseOutputIsNotValidGpuEvidence()
 testJsonMetricsOutputIsValidGpuEvidence()
