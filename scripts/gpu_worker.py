@@ -1050,6 +1050,11 @@ def repair_embedded_newline_string_literals(code: str) -> str:
     return re_module.sub(r'([\"\'])\n\1(?=\s*(?:\.join\s*\(|\+|,|\)|\]))', r'\1\\n\1', code)
 
 
+def repair_common_torch_api_mistakes(code: str) -> str:
+    """Repair narrow, observed PyTorch API hallucinations in generated experiments."""
+    return re_module.sub(r'(?<![A-Za-z0-9_])total_mem(?![A-Za-z0-9_])', 'total_memory', code)
+
+
 def auto_fix_code(code: str) -> str:
     """Attempt to fix common SyntaxError/IndentationError issues in one pass."""
     import re as re_module
@@ -1066,6 +1071,7 @@ def auto_fix_code(code: str) -> str:
     # delimiter fixer is intentionally broad and can corrupt valid multi-line dict calls
     # (e.g. item.update({ ... })) when the only real syntax error is a decoded "\n".
     fixed = repair_embedded_newline_string_literals(code)
+    fixed = repair_common_torch_api_mistakes(fixed)
     if fixed != code and _compiles(fixed):
         return fixed
 
@@ -1365,6 +1371,7 @@ def execute_python_code(code: str, timeout: int = DEFAULT_JOB_TIMEOUT, context: 
     )
 
     fixed_code = repair_embedded_newline_string_literals(fixed_code)
+    fixed_code = repair_common_torch_api_mistakes(fixed_code)
     fixed_code = inject_missing_common_stdlib_imports(fixed_code)
 
     # ── Patch: Handle LLaDA transformers 5.x compatibility ────────────────────

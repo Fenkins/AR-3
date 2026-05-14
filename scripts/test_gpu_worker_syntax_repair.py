@@ -49,9 +49,25 @@ def test_leaves_normal_code_unchanged():
     assert gpu_worker.repair_embedded_newline_string_literals(code) == code
 
 
+def test_repairs_torch_cuda_device_total_mem_alias():
+    code = "props = torch.cuda.get_device_properties(0)\nprint(props.total_mem)\n"
+    fixed = gpu_worker.repair_common_torch_api_mistakes(code)
+    assert "props.total_memory" in fixed
+    assert "props.total_mem)" not in fixed
+
+
+def test_auto_fix_applies_torch_cuda_device_total_mem_alias():
+    code = "props = torch.cuda.get_device_properties(0)\nprint(props.total_mem)\n"
+    fixed = gpu_worker.auto_fix_code(code)
+    assert "props.total_memory" in fixed
+    assert "props.total_mem)" not in fixed
+
+
 if __name__ == '__main__':
     test_repairs_newline_join_literal()
     test_repairs_newline_concat_literal()
     test_auto_fix_repairs_newline_without_corrupting_multiline_dict()
     test_leaves_normal_code_unchanged()
+    test_repairs_torch_cuda_device_total_mem_alias()
+    test_auto_fix_applies_torch_cuda_device_total_mem_alias()
     print('gpu worker syntax repair tests passed')
