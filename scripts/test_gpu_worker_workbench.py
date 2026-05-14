@@ -105,10 +105,25 @@ def test_safe_smoke_command_uses_current_python_interpreter():
     assert argv[0] == sys.executable
 
 
-def test_required_model_smoke_tests_execute_before_experiments():
-    root = tempfile.mkdtemp(prefix="ar3-worker-model-smoke-test-")
+def test_huggingface_models_are_resolved_into_workbench_before_smoke_tests():
+    root = tempfile.mkdtemp(prefix="ar3-worker-model-resolve-test-")
     old_root = os.environ.get("AR3_WORKBENCH_ROOT")
+    old_run = gpu_worker.subprocess.run
     os.environ["AR3_WORKBENCH_ROOT"] = root
+    calls = []
+
+    class FakeCompleted:
+        returncode = 0
+        stdout = '{"repo_id":"example/tiny-model","local_dir":"/tmp/fake-model","downloaded_files":["config.json"],"ok":true}'
+        stderr = ""
+
+    def fake_run(cmd, *args, **kwargs):
+        if isinstance(cmd, list) and len(cmd) >= 3 and cmd[1] == "-c" and "AR3_MODEL_ID" in cmd[2]:
+            calls.append((cmd, kwargs))
+            return FakeCompleted()
+        return old_run(cmd, *args, **kwargs)
+
+    gpu_worker.subprocess.run = fake_run
     try:
         context = gpu_worker.prepare_workbench({"jobId": "gpu_space-model_1", "spaceId": "space model"})
         manifest = {
@@ -117,6 +132,7 @@ def test_required_model_smoke_tests_execute_before_experiments():
                     "id": "example/tiny-model",
                     "source": "huggingface",
                     "required": True,
+                    "files": ["config.json"],
                     "smokeTest": "python -c \"from pathlib import Path; import os; Path(os.environ['AR3_ARTIFACTS_DIR'], 'model-smoke.txt').write_text('model ok'); print('MODEL_SMOKE_OK')\"",
                 }
             ],
@@ -125,10 +141,15 @@ def test_required_model_smoke_tests_execute_before_experiments():
         }
         result = gpu_worker.prepare_manifest_environment(manifest, context)
         assert result["success"] is True, result
+        assert calls, "expected HuggingFace resolver subprocess before smoke test"
+        assert calls[0][1]["env"]["AR3_MODEL_ID"] == "example/tiny-model"
+        assert calls[0][1]["env"]["AR3_MODEL_ALLOW_PATTERNS"] == '["config.json"]'
+        assert "model_resolve example/tiny-model exit=0" in result["output"]
         assert "model_smoke example/tiny-model exit=0" in result["output"]
         assert "MODEL_SMOKE_OK" in result["output"]
         assert Path(context["artifacts_dir"], "model-smoke.txt").read_text() == "model ok"
     finally:
+        gpu_worker.subprocess.run = old_run
         if old_root is None:
             os.environ.pop("AR3_WORKBENCH_ROOT", None)
         else:
@@ -215,7 +236,7 @@ if __name__ == "__main__":
     test_extract_preparation_manifest_from_context_and_prompt()
     test_run_manifest_smoke_tests_executes_in_workbench_and_records_manifest_file()
     test_safe_smoke_command_uses_current_python_interpreter()
-    test_required_model_smoke_tests_execute_before_experiments()
+    test_huggingface_models_are_resolved_into_workbench_before_smoke_tests()
     test_fstring_item_coercion_does_not_cross_other_braces()
     test_execute_python_code_injects_missing_common_stdlib_imports()
     test_execute_python_code_rejects_placeholders_before_running()

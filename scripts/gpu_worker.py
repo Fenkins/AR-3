@@ -283,8 +283,127 @@ def _safe_smoke_command(command: str):
     return argv, None
 
 
+def _manifest_model_allow_patterns(model: dict) -> list:
+    """Return safe HuggingFace snapshot allow patterns requested by manifest."""
+    for key in ('files', 'downloadFiles', 'allowPatterns', 'allow_patterns'):
+        value = model.get(key)
+        if isinstance(value, str) and value.strip():
+            return [value.strip()]
+        if isinstance(value, list):
+            patterns = [str(v).strip() for v in value if str(v).strip()]
+            if patterns:
+                return patterns[:50]
+    if model.get('downloadFull') is True and os.environ.get('AR3_ALLOW_FULL_MODEL_DOWNLOAD') == '1':
+        return []
+    return ['config.json', 'tokenizer.json', 'tokenizer_config.json', 'generation_config.json', '*.md', '*.txt']
+
+
+def resolve_manifest_models(manifest: dict, context: dict, timeout: int = 900) -> dict:
+    """Resolve/download manifest HuggingFace models into the persistent workbench."""
+    models = manifest.get('models') or [] if isinstance(manifest, dict) else []
+    if not models:
+        return {'success': True, 'output': 'no manifest models declared', 'error': None}
+
+    model_cache_root = Path(context['workbench_dir']) / 'models'
+    model_cache_root.mkdir(parents=True, exist_ok=True)
+    resolution = []
+    output_parts = []
+    resolver_code = r'''
+import json
+import os
+from pathlib import Path
+
+repo_id = os.environ['AR3_MODEL_ID']
+local_dir = Path(os.environ['AR3_MODEL_LOCAL_DIR'])
+allow_patterns = json.loads(os.environ.get('AR3_MODEL_ALLOW_PATTERNS') or '[]')
+try:
+    from huggingface_hub import HfApi, snapshot_download
+except ModuleNotFoundError as exc:
+    raise SystemExit('huggingface_hub unavailable after dependency install: ' + repr(exc))
+
+api = HfApi()
+info = api.model_info(repo_id)
+local_dir.mkdir(parents=True, exist_ok=True)
+kwargs = {
+    'repo_id': repo_id,
+    'local_dir': str(local_dir),
+    'local_dir_use_symlinks': False,
+    'resume_download': True,
+}
+if allow_patterns:
+    kwargs['allow_patterns'] = allow_patterns
+snapshot_path = snapshot_download(**kwargs)
+downloaded = []
+for path in Path(snapshot_path).rglob('*'):
+    if path.is_file():
+        downloaded.append(str(path.relative_to(snapshot_path)))
+print(json.dumps({
+    'ok': True,
+    'repo_id': repo_id,
+    'sha': getattr(info, 'sha', None),
+    'pipeline_tag': getattr(info, 'pipeline_tag', None),
+    'local_dir': snapshot_path,
+    'allow_patterns': allow_patterns,
+    'downloaded_files': sorted(downloaded)[:200],
+}, sort_keys=True))
+'''
+
+    for i, model in enumerate(models):
+        if not isinstance(model, dict):
+            return {'success': False, 'output': '\n'.join(output_parts), 'error': f'Invalid model entry at index {i}'}
+        if model.get('source') != 'huggingface':
+            continue
+        model_id = str(model.get('id') or '').strip()
+        required = model.get('required') is True
+        if not model_id:
+            if required:
+                return {'success': False, 'output': '\n'.join(output_parts), 'error': f'Required HuggingFace model at index {i} is missing id'}
+            continue
+        local_dir = model_cache_root / _safe_slug(model_id.replace('/', '-'), 'model')
+        allow_patterns = _manifest_model_allow_patterns(model)
+        install = subprocess.run(
+            [sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', '--target', context['packages_dir'], 'huggingface_hub>=0.20'],
+            capture_output=True, text=True, timeout=min(timeout, 300), env=context['env']
+        )
+        if install.returncode != 0:
+            err = install.stderr.strip() or f'pip exited {install.returncode}'
+            if required:
+                return {'success': False, 'output': '\n'.join(output_parts), 'error': f'HuggingFace resolver dependency install failed for {model_id}: {err}'}
+            output_parts.append(f'model_resolve {model_id} skipped resolver install failed: {err}')
+            continue
+        env = {
+            **context['env'],
+            'AR3_MODEL_ID': model_id,
+            'AR3_MODEL_LOCAL_DIR': str(local_dir),
+            'AR3_MODEL_ALLOW_PATTERNS': json.dumps(allow_patterns),
+        }
+        result = subprocess.run([sys.executable, '-c', resolver_code], capture_output=True, text=True, timeout=timeout, cwd=context['workbench_dir'], env=env)
+        stdout = result.stdout.strip()
+        stderr = result.stderr.strip()
+        output_parts.append(f'model_resolve {model_id} exit={result.returncode}\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}')
+        if result.returncode != 0:
+            if required:
+                return {'success': False, 'output': '\n'.join(output_parts), 'error': f'Required HuggingFace model {model_id!r} failed to resolve/download'}
+            continue
+        try:
+            item = json.loads(stdout) if stdout.startswith('{') else {'repo_id': model_id, 'raw': stdout}
+        except Exception:
+            item = {'repo_id': model_id, 'raw': stdout}
+        item['manifest_index'] = i
+        item['local_dir'] = item.get('local_dir') or str(local_dir)
+        resolution.append(item)
+
+    resolution_file = Path(context['workbench_dir']) / 'model_resolution.json'
+    with open(resolution_file, 'w') as f:
+        json.dump({'models': resolution}, f, indent=2, sort_keys=True)
+    context['env']['AR3_MODEL_RESOLUTION_FILE'] = str(resolution_file)
+    context['env']['AR3_MODEL_CACHE_DIR'] = str(model_cache_root)
+    output_parts.append(f'model_resolution_file={resolution_file}')
+    return {'success': True, 'output': '\n'.join(output_parts), 'error': None}
+
+
 def prepare_manifest_environment(manifest: dict, context: dict, timeout: int = 900) -> dict:
-    """Install manifest dependencies and run smoke tests before experiment code."""
+    """Install manifest dependencies, resolve models, and run smoke tests before experiment code."""
     if not isinstance(manifest, dict):
         return {'success': True, 'output': 'no preparation manifest supplied', 'error': None}
 
@@ -301,6 +420,16 @@ def prepare_manifest_environment(manifest: dict, context: dict, timeout: int = 9
             'success': False,
             'output': '\n'.join(output_parts),
             'error': 'Preparation dependency installation failed: ' + str(dep_result.get('error', 'unknown')),
+        }
+
+    model_resolution = resolve_manifest_models(manifest, context, timeout=timeout)
+    if model_resolution.get('output'):
+        output_parts.append('model_resolution:\n' + model_resolution.get('output', ''))
+    if not model_resolution.get('success'):
+        return {
+            'success': False,
+            'output': '\n'.join(output_parts),
+            'error': 'Preparation model resolution failed: ' + str(model_resolution.get('error', 'unknown')),
         }
 
     for model in manifest.get('models') or []:
