@@ -171,6 +171,7 @@ def normalize_declared_dependencies(dependencies) -> dict:
         'torchvision': 'torchvision==0.20.1',
         'torchaudio': 'torchaudio==2.5.1',
     }
+    stdlib_names = set(getattr(sys, 'stdlib_module_names', set())) | set(sys.builtin_module_names)
 
     for dep in dependencies or []:
         dep = _dependency_to_pip_spec(dep)
@@ -181,6 +182,9 @@ def normalize_declared_dependencies(dependencies) -> dict:
             return {'success': False, 'error': f'Unsafe dependency spec rejected: {dep!r}', 'deps': [], 'pip_args': []}
 
         dep_name = re_module.split(r'[<>=!~\[]', dep, maxsplit=1)[0].strip().lower().replace('_', '-')
+        import_name = dep_name.replace('-', '_')
+        if import_name in stdlib_names:
+            continue
         normalized = torch_pins.get(dep_name, dep)
         if dep_name in torch_pins:
             needs_pytorch_cu124 = True

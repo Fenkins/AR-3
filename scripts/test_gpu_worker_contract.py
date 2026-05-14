@@ -55,6 +55,14 @@ def test_bare_torch_dependency_is_pinned_to_cuda_12_4_wheel_index():
     assert 'https://download.pytorch.org/whl/cu124' in normalized['pip_args']
 
 
+def test_declared_stdlib_modules_are_not_pip_installed():
+    normalized = gpu_worker.normalize_declared_dependencies(['torch', 'os', 'subprocess', 'json'])
+    assert 'torch==2.5.1' in normalized['deps']
+    assert 'os' not in normalized['deps']
+    assert 'subprocess' not in normalized['deps']
+    assert 'json' not in normalized['deps']
+
+
 def test_self_reported_contract_failure_output_fails_job(tmp_path, monkeypatch):
     monkeypatch.setenv("AR3_WORKBENCH_ROOT", str(tmp_path / "workbenches"))
     code = (
