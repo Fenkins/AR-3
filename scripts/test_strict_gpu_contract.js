@@ -351,12 +351,82 @@ function testStrictGpuCommandRejectsExecutableGpuProbeCodeWithUnterminatedPython
   assert.match(extracted.reason, /python syntax/i)
 }
 
+function samplePreparationManifest() {
+  return {
+    schemaVersion: 'ar3.preparation-probe.v1',
+    researchType: 'gpu-autonomous-research',
+    objective: 'Run projection metrics for latent gasket ODE trajectories.',
+    researchGoal: 'Improve diffusion model inference with latent gasket ODE trajectory consensus.',
+    stepDescription: 'Implement projection metrics for comparing latent trajectories between two model streams.',
+    focusTerms: ['latent', 'trajectory', 'projection', 'ode', 'consensus'],
+    recommendedExperiment: {
+      objective: 'Run projection metrics for comparing latent trajectories between two model streams.',
+      metrics: ['trajectory_cosine_similarity', 'projection_residual', 'latent_vector_norm'],
+    },
+    dependencies: [{ name: 'torch', importName: 'torch' }, { name: 'requests', importName: 'requests' }],
+    models: [{ id: 'GSAI-ML/LLaDA-8B-Base', source: 'huggingface', required: false }],
+    gradingCriteria: ['prints cuda_available and trajectory_cosine_similarity metrics'],
+    workbench: { reuseKey: 'ode-research-workbench' },
+  }
+}
+
+function testPreparationStageWithExistingManifestPromotesWeakOutputToDeterministicExperiment() {
+  const selected = contract.selectGpuSubmissionCommand({
+    stageName: 'Investigation',
+    researchGoal: 'Improve diffusion model inference with latent gasket ODE trajectory consensus.',
+    stepDescription: 'Implement projection metrics for comparing latent trajectories between two model streams.',
+    preparationManifest: samplePreparationManifest(),
+    llmResponse: 'I would run an experiment and report the results later.',
+  })
+  assert.equal(selected.ok, true, selected.reason)
+  assert.equal(selected.fallbackUsed, false)
+  assert.match(selected.reason, /deterministic GPU experiment/i)
+  assert.equal(selected.command.action, 'run_python')
+  assert.match(selected.command.code, /deterministic_gpu_experiment/)
+  assert.match(selected.command.code, /trajectory_cosine_similarity/)
+  assert.doesNotMatch(selected.command.code, /autonomous_preparation_manifest/)
+}
+
+function testPreparationStageWithExistingManifestPromotesWrapperToDeterministicExperiment() {
+  const selected = contract.selectGpuSubmissionCommand({
+    stageName: 'Investigation',
+    researchGoal: 'Improve diffusion model inference with latent gasket ODE trajectory consensus.',
+    stepDescription: 'Implement projection metrics for comparing latent trajectories between two model streams.',
+    preparationManifest: samplePreparationManifest(),
+    llmResponse: JSON.stringify({
+      action: 'run_python',
+      dependencies: ['torch'],
+      code: 'import json\nimport torch\nprint(json.dumps({"cuda_available": torch.cuda.is_available()}))\nmanifest = {"research_findings": "wrapper narrative", "preparation_manifest": {"models": []}}\nprint(json.dumps(manifest))',
+    }),
+  })
+  assert.equal(selected.ok, true, selected.reason)
+  assert.equal(selected.fallbackUsed, false)
+  assert.match(selected.reason, /deterministic GPU experiment/i)
+  assert.match(selected.command.code, /research_metrics/)
+}
+
+function testDeterministicExperimentFallbackEmitsResearchSpecificMetrics() {
+  const command = contract.buildDeterministicGpuExperimentCommand({
+    researchGoal: 'Improve diffusion model inference with latent gasket ODE trajectory consensus.',
+    stepDescription: 'Implement projection metrics for comparing latent trajectories between two model streams.',
+    stageName: 'Investigation',
+    reason: 'JSON action must be run_python',
+    preparationManifest: samplePreparationManifest(),
+  })
+  const result = runPythonCode(command.code)
+  assert.equal(result.type, 'deterministic_gpu_experiment')
+  assert.ok(result.research_metrics, 'expected nested research_metrics')
+  assert.equal(typeof result.research_metrics.trajectory_cosine_similarity, 'number')
+  assert.equal(typeof result.research_metrics.projection_residual, 'number')
+  assert.ok(result.focus_terms.includes('trajectory'))
+}
+
 function testPreparationStagesShortCircuitWeakModelContractFailures() {
   assert.equal(contract.shouldShortCircuitPreparationFallback('Investigation', 'response did not parse as the required JSON object'), true)
   assert.equal(contract.shouldShortCircuitPreparationFallback('Planning', 'JSON action must be "run_python"'), true)
   assert.equal(contract.shouldShortCircuitPreparationFallback('Investigation', 'code contains placeholder/pseudocode markers'), true)
   assert.equal(contract.shouldShortCircuitPreparationFallback('Implementation', 'response did not parse as the required JSON object'), false)
-  assert.equal(contract.shouldShortCircuitPreparationFallback('Testing', 'JSON action must be "run_python"'), false)
+  assert.equal(contract.shouldShortCircuitPreparationFallback('Testing', 'JSON action must be run_python'), false)
 }
 
 testExtractsJsonAfterUnclosedThink()
@@ -379,5 +449,8 @@ testAutonomousPreparationFallbackEmitsStepSpecificResearchPlan()
 testPersistedPreparationManifestKeepsResearchSpecificObjective()
 testPreparationStageRejectsLlmManifestWrapperAndUsesFallback()
 testStrictGpuCommandRejectsExecutableGpuProbeCodeWithUnterminatedPythonString()
+testPreparationStageWithExistingManifestPromotesWeakOutputToDeterministicExperiment()
+testPreparationStageWithExistingManifestPromotesWrapperToDeterministicExperiment()
+testDeterministicExperimentFallbackEmitsResearchSpecificMetrics()
 testPreparationStagesShortCircuitWeakModelContractFailures()
 console.log('strict gpu contract tests passed')

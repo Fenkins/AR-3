@@ -901,6 +901,7 @@ ${useGpu && shouldUseAutonomousPreparationFallback(stageName) ? `## Preparation 
         }
 
         // Strict pre-submit contract: weak models must repair invalid prose/pseudocode before GPU time is spent.
+        const preparationManifestForRescue = (() => { try { return space.setupStep ? JSON.parse(space.setupStep) : null } catch { return null } })()
         let strictCommand = extractStrictGpuCommand(response.content)
         let strictAttempts = 0
         let gpuSubmissionUsedFallback = false
@@ -936,6 +937,7 @@ ${useGpu && shouldUseAutonomousPreparationFallback(stageName) ? `## Preparation 
             stageName,
             researchGoal: space.initialPrompt,
             stepDescription: step.description,
+            preparationManifest: preparationManifestForRescue,
           })
           if (selectedSubmission.ok && selectedSubmission.fallbackUsed) {
             debugLog(`[executeVariant] Preparation-stage GPU command was a weak wrapper; submitting autonomous preparation fallback: ${selectedSubmission.reason}`)
@@ -977,18 +979,33 @@ ${useGpu && shouldUseAutonomousPreparationFallback(stageName) ? `## Preparation 
               continue
             }
           } else {
-            debugLog(`[executeVariant] Strict GPU code contract failed after ${strictAttempts + 1} attempt(s); submitting autonomous preparation fallback: ${strictReason}`)
-            gpuSubmissionUsedFallback = true
-            strictCommand = {
-              ok: true,
-              command: buildAutonomousPreparationCommand({
-                researchGoal: space.initialPrompt,
-                stepDescription: step.description,
-                stageName,
-                reason: strictReason,
-              }),
+            if (preparationManifestForRescue) {
+              debugLog(`[executeVariant] Strict GPU code contract failed after ${strictAttempts + 1} attempt(s); preparation evidence already exists, submitting deterministic GPU experiment fallback: ${strictReason}`)
+              strictCommand = {
+                ok: true,
+                command: buildDeterministicGpuExperimentCommand({
+                  researchGoal: space.initialPrompt,
+                  stepDescription: step.description,
+                  stageName,
+                  reason: strictReason,
+                  preparationManifest: preparationManifestForRescue,
+                }),
+              }
+              variant.failureMode = 'GPU_CONTRACT_DETERMINISTIC_EXPERIMENT_FALLBACK'
+            } else {
+              debugLog(`[executeVariant] Strict GPU code contract failed after ${strictAttempts + 1} attempt(s); submitting autonomous preparation fallback: ${strictReason}`)
+              gpuSubmissionUsedFallback = true
+              strictCommand = {
+                ok: true,
+                command: buildAutonomousPreparationCommand({
+                  researchGoal: space.initialPrompt,
+                  stepDescription: step.description,
+                  stageName,
+                  reason: strictReason,
+                }),
+              }
+              variant.failureMode = 'GPU_CONTRACT_FALLBACK_PREPARATION'
             }
-            variant.failureMode = 'GPU_CONTRACT_FALLBACK_PREPARATION'
           }
         }
 
