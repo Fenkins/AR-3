@@ -3,7 +3,7 @@ import { callAI, AIConfig, AIMessage } from './ai'
 import { generateVariants, gradeVariant, selectBestVariant, saveVariantsToDatabase, updateVariantStepDb, updateVariantDb, selectBestVariantFromDb, loadVariantsFromDb, reEvaluateStepCount, Variant, Step } from './variant-engine'
 import { buildEmbeddingContext } from './embeddings'
 import { addToCache } from './model-cache'
-import { assessGpuExecutionEvidence, buildAutonomousPreparationCommand, buildDeterministicGpuExperimentCommand, extractStrictGpuCommand, selectGpuSubmissionCommand, shouldUseAutonomousPreparationFallback } from './gpu-command-contract'
+import { assessGpuExecutionEvidence, buildAutonomousPreparationCommand, buildDeterministicGpuExperimentCommand, extractStrictGpuCommand, selectGpuSubmissionCommand, shouldShortCircuitPreparationFallback, shouldUseAutonomousPreparationFallback } from './gpu-command-contract'
 import { buildPreparationManifestInstructions, buildPreparationRetryMessage, extractPreparationManifestCandidate, validatePreparationManifest } from './preparation-manifest'
 import fs from 'fs'
 
@@ -906,6 +906,10 @@ ${useGpu && shouldUseAutonomousPreparationFallback(stageName) ? `## Preparation 
           strictAttempts++
           const strictReason = (strictCommand as { ok: false; reason: string }).reason
           debugLog(`[executeVariant] Strict GPU code contract failed for "${stageName}" step "${step.name}": ${strictReason}; retry ${strictAttempts}/2`)
+          if (shouldShortCircuitPreparationFallback(stageName, strictReason)) {
+            debugLog(`[executeVariant] Weak-model contract failure is deterministic for ${stageName}; skipping extra LLM retries and using autonomous preparation fallback: ${strictReason}`)
+            break
+          }
           response = await callAI(agentConfig, [...messages, buildStrictGpuRetryMessage(step.description, strictReason, response.content)])
           strictCommand = extractStrictGpuCommand(response.content)
           if (shouldUseAutonomousPreparationFallback(stageName)) {

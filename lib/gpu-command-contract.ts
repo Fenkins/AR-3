@@ -4,6 +4,20 @@ export function shouldUseAutonomousPreparationFallback(stageName: string): boole
   return ['Investigation', 'Planning'].includes(stageName)
 }
 
+export function shouldShortCircuitPreparationFallback(stageName: string, reason: string): boolean {
+  if (!shouldUseAutonomousPreparationFallback(stageName)) return false
+  const normalized = String(reason || '').toLowerCase()
+  return [
+    'response did not parse',
+    'json action must',
+    'placeholder',
+    'pseudocode',
+    'code too short',
+    'missing non-empty code',
+    'lacks python syntax',
+  ].some(marker => normalized.includes(marker))
+}
+
 type StrictGpuResult = { ok: true; command: StrictGpuCommand } | { ok: false; reason: string }
 
 type FallbackInput = {

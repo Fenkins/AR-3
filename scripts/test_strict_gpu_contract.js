@@ -217,6 +217,14 @@ function testStrictGpuCommandAcceptsExecutableGpuProbeCode() {
   assert.equal(extracted.ok, true, extracted.reason)
 }
 
+function testPreparationStagesShortCircuitWeakModelContractFailures() {
+  assert.equal(contract.shouldShortCircuitPreparationFallback('Investigation', 'response did not parse as the required JSON object'), true)
+  assert.equal(contract.shouldShortCircuitPreparationFallback('Planning', 'JSON action must be "run_python"'), true)
+  assert.equal(contract.shouldShortCircuitPreparationFallback('Investigation', 'code contains placeholder/pseudocode markers'), true)
+  assert.equal(contract.shouldShortCircuitPreparationFallback('Implementation', 'response did not parse as the required JSON object'), false)
+  assert.equal(contract.shouldShortCircuitPreparationFallback('Testing', 'JSON action must be "run_python"'), false)
+}
+
 testExtractsJsonAfterUnclosedThink()
 testFallbackPreparationCommandIsExecutableAndPromptIndependent()
 testPreparationStageWithValidatedManifestSubmitsExecutableFallbackInsteadOfRawManifestJson()
@@ -230,4 +238,5 @@ testLongProseOutputIsNotValidGpuEvidence()
 testJsonMetricsOutputIsValidGpuEvidence()
 testStrictGpuCommandRejectsCpuOnlyMetricsCode()
 testStrictGpuCommandAcceptsExecutableGpuProbeCode()
+testPreparationStagesShortCircuitWeakModelContractFailures()
 console.log('strict gpu contract tests passed')
