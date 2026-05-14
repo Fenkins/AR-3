@@ -211,7 +211,10 @@ def normalize_declared_dependencies(dependencies) -> dict:
         import_name = dep_name.replace('-', '_')
         if import_name in stdlib_names:
             continue
-        normalized = torch_pins.get(dep_name, dep)
+        if dep_name == 'sklearn':
+            normalized = 'scikit-learn'
+        else:
+            normalized = torch_pins.get(dep_name, dep)
         if dep_name in torch_pins:
             needs_pytorch_cu124 = True
         if normalized not in seen:

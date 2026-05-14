@@ -71,6 +71,14 @@ def test_declared_stdlib_modules_are_not_pip_installed():
     assert 'json' not in normalized['deps']
 
 
+def test_deprecated_sklearn_dependency_is_rewritten_to_scikit_learn():
+    normalized = gpu_worker.normalize_declared_dependencies(['sklearn>=0.0', 'numpy'])
+    assert normalized['success'] is True
+    assert 'scikit-learn' in normalized['deps']
+    assert all(not dep.startswith('sklearn') for dep in normalized['deps'])
+    assert 'numpy' in normalized['deps']
+
+
 def test_install_dependencies_upgrades_existing_workbench_packages(monkeypatch, tmp_path):
     captured = {}
 
