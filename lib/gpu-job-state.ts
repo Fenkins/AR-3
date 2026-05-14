@@ -54,7 +54,7 @@ type GpuJobInput = {
 }
 
 const TRANSITIONS: Record<GpuJobStatus, GpuJobStatus[]> = {
-  queued: ['preparing_workbench', 'running_experiment', 'failed_validation', 'cancelled'],
+  queued: ['preparing_workbench', 'installing_dependencies', 'running_experiment', 'failed_validation', 'cancelled'],
   preparing_workbench: ['installing_dependencies', 'running_experiment', 'failed_validation', 'failed_runtime', 'cancelled'],
   installing_dependencies: ['running_experiment', 'failed_validation', 'failed_runtime', 'cancelled'],
   running_experiment: ['validating_evidence', 'completed', 'failed_runtime', 'cancelled'],

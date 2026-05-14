@@ -92,6 +92,15 @@ assert.equal(isValidGpuJobTransition('cancelled', 'queued'), false)
   assert.equal(claimed.events.at(-1).toStatus, 'preparing_workbench')
   assert.match(claimed.events.at(-1).message, /claimed/i)
 
+  const directInstalling = applyWorkerQueueStateToJob(job, {
+    jobId: job.jobId,
+    status: 'installing_dependencies',
+    updatedAt: '2026-05-13T00:00:20Z',
+  })
+  assert.equal(directInstalling.status, 'installing_dependencies')
+  assert.equal(directInstalling.updatedAt, '2026-05-13T00:00:20Z')
+  assert.equal(directInstalling.events.at(-1).toStatus, 'installing_dependencies')
+
   const installing = applyWorkerQueueStateToJob(claimed, {
     jobId: job.jobId,
     status: 'installing_dependencies',
