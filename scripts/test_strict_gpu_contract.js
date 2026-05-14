@@ -43,6 +43,8 @@ function testFallbackPreparationCommandIsExecutableAndPromptIndependent() {
   assert.ok(Array.isArray(fallback.dependencies))
   assert.ok(fallback.dependencies.includes('requests'))
   assert.match(fallback.code, /def discover_model_ids/)
+  assert.match(fallback.code, /GSAI-ML\/LLaDA-8B-Base/)
+  assert.doesNotMatch(fallback.code, /patterns = \[r\"\[A-Za-z0-9_\.\-\]\+\/\[A-Za-z0-9_\.\-\]\+\"/)
   assert.match(fallback.code, /torch\.cuda\.is_available/)
   assert.match(fallback.code, /print\(json\.dumps/)
   assert.doesNotMatch(fallback.code, /TODO|placeholder|pseudocode|\.\.\./i)

@@ -523,11 +523,24 @@ workbench = Path(os.environ.get("AR3_WORKBENCH_DIR") or (workbench_root / "gener
 workbench.mkdir(parents=True, exist_ok=True)
 
 def discover_model_ids(text):
-    patterns = [r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", r"(?:model|checkpoint)[:=]\\s*([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)"]
     found = []
-    for pattern in patterns:
+    alias_map = [
+        (r"\\bLLaDA(?:-8B-Base)?\\b", "GSAI-ML/LLaDA-8B-Base"),
+        (r"\\bDreamLM\\b|\\bDream\\s+dLLM", "Dream-org/Dream-v0-Base-7B"),
+    ]
+    for pattern, model_id in alias_map:
+        if re.search(pattern, text, re.I) and model_id not in found:
+            found.append(model_id)
+    explicit_patterns = [
+        r"(?:model|checkpoint|model_id|repo|repository|huggingface|hf)[:=]\\s*([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)",
+        r"(?:from_pretrained|snapshot_download)\\(\\s*\"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\"",
+    ]
+    reject = {"odt/odes", "reasoning/refinement", "inference/time", "latent/space"}
+    for pattern in explicit_patterns:
         for match in re.findall(pattern, text):
             candidate = match if isinstance(match, str) else match[0]
+            if candidate.lower() in reject:
+                continue
             if candidate not in found:
                 found.append(candidate)
     return found[:10]
