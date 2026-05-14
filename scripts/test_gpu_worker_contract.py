@@ -135,7 +135,7 @@ def test_worker_queue_status_tracks_preparation_install_execution_and_validation
     ]
 
 
-def test_self_reported_contract_failure_output_fails_job(tmp_path, monkeypatch):
+def test_self_reported_contract_failure_is_rejected_after_execution(tmp_path, monkeypatch):
     monkeypatch.setenv("AR3_WORKBENCH_ROOT", str(tmp_path / "workbenches"))
     code = (
         "import json\n"
@@ -152,6 +152,20 @@ def test_self_reported_contract_failure_output_fails_job(tmp_path, monkeypatch):
     }, timeout=30)
     assert result["success"] is False
     assert "contract_failure_reason" in result["error"]
+
+
+def test_autonomous_preparation_manifest_contract_reason_is_preserved_as_probe_evidence():
+    result = gpu_worker.validate_execution_result_evidence({
+        "success": True,
+        "error": None,
+        "output": json.dumps({
+            "type": "autonomous_preparation_manifest",
+            "contract_failure_reason": "JSON action must be run_python",
+            "gpu": {"cuda_available": True, "gpu_name": "test gpu"},
+        }),
+    })
+    assert result["success"] is True
+    assert result["error"] is None
 
 
 def test_successful_output_must_contain_runtime_gpu_evidence():

@@ -1247,9 +1247,10 @@ def validate_execution_result_evidence(result: dict) -> dict:
     failure_keys = ('contract_failure_reason', 'contractFailureReason', 'failure_reason')
     json_objects = list(_iter_json_objects_from_output(output))
     for obj in json_objects:
+        is_autonomous_preparation_probe = obj.get('type') == 'autonomous_preparation_manifest'
         for key in failure_keys:
             value = obj.get(key)
-            if value:
+            if value and not is_autonomous_preparation_probe:
                 result['success'] = False
                 result['error'] = f'Experiment output self-reported {key}: {value}'
                 return result
