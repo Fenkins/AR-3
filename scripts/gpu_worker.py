@@ -200,8 +200,11 @@ def normalize_declared_dependencies(dependencies) -> dict:
         dep = _dependency_to_pip_spec(dep)
         if not dep or dep.lower() in {'python', 'pip'}:
             continue
-        # Dependencies are pip specs, not shell commands/options.
-        if re_module.search(r'[;&|`$<>\n\r]', dep) or dep.startswith('-'):
+        # Dependencies are pip specs, not shell commands/options. Allow PEP 440
+        # comparison operators (for example torch>=2.0.0) because models often
+        # emit versioned package requirements; subprocess receives argv directly,
+        # so these are not shell redirections.
+        if re_module.search(r'[;&|`$\n\r]', dep) or dep.startswith('-'):
             return {'success': False, 'error': f'Unsafe dependency spec rejected: {dep!r}', 'deps': [], 'pip_args': []}
 
         dep_name = re_module.split(r'[<>=!~\[]', dep, maxsplit=1)[0].strip().lower().replace('_', '-')

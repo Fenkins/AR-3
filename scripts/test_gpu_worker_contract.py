@@ -56,6 +56,13 @@ def test_bare_torch_dependency_is_pinned_to_cuda_12_4_wheel_index():
     assert 'https://download.pytorch.org/whl/cu124' in normalized['pip_args']
 
 
+def test_versioned_torch_dependency_is_pinned_instead_of_rejected():
+    normalized = gpu_worker.normalize_declared_dependencies(['torch>=2.0.0'])
+    assert normalized['success'] is True
+    assert normalized['deps'] == ['torch==2.5.1']
+    assert 'https://download.pytorch.org/whl/cu124' in normalized['pip_args']
+
+
 def test_declared_stdlib_modules_are_not_pip_installed():
     normalized = gpu_worker.normalize_declared_dependencies(['torch', 'os', 'subprocess', 'json'])
     assert 'torch==2.5.1' in normalized['deps']
