@@ -302,6 +302,23 @@ function testPersistedPreparationManifestKeepsResearchSpecificObjective() {
   assert.equal(extracted.manifest.recommendedExperiment.metrics[0], 'trajectory_cosine_similarity')
 }
 
+function testPreparationStageRejectsLlmManifestWrapperAndUsesFallback() {
+  const selected = contract.selectGpuSubmissionCommand({
+    stageName: 'Investigation',
+    researchGoal: 'Improve diffusion model inference with latent gasket ODE trajectory consensus.',
+    stepDescription: 'Implement projection metrics for comparing latent trajectories between two model streams.',
+    llmResponse: JSON.stringify({
+      action: 'run_python',
+      dependencies: ['torch>=2.0.0', 'transformers>=4.35.0'],
+      code: 'import json\nimport torch\nprint(json.dumps({"cuda_available": torch.cuda.is_available()}))\nmanifest = {"schemaVersion": "ar3.preparation-manifest.v1", "preparation_manifest": {"models": [{"modelId": "GSAI-ML/LLaDA-8B-Base", "smokeTest": {}}]}}\nprint(json.dumps(manifest))',
+    }),
+  })
+  assert.equal(selected.ok, true, selected.reason)
+  assert.equal(selected.fallbackUsed, true)
+  assert.match(selected.reason, /preparation manifest wrapper/i)
+  assert.match(selected.command.code, /recommended_experiment/)
+}
+
 function testStrictGpuCommandRejectsExecutableGpuProbeCodeWithUnterminatedPythonString() {
   const badCode = 'import json\nimport torch\nresult = {"cuda_available": torch.cuda.is_available()}\nmanifest = {\n    "smokeTests": [\n        {\n            "name": "latent_space_probing",\n            "command": "python -c \\"import numpy as np; print(\'vector_norm:\', np.linalg.norm(v))\\",\n            "expectedEvidence": "vector_norm: float"\n        }\n    ]\n}\nprint(json.dumps(manifest | result))'
   const extracted = contract.extractStrictGpuCommand(JSON.stringify({
@@ -338,6 +355,7 @@ testStrictGpuCommandAcceptsExecutableGpuProbeCode()
 testFallbackPreparationCommandSanitizesContractReasonMarkers()
 testAutonomousPreparationFallbackEmitsStepSpecificResearchPlan()
 testPersistedPreparationManifestKeepsResearchSpecificObjective()
+testPreparationStageRejectsLlmManifestWrapperAndUsesFallback()
 testStrictGpuCommandRejectsExecutableGpuProbeCodeWithUnterminatedPythonString()
 testPreparationStagesShortCircuitWeakModelContractFailures()
 console.log('strict gpu contract tests passed')

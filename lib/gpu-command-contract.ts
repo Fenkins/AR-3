@@ -336,6 +336,12 @@ function sanitizeReasonForGeneratedPython(value: string): string {
     .replace(/pass\s*(#|$)/gi, 'empty-body$1')
 }
 
+function looksLikePreparationManifestWrapper(command: StrictGpuCommand): boolean {
+  const code = String(command.code || '')
+  return /ar3\.preparation-manifest\.v1|preparation_manifest|smokeTests|smokeTest/i.test(code) &&
+    /manifest\s*=|json\.dumps\(manifest|preparation_manifest\s*=/.test(code)
+}
+
 export function selectGpuSubmissionCommand(input: GpuSubmissionInput): GpuSubmissionResult {
   const preparationStage = shouldUseAutonomousPreparationFallback(input.stageName)
   if (preparationStage && input.manifestValidatedThisCycle) {
@@ -354,7 +360,39 @@ export function selectGpuSubmissionCommand(input: GpuSubmissionInput): GpuSubmis
   }
 
   const strict = extractStrictGpuCommand(input.llmResponse)
-  if (strict.ok) return { ok: true, command: strict.command, fallbackUsed: false, reason: 'strict GPU command validated' }
+  if (strict.ok) {
+    if (preparationStage && looksLikePreparationManifestWrapper(strict.command)) {
+      const reason = 'LLM returned a preparation manifest wrapper instead of executable research evidence; running autonomous preparation fallback'
+      return {
+        ok: true,
+        fallbackUsed: true,
+        reason,
+        command: buildAutonomousPreparationCommand({
+          researchGoal: input.researchGoal,
+          stepDescription: input.stepDescription,
+          stageName: input.stageName,
+          reason,
+        }),
+      }
+    }
+    return { ok: true, command: strict.command, fallbackUsed: false, reason: 'strict GPU command validated' }
+  }
+  if (preparationStage) {
+    const reason = (strict as { ok: false; reason: string }).reason
+    if (shouldShortCircuitPreparationFallback(input.stageName, reason)) {
+      return {
+        ok: true,
+        fallbackUsed: true,
+        reason: `weak preparation-stage GPU command (${reason}); running autonomous preparation fallback`,
+        command: buildAutonomousPreparationCommand({
+          researchGoal: input.researchGoal,
+          stepDescription: input.stepDescription,
+          stageName: input.stageName,
+          reason,
+        }),
+      }
+    }
+  }
   return { ok: false, reason: (strict as { ok: false; reason: string }).reason }
 }
 
