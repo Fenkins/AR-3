@@ -127,6 +127,29 @@ function testAutonomousPreparationFallbackDoesNotCompleteImplementationSteps() {
   assert.match(assessed.reason, /not a completed executable experiment/i)
 }
 
+function testExtractsPersistablePreparationManifestFromFallbackGpuOutput() {
+  const output = JSON.stringify({
+    type: 'autonomous_preparation_manifest',
+    stage: 'Investigation',
+    contract_failure_reason: 'response did not parse as the required JSON object',
+    workbench: '/tmp/ar3-workbenches/ode-1234',
+    model_ids: ['GSAI-ML/LLaDA-8B-Base'],
+    gpu: { cuda_available: true, torch_cuda_available: true, gpu_name: 'RTX 3060', gpu_memory_gb: 11.64 },
+    huggingface: [{ model_id: 'GSAI-ML/LLaDA-8B-Base', status_code: 200, safetensors_files: ['model.safetensors'] }],
+    installed_dependencies: ['torch==2.5.1+cu124', 'requests==2.32.0'],
+    grading_criteria: ['prints JSON evidence'],
+    next_actions: ['Generate a run_python command.'],
+  })
+  const extracted = contract.extractPersistablePreparationManifest(output)
+  assert.equal(extracted.ok, true, extracted.reason)
+  assert.equal(extracted.manifest.schemaVersion, 'ar3.preparation-probe.v1')
+  assert.equal(extracted.manifest.researchType, 'gpu-autonomous-research')
+  assert.deepEqual(extracted.manifest.models[0], { id: 'GSAI-ML/LLaDA-8B-Base', source: 'huggingface', required: true })
+  assert.equal(extracted.manifest.dependencies.some(dep => dep.name === 'torch'), true)
+  assert.equal(extracted.manifest.workbench.reuseKey, 'ode-1234')
+  assert.match(extracted.manifest.smokeTests[0].expectedEvidence.join(' '), /cuda_available/)
+}
+
 function testDeterministicGpuExperimentFallbackUsesManifestAndPassesEvidenceGate() {
   const command = contract.buildDeterministicGpuExperimentCommand({
     researchGoal: 'Measure whether org/example-model can execute a GPU smoke test.',
@@ -255,6 +278,7 @@ testAutonomousPreparationFallbackIsLimitedToPreparationStages()
 testFallbackUsesWorkerProvidedWorkbenchDirectory()
 testAutonomousPreparationFallbackIsAcceptedForPreparationStages()
 testAutonomousPreparationFallbackDoesNotCompleteImplementationSteps()
+testExtractsPersistablePreparationManifestFromFallbackGpuOutput()
 testDeterministicGpuExperimentFallbackUsesManifestAndPassesEvidenceGate()
 testPreparationProbeShapeIsInvalidForImplementationEvenIfFallbackFlagIsLost()
 testLongProseOutputIsNotValidGpuEvidence()

@@ -3,7 +3,7 @@ import { callAI, AIConfig, AIMessage } from './ai'
 import { generateVariants, gradeVariant, selectBestVariant, saveVariantsToDatabase, updateVariantStepDb, updateVariantDb, selectBestVariantFromDb, loadVariantsFromDb, reEvaluateStepCount, Variant, Step } from './variant-engine'
 import { buildEmbeddingContext } from './embeddings'
 import { addToCache } from './model-cache'
-import { assessGpuExecutionEvidence, buildAutonomousPreparationCommand, buildDeterministicGpuExperimentCommand, extractStrictGpuCommand, selectGpuSubmissionCommand, shouldShortCircuitPreparationFallback, shouldUseAutonomousPreparationFallback } from './gpu-command-contract'
+import { assessGpuExecutionEvidence, buildAutonomousPreparationCommand, buildDeterministicGpuExperimentCommand, extractPersistablePreparationManifest, extractStrictGpuCommand, selectGpuSubmissionCommand, shouldShortCircuitPreparationFallback, shouldUseAutonomousPreparationFallback } from './gpu-command-contract'
 import { buildPreparationManifestInstructions, buildPreparationRetryMessage, extractPreparationManifestCandidate, validatePreparationManifest } from './preparation-manifest'
 import fs from 'fs'
 
@@ -1024,6 +1024,26 @@ ${useGpu && shouldUseAutonomousPreparationFallback(stageName) ? `## Preparation 
                     error: statusData.result.error,
                   })
                   if (!evidence.valid) gpuEvidenceInvalidReason = evidence.reason
+                  if (evidence.valid && gpuSubmissionUsedFallback && shouldUseAutonomousPreparationFallback(stageName)) {
+                    const persistedManifest = extractPersistablePreparationManifest(statusData.result.output || '')
+                    if (persistedManifest.ok) {
+                      const manifestJson = JSON.stringify(persistedManifest.manifest)
+                      try {
+                        await prisma.space.update({
+                          where: { id: spaceId },
+                          data: { setupStatus: 'VALIDATED', setupError: null, setupStep: manifestJson.substring(0, 8000) },
+                        })
+                        ;(space as any).setupStatus = 'VALIDATED'
+                        ;(space as any).setupError = null
+                        ;(space as any).setupStep = manifestJson.substring(0, 8000)
+                        debugLog(`[executeVariant] Persisted autonomous GPU preparation probe for ${stageName}: ${persistedManifest.reason}`)
+                      } catch (e: any) {
+                        debugLog(`[executeVariant] Failed to persist autonomous GPU preparation probe for ${stageName}: ${e.message}`)
+                      }
+                    } else {
+                      debugLog(`[executeVariant] GPU preparation probe was accepted but not persistable: ${persistedManifest.reason}`)
+                    }
+                  }
                   debugLog(`[executeVariant] GPU job completed`)
                   break
                 } else if (statusData.status === 'failed' || statusData.status === 'failed_runtime' || statusData.status === 'failed_validation') {

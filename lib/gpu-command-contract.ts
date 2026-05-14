@@ -57,6 +57,64 @@ type GpuEvidenceInput = {
 
 type GpuEvidenceResult = { valid: true; reason: string } | { valid: false; reason: string }
 
+type PersistablePreparationResult =
+  | { ok: true; manifest: any; reason: string }
+  | { ok: false; reason: string }
+
+export function extractPersistablePreparationManifest(output: string): PersistablePreparationResult {
+  for (const candidate of jsonObjectCandidates(String(output || ''))) {
+    try {
+      const parsed = JSON.parse(candidate)
+      if (!parsed || parsed.type !== 'autonomous_preparation_manifest') continue
+      const modelIds = Array.isArray(parsed.model_ids) ? parsed.model_ids.map(String).filter(Boolean) : []
+      const hfRows = Array.isArray(parsed.huggingface) ? parsed.huggingface : []
+      for (const row of hfRows) {
+        const id = typeof row?.model_id === 'string' ? row.model_id : (typeof row?.id === 'string' ? row.id : '')
+        if (id && !modelIds.includes(id)) modelIds.push(id)
+      }
+      const installed = Array.isArray(parsed.installed_dependencies) ? parsed.installed_dependencies.map(String) : []
+      const depNames = new Set<string>(['torch', 'requests'])
+      for (const line of installed) {
+        const raw = line.split('==')[0].split('=')[0].trim()
+        if (/^(torch|torchvision|torchaudio|transformers|accelerate|safetensors|numpy|scipy|requests|huggingface[_-]hub)$/i.test(raw)) {
+          depNames.add(raw.replace('_', '-'))
+        }
+      }
+      const workbenchPath = typeof parsed.workbench === 'string' ? parsed.workbench : ''
+      const reuseKey = workbenchPath.split('/').filter(Boolean).pop() || 'autonomous-preparation'
+      const gpu = parsed.gpu && typeof parsed.gpu === 'object' ? parsed.gpu : {}
+      const manifest = {
+        schemaVersion: 'ar3.preparation-probe.v1',
+        researchType: 'gpu-autonomous-research',
+        objective: 'Persisted autonomous GPU preparation probe; use this to run concrete Implementation experiments instead of repeating preparation.',
+        sourceStage: parsed.stage || 'Investigation',
+        contractFailureReason: parsed.contract_failure_reason || null,
+        models: modelIds.slice(0, 10).map((id: string) => ({ id, source: 'huggingface', required: true })),
+        dependencies: Array.from(depNames).slice(0, 12).map(name => ({ name, importName: name === 'huggingface-hub' ? 'huggingface_hub' : name.replace(/-/g, '_') })),
+        resources: [
+          { type: 'gpu', name: gpu.gpu_name || 'NVIDIA GPU', required: true, evidence: gpu },
+          ...(workbenchPath ? [{ type: 'workbench', path: workbenchPath, required: true }] : []),
+        ],
+        smokeTests: [
+          {
+            name: 'torch_cuda_smoke',
+            command: 'python - <<PY\nimport json, torch\nx=torch.ones((1,), device="cuda" if torch.cuda.is_available() else "cpu")\nprint(json.dumps({"cuda_available": torch.cuda.is_available(), "device": str(x.device), "sum": float(x.sum().item())}))\nPY',
+            expectedEvidence: ['cuda_available', 'device', 'sum'],
+            timeoutSeconds: 60,
+          },
+        ],
+        gradingCriteria: Array.isArray(parsed.grading_criteria) && parsed.grading_criteria.length
+          ? parsed.grading_criteria.map(String).slice(0, 10)
+          : ['Implementation must print JSON metrics with CUDA/GPU evidence and concrete numeric measurements.'],
+        workbench: { reuseKey, path: workbenchPath || undefined, expectedArtifacts: ['deterministic_gpu_experiment_metrics.json'] },
+        preparationEvidence: parsed,
+      }
+      return { ok: true, manifest, reason: 'autonomous preparation probe converted to persistable manifest' }
+    } catch {}
+  }
+  return { ok: false, reason: 'no autonomous preparation manifest found in GPU output' }
+}
+
 export function assessGpuExecutionEvidence(input: GpuEvidenceInput): GpuEvidenceResult {
   if (!input.success) {
     return { valid: false, reason: input.error || 'GPU execution failed' }
