@@ -985,6 +985,52 @@ def validate_executable_experiment_code(code: str) -> dict:
     return {'ok': True, 'error': None}
 
 
+def _iter_json_objects_from_output(output: str):
+    """Yield JSON objects embedded in stdout/stderr evidence."""
+    text = str(output or '')
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or not stripped.startswith('{'):
+            continue
+        try:
+            parsed = json.loads(stripped)
+        except Exception:
+            parsed = _extract_first_json_object(stripped)
+        if isinstance(parsed, dict):
+            yield parsed
+    embedded = _extract_first_json_object(text)
+    if isinstance(embedded, dict):
+        yield embedded
+
+
+def validate_execution_result_evidence(result: dict) -> dict:
+    """Reject self-reported invalid experiments after execution.
+
+    Some weak implementers generate Python wrappers that execute successfully but
+    print a JSON sentinel such as {"contract_failure_reason": "..."}. Treating
+    that as success records a non-experiment as completed work and breaks retry
+    feedback. This post-run gate promotes those sentinels to hard failures.
+    """
+    if not result.get('success'):
+        return result
+
+    output = result.get('output', '')
+    failure_keys = ('contract_failure_reason', 'contractFailureReason', 'failure_reason')
+    for obj in _iter_json_objects_from_output(output):
+        for key in failure_keys:
+            value = obj.get(key)
+            if value:
+                result['success'] = False
+                result['error'] = f'Experiment output self-reported {key}: {value}'
+                return result
+        status = str(obj.get('status') or obj.get('verdict') or '').strip().lower()
+        if status in {'invalid', 'rejected', 'contract_failed', 'contract-failed'}:
+            result['success'] = False
+            result['error'] = f'Experiment output self-reported failure status: {status}'
+            return result
+    return result
+
+
 def execute_python_code(code: str, timeout: int = DEFAULT_JOB_TIMEOUT, context: dict = None, dependencies=None) -> dict:
     """Execute Python code inside a persistent per-space workbench."""
     context = context or prepare_workbench({'spaceId': 'default'})
@@ -1301,6 +1347,7 @@ def execute_gpu_command(job: dict, timeout: int = DEFAULT_JOB_TIMEOUT) -> dict:
         result['code'] = gpu_command.get('code', '')
         if preparation_output:
             result['output'] = (preparation_output + '\n' + result.get('output', '')).strip()
+        result = validate_execution_result_evidence(result)
         result.update(result_metadata)
         cleanup_gpu_memory()
         return result

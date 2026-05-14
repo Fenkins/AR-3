@@ -47,6 +47,30 @@ def test_gpu_probe_experiment_is_accepted_before_execution():
     assert validation["ok"] is True
 
 
+def test_self_reported_contract_failure_output_fails_job(tmp_path, monkeypatch):
+    monkeypatch.setenv("AR3_WORKBENCH_ROOT", str(tmp_path / "workbenches"))
+    code = (
+        "import json\n"
+        "reason = 'code contains ' + 'place' + 'holder/pseudo' + 'code markers'\n"
+        "result = {\"cuda_available\": True, \"gpu_name\": \"test gpu\", \"contract_failure_reason\": reason}\n"
+        "print(json.dumps(result))\n"
+    )
+    result = gpu_worker.execute_gpu_command({
+        "jobId": "job-self-reported-contract-failure",
+        "spaceId": "space-contract-test",
+        "spaceName": "Contract Test",
+        "stageName": "Implementation",
+        "prompt": '{"action":"run_python","dependencies":[],"code":' + json_escape(code) + '}',
+    }, timeout=30)
+    assert result["success"] is False
+    assert "contract_failure_reason" in result["error"]
+
+
+def json_escape(value: str) -> str:
+    import json
+    return json.dumps(value)
+
+
 if __name__ == "__main__":
     test_prose_only_prompt_is_invalid()
     test_json_run_python_prompt_is_accepted()
