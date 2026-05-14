@@ -1710,10 +1710,50 @@ def process_job(job: dict, timeout: int) -> dict:
     return result
 
 
+STALE_INFLIGHT_RECLAIM_SECONDS = int(os.environ.get('GPU_STALE_INFLIGHT_RECLAIM_SECONDS', '900'))
+INFLIGHT_JOB_STATUSES = {
+    'claimed',
+    'preparing_workbench',
+    'installing_dependencies',
+    'running_experiment',
+    'validating_evidence',
+}
+
+
+def _iso_timestamp_age_seconds(value: str) -> float:
+    try:
+        timestamp = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+        now = datetime.now(timestamp.tzinfo) if timestamp.tzinfo else datetime.now()
+        return max(0.0, (now - timestamp).total_seconds())
+    except Exception:
+        return 0.0
+
+
+def _reclaim_stale_inflight_jobs(queue: list, results: dict, stale_after_seconds: int) -> bool:
+    changed = False
+    for job in queue:
+        job_id = job.get('jobId')
+        if not job_id or job_id in results:
+            continue
+        if job.get('status') not in INFLIGHT_JOB_STATUSES:
+            continue
+        marker = job.get('updatedAt') or job.get('claimedAt') or job.get('startedAt')
+        if _iso_timestamp_age_seconds(marker) < stale_after_seconds:
+            continue
+        stale_status = job.get('status')
+        job['status'] = 'pending'
+        job['reclaimedAt'] = datetime.now().isoformat()
+        job['reclaimReason'] = f'stale in-flight worker status {stale_status}'
+        changed = True
+    return changed
+
+
 def get_pending_jobs() -> list:
     """Get pending jobs and mark them as claimed (atomic)."""
     with queue_lock:
         queue = read_queue()
+        results = read_results()
+        reclaimed = _reclaim_stale_inflight_jobs(queue, results, STALE_INFLIGHT_RECLAIM_SECONDS)
         pending = [j for j in queue if j.get('status') == 'pending']
 
         config = get_gpu_config()
@@ -1730,7 +1770,7 @@ def get_pending_jobs() -> list:
                     claimed.append(j)
                     break
 
-        if claimed:
+        if claimed or reclaimed:
             write_queue(queue)
 
         return claimed

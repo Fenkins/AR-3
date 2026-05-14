@@ -345,6 +345,41 @@ def test_process_job_marks_validation_failures_as_failed_validation():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def test_get_pending_jobs_reclaims_stale_inflight_jobs_without_results():
+    root = tempfile.mkdtemp(prefix="ar3-worker-stale-claim-test-")
+    old_queue = gpu_worker.JOB_QUEUE_FILE
+    old_results = gpu_worker.JOB_RESULTS_FILE
+    old_config = gpu_worker.GPU_CONFIG_FILE
+    try:
+        queue_path = Path(root, "jobs.json")
+        results_path = Path(root, "results.json")
+        config_path = Path(root, "config.json")
+        gpu_worker.JOB_QUEUE_FILE = str(queue_path)
+        gpu_worker.JOB_RESULTS_FILE = str(results_path)
+        gpu_worker.GPU_CONFIG_FILE = str(config_path)
+        config_path.write_text('{"maxConcurrent": 2, "jobTimeout": 3600}')
+        results_path.write_text('{}')
+        queue_path.write_text(__import__("json").dumps([
+            {"jobId": "stale-install", "status": "installing_dependencies", "updatedAt": "2000-01-01T00:00:00"},
+            {"jobId": "fresh-pending", "status": "pending"},
+            {"jobId": "terminal-fail", "status": "failed_runtime", "updatedAt": "2000-01-01T00:00:00"},
+        ]))
+
+        claimed = gpu_worker.get_pending_jobs()
+        claimed_ids = {job["jobId"] for job in claimed}
+        assert claimed_ids == {"stale-install", "fresh-pending"}
+        queue = __import__("json").loads(queue_path.read_text())
+        statuses = {job["jobId"]: job["status"] for job in queue}
+        assert statuses["stale-install"] == "claimed"
+        assert statuses["fresh-pending"] == "claimed"
+        assert statuses["terminal-fail"] == "failed_runtime"
+    finally:
+        gpu_worker.JOB_QUEUE_FILE = old_queue
+        gpu_worker.JOB_RESULTS_FILE = old_results
+        gpu_worker.GPU_CONFIG_FILE = old_config
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def test_execute_python_code_rejects_placeholders_before_running():
     root = tempfile.mkdtemp(prefix="ar3-worker-placeholder-test-")
     old_root = os.environ.get("AR3_WORKBENCH_ROOT")
@@ -383,5 +418,6 @@ if __name__ == "__main__":
     test_repair_torch_workbench_removes_poisoned_cuda_packages_and_reinstalls_cu124()
     test_validation_rejects_pretty_printed_contract_failure_after_gpu_smoke_json()
     test_process_job_marks_validation_failures_as_failed_validation()
+    test_get_pending_jobs_reclaims_stale_inflight_jobs_without_results()
     test_execute_python_code_rejects_placeholders_before_running()
     print("gpu worker workbench tests passed")
