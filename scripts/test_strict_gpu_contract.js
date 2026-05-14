@@ -94,9 +94,26 @@ function testFallbackUsesWorkerProvidedWorkbenchDirectory() {
   assert.doesNotMatch(fallback.code, /research_goal\[:80\]/)
 }
 
-function testAutonomousPreparationFallbackDoesNotCompleteExperimentSteps() {
+function testAutonomousPreparationFallbackIsAcceptedForPreparationStages() {
   const assessed = contract.assessGpuExecutionEvidence({
     stageName: 'Investigation',
+    fallbackUsed: true,
+    success: true,
+    output: JSON.stringify({
+      type: 'autonomous_preparation_manifest',
+      contract_failure_reason: 'code contains placeholder/pseudocode markers',
+      gpu: { cuda_available: true, gpu_name: 'RTX 3060' },
+      model_ids: ['org/example-model'],
+    }),
+  })
+  assert.equal(assessed.valid, true, assessed.reason)
+  assert.match(assessed.reason, /preparation probe/i)
+  assert.match(assessed.reason, /accepted/i)
+}
+
+function testAutonomousPreparationFallbackDoesNotCompleteImplementationSteps() {
+  const assessed = contract.assessGpuExecutionEvidence({
+    stageName: 'Implementation',
     fallbackUsed: true,
     success: true,
     output: JSON.stringify({
@@ -145,9 +162,9 @@ function testDeterministicGpuExperimentFallbackUsesManifestAndPassesEvidenceGate
   assert.equal(assessed.valid, true, assessed.reason)
 }
 
-function testPreparationProbeShapeIsInvalidEvenIfFallbackFlagIsLost() {
+function testPreparationProbeShapeIsInvalidForImplementationEvenIfFallbackFlagIsLost() {
   const assessed = contract.assessGpuExecutionEvidence({
-    stageName: 'Investigation',
+    stageName: 'Implementation',
     fallbackUsed: false,
     success: true,
     output: JSON.stringify({
@@ -205,9 +222,10 @@ testFallbackPreparationCommandIsExecutableAndPromptIndependent()
 testPreparationStageWithValidatedManifestSubmitsExecutableFallbackInsteadOfRawManifestJson()
 testAutonomousPreparationFallbackIsLimitedToPreparationStages()
 testFallbackUsesWorkerProvidedWorkbenchDirectory()
-testAutonomousPreparationFallbackDoesNotCompleteExperimentSteps()
+testAutonomousPreparationFallbackIsAcceptedForPreparationStages()
+testAutonomousPreparationFallbackDoesNotCompleteImplementationSteps()
 testDeterministicGpuExperimentFallbackUsesManifestAndPassesEvidenceGate()
-testPreparationProbeShapeIsInvalidEvenIfFallbackFlagIsLost()
+testPreparationProbeShapeIsInvalidForImplementationEvenIfFallbackFlagIsLost()
 testLongProseOutputIsNotValidGpuEvidence()
 testJsonMetricsOutputIsValidGpuEvidence()
 testStrictGpuCommandRejectsCpuOnlyMetricsCode()

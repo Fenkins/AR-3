@@ -59,6 +59,22 @@ export function assessGpuExecutionEvidence(input: GpuEvidenceInput): GpuEvidence
     parsedOutput?.contract_failure_reason
   )
   if (looksLikePreparationProbe) {
+    if (shouldUseAutonomousPreparationFallback(input.stageName)) {
+      const hasProbeEvidence = Boolean(
+        parsedOutput?.type === 'autonomous_preparation_manifest' &&
+        (parsedOutput?.gpu || parsedOutput?.model_ids || parsedOutput?.huggingface || parsedOutput?.installed_dependencies || parsedOutput?.workbench)
+      )
+      if (hasProbeEvidence && hasMeasurableGpuEvidence(output, parsedOutput)) {
+        return {
+          valid: true,
+          reason: `Autonomous preparation probe accepted for ${input.stageName}; use its GPU/model/workbench evidence to drive the next research step.`,
+        }
+      }
+      return {
+        valid: false,
+        reason: `Autonomous preparation probe for ${input.stageName} did not produce enough preparation evidence to drive the next step.`,
+      }
+    }
     return {
       valid: false,
       reason: `Autonomous preparation probe ran for ${input.stageName}, but it is not a completed executable experiment. The original LLM output violated the GPU contract; use the probe evidence as retry feedback instead of marking the step complete.`,
