@@ -47,6 +47,14 @@ def test_gpu_probe_experiment_is_accepted_before_execution():
     assert validation["ok"] is True
 
 
+def test_bare_torch_dependency_is_pinned_to_cuda_12_4_wheel_index():
+    normalized = gpu_worker.normalize_declared_dependencies(['torch', 'transformers'])
+    assert 'torch==2.5.1' in normalized['deps']
+    assert normalized['deps'].count('torch==2.5.1') == 1
+    assert 'transformers' in normalized['deps']
+    assert 'https://download.pytorch.org/whl/cu124' in normalized['pip_args']
+
+
 def test_self_reported_contract_failure_output_fails_job(tmp_path, monkeypatch):
     monkeypatch.setenv("AR3_WORKBENCH_ROOT", str(tmp_path / "workbenches"))
     code = (

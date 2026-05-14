@@ -249,9 +249,24 @@ export function validatePreparationManifest(value: unknown): PreparationManifest
   return { ok: true, manifest: value as PreparationManifest, errors: [] }
 }
 
+function preparationManifestFromParsedJson(parsed: unknown): unknown {
+  if (isPlainObject(parsed)) {
+    const nested = parsed.preparation_manifest ?? parsed.preparationManifest ?? parsed.manifest
+    if (isPlainObject(nested) && nested.schemaVersion === PREPARATION_MANIFEST_SCHEMA_VERSION) {
+      return nested
+    }
+  }
+  return parsed
+}
+
 export function extractPreparationManifestCandidate(text: string): unknown {
   const stripped = String(text || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/```$/i, '').trim()
   const candidates = [stripped]
+
+  try {
+    return preparationManifestFromParsedJson(JSON.parse(stripped))
+  } catch {}
+
   const jsonBlock = String(text || '').match(/```json\s*([\s\S]*?)```/i)
   if (jsonBlock?.[1]) candidates.push(jsonBlock[1].trim())
 
@@ -282,7 +297,14 @@ export function extractPreparationManifestCandidate(text: string): unknown {
 
   for (const candidate of candidates) {
     try {
-      return JSON.parse(candidate)
+      const parsed = JSON.parse(candidate)
+      if (isPlainObject(parsed)) {
+        const nested = parsed.preparation_manifest ?? parsed.preparationManifest ?? parsed.manifest
+        if (isPlainObject(nested) && nested.schemaVersion === PREPARATION_MANIFEST_SCHEMA_VERSION) {
+          return nested
+        }
+      }
+      return parsed
     } catch {}
   }
   return null

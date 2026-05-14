@@ -3,6 +3,7 @@ import { authMiddleware } from '../../middleware'
 import { prisma } from '@/lib/prisma'
 import {
   applyWorkerResultToJob,
+  applyWorkerQueueStateToJob,
   buildGpuJobRecord,
   GpuJobRecord,
   GpuJobStatus,
@@ -127,11 +128,20 @@ async function syncWorkerResultToDb(jobId: string): Promise<GpuJobRecord | null>
   const record = await getDbJob(jobId)
   if (!record || record.result) return record
   const result = readResults()[jobId]
-  if (!result) return record
-  const completedAt = result.completedAt || new Date().toISOString()
-  const updated = applyWorkerResultToJob(record, { ...result, jobId, completedAt })
-  await updateDbJob(updated)
-  return updated
+  if (result) {
+    const completedAt = result.completedAt || new Date().toISOString()
+    const updated = applyWorkerResultToJob(record, { ...result, jobId, completedAt })
+    await updateDbJob(updated)
+    return updated
+  }
+
+  const workerJob = readQueue().find((job) => job.jobId === jobId)
+  const updated = applyWorkerQueueStateToJob(record, workerJob)
+  if (updated !== record) {
+    await updateDbJob(updated)
+    return updated
+  }
+  return record
 }
 
 async function syncAllWorkerResultsForSpace(spaceId: string): Promise<void> {
@@ -139,12 +149,19 @@ async function syncAllWorkerResultsForSpace(spaceId: string): Promise<void> {
   if (!delegate) return
   const rows = await delegate.findMany({ where: { spaceId }, orderBy: { submittedAt: 'desc' }, take: 100 })
   const results = readResults()
+  const queue = readQueue()
   for (const row of rows) {
-    if (row.resultJson || !results[row.jobId]) continue
     const record = rowToRecord(row)
     const result = results[row.jobId]
-    const updated = applyWorkerResultToJob(record, { ...result, jobId: row.jobId, completedAt: result.completedAt || new Date().toISOString() })
-    await updateDbJob(updated)
+    if (result && !row.resultJson) {
+      const updated = applyWorkerResultToJob(record, { ...result, jobId: row.jobId, completedAt: result.completedAt || new Date().toISOString() })
+      await updateDbJob(updated)
+      continue
+    }
+
+    const workerJob = queue.find((job) => job.jobId === row.jobId)
+    const updated = applyWorkerQueueStateToJob(record, workerJob)
+    if (updated !== record) await updateDbJob(updated)
   }
 }
 

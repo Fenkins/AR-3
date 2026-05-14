@@ -120,6 +120,33 @@ export function applyWorkerResultToJob(job: GpuJobRecord, result: GpuWorkerResul
   }
 }
 
+type WorkerQueueState = {
+  jobId?: string
+  status?: string
+  claimedAt?: string
+  startedAt?: string
+}
+
+export function applyWorkerQueueStateToJob(job: GpuJobRecord, workerJob: WorkerQueueState | null | undefined): GpuJobRecord {
+  if (!workerJob || workerJob.jobId !== job.jobId || job.result) return job
+
+  const workerStatus = String(workerJob.status || '')
+  const mappedStatus: GpuJobStatus | null = workerStatus === 'claimed'
+    ? 'preparing'
+    : workerStatus === 'running'
+      ? 'running'
+      : null
+
+  if (!mappedStatus || job.status === mappedStatus) return job
+  if (!isValidGpuJobTransition(job.status, mappedStatus)) return job
+
+  const at = (mappedStatus === 'preparing' ? workerJob.claimedAt : workerJob.startedAt) || new Date().toISOString()
+  const message = mappedStatus === 'preparing'
+    ? 'GPU worker claimed job and is preparing the workbench/dependencies'
+    : 'GPU worker marked job running and started executing'
+  return transitionGpuJob(job, mappedStatus, message, at)
+}
+
 export function workerQueueJob(job: GpuJobRecord) {
   return {
     jobId: job.jobId,

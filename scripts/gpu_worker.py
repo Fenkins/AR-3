@@ -154,21 +154,56 @@ def _dependency_to_pip_spec(dep) -> str:
     return dep
 
 
-def install_declared_dependencies(dependencies, context: dict, timeout: int = 900) -> dict:
-    """Install JSON-declared Python deps into the space workbench, not globally."""
+def normalize_declared_dependencies(dependencies) -> dict:
+    """Return safe pip args for declared dependencies.
+
+    Weak implementer models often declare a bare "torch" dependency. On CUDA
+    12.2/12.8 VAST images, current PyPI may resolve to newer CUDA 13 wheels
+    that import but report torch.cuda.is_available() == False with the host
+    driver. Pin bare torch-family requests to a known CUDA 12.4 wheel set and
+    add PyTorch's cu124 index so autonomous jobs preserve real GPU access.
+    """
     deps = []
+    seen = set()
+    needs_pytorch_cu124 = False
+    torch_pins = {
+        'torch': 'torch==2.5.1',
+        'torchvision': 'torchvision==0.20.1',
+        'torchaudio': 'torchaudio==2.5.1',
+    }
+
     for dep in dependencies or []:
         dep = _dependency_to_pip_spec(dep)
         if not dep or dep.lower() in {'python', 'pip'}:
             continue
-        # Dependencies are pip specs, not shell commands.
-        if re_module.search(r'[;&|`$<>\n\r]', dep):
-            return {'success': False, 'error': f'Unsafe dependency spec rejected: {dep!r}'}
-        deps.append(dep)
+        # Dependencies are pip specs, not shell commands/options.
+        if re_module.search(r'[;&|`$<>\n\r]', dep) or dep.startswith('-'):
+            return {'success': False, 'error': f'Unsafe dependency spec rejected: {dep!r}', 'deps': [], 'pip_args': []}
+
+        dep_name = re_module.split(r'[<>=!~\[]', dep, maxsplit=1)[0].strip().lower().replace('_', '-')
+        normalized = torch_pins.get(dep_name, dep)
+        if dep_name in torch_pins:
+            needs_pytorch_cu124 = True
+        if normalized not in seen:
+            deps.append(normalized)
+            seen.add(normalized)
+
+    pip_args = []
+    if needs_pytorch_cu124:
+        pip_args.extend(['--index-url', 'https://download.pytorch.org/whl/cu124', '--extra-index-url', 'https://pypi.org/simple'])
+    return {'success': True, 'deps': deps, 'pip_args': pip_args, 'error': None}
+
+
+def install_declared_dependencies(dependencies, context: dict, timeout: int = 900) -> dict:
+    """Install JSON-declared Python deps into the space workbench, not globally."""
+    normalized = normalize_declared_dependencies(dependencies)
+    if not normalized.get('success'):
+        return {'success': False, 'error': normalized.get('error')}
+    deps = normalized['deps']
     if not deps:
         return {'success': True, 'output': 'no declared dependencies', 'error': None}
 
-    cmd = [sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', '--target', context['packages_dir'], *deps]
+    cmd = [sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', *normalized['pip_args'], '--target', context['packages_dir'], *deps]
     log('Installing declared dependencies into workbench: ' + ' '.join(shlex.quote(d) for d in deps),
         thread_id=threading.current_thread().name)
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=context['env'])

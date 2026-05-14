@@ -863,7 +863,9 @@ Research Goal: ${space.initialPrompt}
 ## Prior Stage Results (for scope detection)
 ${space.Experiment.slice(0, 8).map((e: any) => `[${e.phase || e.stageName || 'experiment'}]: ${(e.result || e.response || '').substring(0, 800)}`).join('\n\n')}
 
-${useGpu ? STRICT_GPU_CODE_CONTRACT : 'Execute this step and provide concrete results. Be concise -- focus on findings and deliverables.'}` },
+${useGpu ? STRICT_GPU_CODE_CONTRACT : 'Execute this step and provide concrete results. Be concise -- focus on findings and deliverables.'}
+
+${useGpu && shouldUseAutonomousPreparationFallback(stageName) ? `## Preparation manifest handoff (required for autonomous GPU research)\nInclude a nested \"preparation_manifest\" object inside your run_python JSON using this schema. AR-3 will validate and persist it before later Implementation work starts.\n${buildPreparationManifestInstructions(space.initialPrompt)}` : ''}` },
     ]
 
     try {
@@ -873,6 +875,28 @@ ${useGpu ? STRICT_GPU_CODE_CONTRACT : 'Execute this step and provide concrete re
       if (useGpu) {
         debugLog(`[executeVariant] GPU stage "${stageName}", calling AI then submitting to GPU worker`)
         response = await callAI(agentConfig, messages)
+
+        if (shouldUseAutonomousPreparationFallback(stageName)) {
+          const manifestCandidate = extractPreparationManifestCandidate(response.content)
+          const manifestValidation = validatePreparationManifest(manifestCandidate)
+          if (manifestValidation.ok) {
+            try {
+              await prisma.space.update({
+                where: { id: spaceId },
+                data: {
+                  setupStatus: 'VALIDATED',
+                  setupError: null,
+                  setupStep: JSON.stringify(manifestValidation.manifest).substring(0, 8000),
+                },
+              })
+              debugLog(`[executeVariant] Persisted validated preparation manifest from ${stageName} GPU command`)
+            } catch (e: any) {
+              debugLog(`[executeVariant] Failed to persist preparation manifest from ${stageName}: ${e.message}`)
+            }
+          } else {
+            debugLog(`[executeVariant] No valid nested preparation manifest from ${stageName}: ${manifestValidation.errors.join('; ')}`)
+          }
+        }
 
         // Strict pre-submit contract: weak models must repair invalid prose/pseudocode before GPU time is spent.
         let strictCommand = extractStrictGpuCommand(response.content)
@@ -884,6 +908,20 @@ ${useGpu ? STRICT_GPU_CODE_CONTRACT : 'Execute this step and provide concrete re
           debugLog(`[executeVariant] Strict GPU code contract failed for "${stageName}" step "${step.name}": ${strictReason}; retry ${strictAttempts}/2`)
           response = await callAI(agentConfig, [...messages, buildStrictGpuRetryMessage(step.description, strictReason, response.content)])
           strictCommand = extractStrictGpuCommand(response.content)
+          if (shouldUseAutonomousPreparationFallback(stageName)) {
+            const retryManifest = validatePreparationManifest(extractPreparationManifestCandidate(response.content))
+            if (retryManifest.ok) {
+              try {
+                await prisma.space.update({
+                  where: { id: spaceId },
+                  data: { setupStatus: 'VALIDATED', setupError: null, setupStep: JSON.stringify(retryManifest.manifest).substring(0, 8000) },
+                })
+                debugLog(`[executeVariant] Persisted validated preparation manifest from ${stageName} retry ${strictAttempts}`)
+              } catch (e: any) {
+                debugLog(`[executeVariant] Failed to persist preparation manifest from ${stageName} retry ${strictAttempts}: ${e.message}`)
+              }
+            }
+          }
         }
 
         if (!strictCommand.ok) {

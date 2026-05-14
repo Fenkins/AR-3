@@ -100,4 +100,25 @@ function validManifest(overrides = {}) {
   assert.equal(result.manifest.smokeTests[0].command, 'python -c "print(1)"')
 }
 
+{
+  const nested = validManifest({ objective: 'Nested manifest carried by run_python command.' })
+  const command = {
+    action: 'run_python',
+    dependencies: ['torch', 'transformers'],
+    preparation_manifest: nested,
+    code: 'import json\nimport torch\nprint(json.dumps({"cuda_available": torch.cuda.is_available()}))',
+  }
+  assert.deepStrictEqual(extractPreparationManifestCandidate(JSON.stringify(command)), nested)
+}
+
+{
+  const nested = validManifest({ objective: 'Camel-case nested manifest carried by run_python command.' })
+  const command = {
+    action: 'run_python',
+    preparationManifest: nested,
+    code: 'import json\nimport torch\nprint(json.dumps({"cuda_available": torch.cuda.is_available()}))',
+  }
+  assert.deepStrictEqual(extractPreparationManifestCandidate(JSON.stringify(command)), nested)
+}
+
 console.log('preparation manifest tests passed')

@@ -20,6 +20,7 @@ const {
   isValidGpuJobTransition,
   buildGpuJobRecord,
   applyWorkerResultToJob,
+  applyWorkerQueueStateToJob,
   pruneFileQueueForSpace,
 } = m.exports
 
@@ -64,6 +65,29 @@ assert.equal(isValidGpuJobTransition('cancelled', 'queued'), false)
   })
   assert.equal(failed.status, 'failed_runtime')
   assert.equal(failed.result.error, 'Traceback: boom')
+}
+
+{
+  const job = buildGpuJobRecord({ spaceId: 'spaceA', stageName: 'Investigation', prompt: 'p', context: '' }, new Date('2026-05-13T00:00:00Z'), 'n')
+  const claimed = applyWorkerQueueStateToJob(job, {
+    jobId: job.jobId,
+    status: 'claimed',
+    claimedAt: '2026-05-13T00:00:10Z',
+  })
+  assert.equal(claimed.status, 'preparing')
+  assert.equal(claimed.updatedAt, '2026-05-13T00:00:10Z')
+  assert.equal(claimed.events.at(-1).toStatus, 'preparing')
+  assert.match(claimed.events.at(-1).message, /claimed/i)
+
+  const running = applyWorkerQueueStateToJob(claimed, {
+    jobId: job.jobId,
+    status: 'running',
+    startedAt: '2026-05-13T00:01:00Z',
+  })
+  assert.equal(running.status, 'running')
+  assert.equal(running.updatedAt, '2026-05-13T00:01:00Z')
+  assert.equal(running.events.at(-1).toStatus, 'running')
+  assert.match(running.events.at(-1).message, /running/i)
 }
 
 {
