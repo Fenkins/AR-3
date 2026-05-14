@@ -259,6 +259,14 @@ def _combined_completed_output(result) -> str:
     return ((getattr(result, 'stdout', '') or '') + '\n' + (getattr(result, 'stderr', '') or '')).strip()
 
 
+def _without_cuda_toolkit_ld_path(env: dict) -> dict:
+    """Return env with CUDA toolkit libs removed so PyTorch wheel nvidia libs win."""
+    cleaned = dict(env)
+    parts = [p for p in cleaned.get('LD_LIBRARY_PATH', '').split(os.pathsep) if p and p != '/usr/local/cuda/lib64']
+    cleaned['LD_LIBRARY_PATH'] = os.pathsep.join(parts)
+    return cleaned
+
+
 def _torch_cuda_broken_output(output: str) -> bool:
     text = str(output or '').lower()
     broken_markers = [
@@ -296,9 +304,10 @@ def ensure_torch_cuda_workbench(context: dict, force: bool = False, timeout: int
     a known cu124 set, then run the smoke test again and surface evidence in job output.
     """
     outputs = []
+    torch_env = _without_cuda_toolkit_ld_path(context['env'])
     smoke = subprocess.run(
         [sys.executable, '-c', TORCH_CUDA_SMOKE_CODE],
-        capture_output=True, text=True, timeout=min(timeout, 120), cwd=context['workbench_dir'], env=context['env']
+        capture_output=True, text=True, timeout=min(timeout, 120), cwd=context['workbench_dir'], env=torch_env
     )
     first_output = _combined_completed_output(smoke)
     outputs.append(f'torch_cuda_smoke initial exit={smoke.returncode}\n{first_output}')
@@ -322,7 +331,7 @@ def ensure_torch_cuda_workbench(context: dict, force: bool = False, timeout: int
 
     smoke2 = subprocess.run(
         [sys.executable, '-c', TORCH_CUDA_SMOKE_CODE],
-        capture_output=True, text=True, timeout=min(timeout, 120), cwd=context['workbench_dir'], env=context['env']
+        capture_output=True, text=True, timeout=min(timeout, 120), cwd=context['workbench_dir'], env=torch_env
     )
     second_output = _combined_completed_output(smoke2)
     outputs.append(f'torch_cuda_smoke after_repair exit={smoke2.returncode}\n{second_output}')
@@ -1275,6 +1284,7 @@ def execute_python_code(code: str, timeout: int = DEFAULT_JOB_TIMEOUT, context: 
                 'output': torch_prep_output,
                 'error': 'Torch CUDA workbench validation failed: ' + str(torch_result.get('error', 'unknown')),
             }
+        context['env'] = _without_cuda_toolkit_ld_path(context['env'])
 
     update_job_queue_status(job_id, 'running_experiment')
 

@@ -222,6 +222,7 @@ def test_repair_torch_workbench_removes_poisoned_cuda_packages_and_reinstalls_cu
     def fake_run(cmd, *args, **kwargs):
         calls.append((cmd, kwargs))
         if cmd[:3] == [sys.executable, "-c", gpu_worker.TORCH_CUDA_SMOKE_CODE]:
+            assert "/usr/local/cuda/lib64" not in kwargs["env"].get("LD_LIBRARY_PATH", "")
             if len([c for c, _ in calls if c[:3] == [sys.executable, "-c", gpu_worker.TORCH_CUDA_SMOKE_CODE]]) == 1:
                 return FakeCompleted(1, "", "ImportError: undefined symbol: __nvJitLinkComplete_12_4")
             return FakeCompleted(0, '{"torch_cuda_available": true, "cuda_device": "unit-test-gpu"}', "")
