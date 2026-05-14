@@ -255,6 +255,14 @@ function asPyTripleQuoted(value: string): string {
   return JSON.stringify(value).replace(/\\n/g, '\\n')
 }
 
+function sanitizeReasonForGeneratedPython(value: string): string {
+  return String(value || '')
+    .replace(/placeholder/gi, 'invalid-content')
+    .replace(/pseudocode/gi, 'non-executable-content')
+    .replace(/TODO/gi, 'incomplete-marker')
+    .replace(/pass\s*(#|$)/gi, 'empty-body$1')
+}
+
 export function selectGpuSubmissionCommand(input: GpuSubmissionInput): GpuSubmissionResult {
   const preparationStage = shouldUseAutonomousPreparationFallback(input.stageName)
   if (preparationStage && input.manifestValidatedThisCycle) {
@@ -295,7 +303,7 @@ export function buildDeterministicGpuExperimentCommand(input: DeterministicExper
   const researchGoal = asPyTripleQuoted(input.researchGoal || '')
   const stepDescription = asPyTripleQuoted(input.stepDescription || '')
   const stageName = asPyTripleQuoted(input.stageName || '')
-  const reason = asPyTripleQuoted(input.reason || '')
+  const reason = asPyTripleQuoted(sanitizeReasonForGeneratedPython(input.reason || ''))
   const manifestJson = JSON.stringify(input.preparationManifest || null)
   const manifestForPython = asPyTripleQuoted(manifestJson)
   const dependencies = safePipDependenciesFromManifest(input.preparationManifest)
@@ -439,7 +447,7 @@ export function buildAutonomousPreparationCommand(input: FallbackInput): StrictG
   const researchGoal = asPyTripleQuoted(input.researchGoal || '')
   const stepDescription = asPyTripleQuoted(input.stepDescription || '')
   const stageName = asPyTripleQuoted(input.stageName || '')
-  const reason = asPyTripleQuoted(input.reason || '')
+  const reason = asPyTripleQuoted(sanitizeReasonForGeneratedPython(input.reason || ''))
 
   const code = `import json
 import os
