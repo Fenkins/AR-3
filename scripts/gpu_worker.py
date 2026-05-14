@@ -207,7 +207,7 @@ def install_declared_dependencies(dependencies, context: dict, timeout: int = 90
     if not deps:
         return {'success': True, 'output': 'no declared dependencies', 'error': None}
 
-    cmd = [sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', *normalized['pip_args'], '--target', context['packages_dir'], *deps]
+    cmd = [sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', '--upgrade', *normalized['pip_args'], '--target', context['packages_dir'], *deps]
     log('Installing declared dependencies into workbench: ' + ' '.join(shlex.quote(d) for d in deps),
         thread_id=threading.current_thread().name)
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=context['env'])

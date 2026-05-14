@@ -63,6 +63,26 @@ def test_declared_stdlib_modules_are_not_pip_installed():
     assert 'json' not in normalized['deps']
 
 
+def test_install_dependencies_upgrades_existing_workbench_packages(monkeypatch, tmp_path):
+    captured = {}
+
+    class Result:
+        returncode = 0
+        stdout = 'ok'
+        stderr = ''
+
+    def fake_run(cmd, **kwargs):
+        captured['cmd'] = cmd
+        return Result()
+
+    monkeypatch.setattr(gpu_worker.subprocess, 'run', fake_run)
+    context = {'packages_dir': str(tmp_path / 'packages'), 'env': {}}
+    result = gpu_worker.install_declared_dependencies(['torch'], context)
+    assert result['success'] is True
+    assert '--upgrade' in captured['cmd']
+    assert 'torch==2.5.1' in captured['cmd']
+
+
 def test_self_reported_contract_failure_output_fails_job(tmp_path, monkeypatch):
     monkeypatch.setenv("AR3_WORKBENCH_ROOT", str(tmp_path / "workbenches"))
     code = (
