@@ -30,6 +30,7 @@ assert.equal(isValidGpuJobTransition('preparing_workbench', 'installing_dependen
 assert.equal(isValidGpuJobTransition('installing_dependencies', 'running_experiment'), true)
 assert.equal(isValidGpuJobTransition('running_experiment', 'validating_evidence'), true)
 assert.equal(isValidGpuJobTransition('validating_evidence', 'completed'), true)
+assert.equal(isValidGpuJobTransition('validating_evidence', 'failed_validation'), true)
 assert.equal(isValidGpuJobTransition('running_experiment', 'failed_runtime'), true)
 assert.equal(isValidGpuJobTransition('completed', 'running_experiment'), false)
 assert.equal(isValidGpuJobTransition('cancelled', 'queued'), false)
@@ -67,6 +68,16 @@ assert.equal(isValidGpuJobTransition('cancelled', 'queued'), false)
   })
   assert.equal(failed.status, 'failed_runtime')
   assert.equal(failed.result.error, 'Traceback: boom')
+
+  const failedValidation = applyWorkerResultToJob(job, {
+    jobId: job.jobId,
+    output: '{"contract_failure_reason":"bad"}',
+    error: 'Experiment output self-reported contract_failure_reason: bad',
+    success: false,
+    completedAt: '2026-05-13T00:03:00Z',
+  })
+  assert.equal(failedValidation.status, 'failed_validation')
+  assert.equal(failedValidation.result.error, 'Experiment output self-reported contract_failure_reason: bad')
 }
 
 {
@@ -106,6 +117,15 @@ assert.equal(isValidGpuJobTransition('cancelled', 'queued'), false)
   })
   assert.equal(validating.status, 'validating_evidence')
   assert.equal(validating.updatedAt, '2026-05-13T00:02:00Z')
+
+  const failedValidation = applyWorkerQueueStateToJob(validating, {
+    jobId: job.jobId,
+    status: 'failed_validation',
+    updatedAt: '2026-05-13T00:02:30Z',
+  })
+  assert.equal(failedValidation.status, 'failed_validation')
+  assert.equal(failedValidation.updatedAt, '2026-05-13T00:02:30Z')
+  assert.equal(failedValidation.events.at(-1).toStatus, 'failed_validation')
 }
 
 {

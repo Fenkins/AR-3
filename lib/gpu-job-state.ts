@@ -58,7 +58,7 @@ const TRANSITIONS: Record<GpuJobStatus, GpuJobStatus[]> = {
   preparing_workbench: ['installing_dependencies', 'running_experiment', 'failed_validation', 'failed_runtime', 'cancelled'],
   installing_dependencies: ['running_experiment', 'failed_validation', 'failed_runtime', 'cancelled'],
   running_experiment: ['validating_evidence', 'completed', 'failed_runtime', 'cancelled'],
-  validating_evidence: ['completed', 'failed_runtime', 'cancelled'],
+  validating_evidence: ['completed', 'failed_validation', 'failed_runtime', 'cancelled'],
   failed_validation: [],
   failed_runtime: [],
   completed: [],
@@ -113,13 +113,24 @@ export function transitionGpuJob(job: GpuJobRecord, toStatus: GpuJobStatus, mess
   }
 }
 
+function classifyWorkerResultStatus(result: GpuWorkerResult): GpuJobStatus {
+  if (!result.error && result.success !== false) return 'completed'
+  const error = String(result.error || '').toLowerCase()
+  const validationMarkers = [
+    'contract_failure_reason', 'self-reported', 'validation', 'rejected',
+    'no valid python code', 'executable code rejected', 'placeholder',
+    'missing runtime gpu evidence', 'json action must', 'did not parse',
+  ]
+  return validationMarkers.some((marker) => error.includes(marker)) ? 'failed_validation' : 'failed_runtime'
+}
+
 export function applyWorkerResultToJob(job: GpuJobRecord, result: GpuWorkerResult): GpuJobRecord {
-  const toStatus: GpuJobStatus = result.error || result.success === false ? 'failed_runtime' : 'completed'
+  const toStatus = classifyWorkerResultStatus(result)
   const base = ['queued', 'preparing_workbench', 'installing_dependencies', 'running_experiment'].includes(job.status)
     ? { ...job, status: 'validating_evidence' as GpuJobStatus }
     : job
   return {
-    ...transitionGpuJob(base, toStatus, result.error ? 'GPU worker reported runtime failure' : 'GPU worker completed job', result.completedAt),
+    ...transitionGpuJob(base, toStatus, toStatus === 'completed' ? 'GPU worker completed job' : WORKER_STATUS_MESSAGES[toStatus], result.completedAt),
     result,
   }
 }
