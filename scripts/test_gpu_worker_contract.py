@@ -27,7 +27,29 @@ def test_json_run_python_prompt_is_accepted():
     assert "print" in command["code"]
 
 
+def test_cpu_only_experiment_is_rejected_before_execution():
+    validation = gpu_worker.validate_executable_experiment_code(
+        "import json\n"
+        "result = {\"accuracy\": 1.0, \"loss\": 0.0}\n"
+        "print(json.dumps(result))\n"
+    )
+    assert validation["ok"] is False
+    assert "GPU/CUDA" in validation["error"]
+
+
+def test_gpu_probe_experiment_is_accepted_before_execution():
+    validation = gpu_worker.validate_executable_experiment_code(
+        "import json\n"
+        "import torch\n"
+        "result = {\"cuda_available\": torch.cuda.is_available()}\n"
+        "print(json.dumps(result))\n"
+    )
+    assert validation["ok"] is True
+
+
 if __name__ == "__main__":
     test_prose_only_prompt_is_invalid()
     test_json_run_python_prompt_is_accepted()
+    test_cpu_only_experiment_is_rejected_before_execution()
+    test_gpu_probe_experiment_is_accepted_before_execution()
     print("gpu_worker contract tests passed")

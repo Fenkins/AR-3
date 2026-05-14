@@ -168,8 +168,9 @@ class Value:
     def item(self):
         return 1.23456
 sharp = 'low'
+gpu_name = 'unit-test-gpu-contract'
 dynamic_merged = Value()
-print(f'Sharpness {sharp}: merged norm = {dynamic_merged.item():.4f}')
+print(f'Sharpness {sharp}: merged norm = {dynamic_merged.item():.4f}; gpu_name={gpu_name}')
 """
         result = gpu_worker.execute_python_code(code, context=context, dependencies=[])
         assert result["success"] is True, result
@@ -189,7 +190,8 @@ def test_execute_python_code_injects_missing_common_stdlib_imports():
     try:
         context = gpu_worker.prepare_workbench({"jobId": "gpu_space-stdlib_1", "spaceId": "space stdlib"})
         code = """
-result = {"status": "ok", "cwd_name": pathlib.Path(os.getcwd()).name}
+cuda_available = False
+result = {"status": "ok", "cuda_available": cuda_available, "cwd_name": pathlib.Path(os.getcwd()).name}
 print(json.dumps(result, sort_keys=True))
 """
         result = gpu_worker.execute_python_code(code, context=context, dependencies=[])

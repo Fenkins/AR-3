@@ -963,6 +963,25 @@ def validate_executable_experiment_code(code: str) -> dict:
     if not re_module.search(r'\b(print\s*\(|json\.dump|json\.dumps|logging\.)', text):
         return {'ok': False, 'error': 'Executable code rejected: experiment must print/log measurable evidence'}
 
+    gpu_probe_patterns = [
+        r'\btorch\.cuda\b',
+        r'\bcuda\.is_available\b',
+        r'\.cuda\s*\(',
+        r'\.to\s*\(\s*[\'\"]cuda',
+        r'\bdevice\s*=\s*[\'\"]cuda',
+        r'\bcupy\b',
+        r'\btriton\b',
+        r'\btensorflow\b.*\bGPU\b',
+        r'\bjax\b.*\b(device|gpu)\b',
+        r'\bnvidia-smi\b',
+        r'\bnvml\b',
+        r'\bgpu_name\b',
+        r'\bcuda_available\b',
+        r'\bvram\b',
+    ]
+    if not any(re_module.search(pattern, text, flags=re_module.IGNORECASE | re_module.DOTALL) for pattern in gpu_probe_patterns):
+        return {'ok': False, 'error': 'Executable code rejected: experiment must include a GPU/CUDA probe or GPU runtime evidence path'}
+
     return {'ok': True, 'error': None}
 
 
