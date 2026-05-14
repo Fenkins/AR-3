@@ -901,7 +901,24 @@ ${useGpu && shouldUseAutonomousPreparationFallback(stageName) ? `## Preparation 
         }
 
         // Strict pre-submit contract: weak models must repair invalid prose/pseudocode before GPU time is spent.
-        const preparationManifestForRescue = (() => { try { return space.setupStep ? JSON.parse(space.setupStep) : null } catch { return null } })()
+        const preparationManifestForRescue = (() => {
+          if (!space.setupStep) return null
+          try { return JSON.parse(space.setupStep) } catch {
+            return {
+              schemaVersion: 'ar3.preparation-probe.v1',
+              researchType: 'gpu-autonomous-research',
+              objective: `Run a concrete GPU experiment for: ${step.description}`,
+              researchGoal: space.initialPrompt,
+              stepDescription: step.description,
+              focusTerms: String(`${space.initialPrompt} ${step.description}`).toLowerCase().match(/[a-z][a-z0-9_-]{3,}/g)?.slice(0, 12) || [],
+              dependencies: [{ name: 'torch', importName: 'torch' }, { name: 'requests', importName: 'requests' }],
+              models: [],
+              gradingCriteria: ['Print JSON metrics with CUDA/GPU evidence and concrete numeric research measurements.'],
+              workbench: { reuseKey: 'prepared-research' },
+              truncatedSetupEvidence: String(space.setupStep).slice(0, 2000),
+            }
+          }
+        })()
         let strictCommand = extractStrictGpuCommand(response.content)
         let strictAttempts = 0
         let gpuSubmissionUsedFallback = false
