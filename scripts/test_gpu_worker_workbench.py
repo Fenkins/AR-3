@@ -206,6 +206,55 @@ print(json.dumps(result, sort_keys=True))
         shutil.rmtree(root, ignore_errors=True)
 
 
+def test_repair_torch_workbench_removes_poisoned_cuda_packages_and_reinstalls_cu124():
+    root = tempfile.mkdtemp(prefix="ar3-worker-torch-repair-test-")
+    old_root = os.environ.get("AR3_WORKBENCH_ROOT")
+    old_run = gpu_worker.subprocess.run
+    os.environ["AR3_WORKBENCH_ROOT"] = root
+    calls = []
+
+    class FakeCompleted:
+        def __init__(self, returncode=0, stdout="", stderr=""):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def fake_run(cmd, *args, **kwargs):
+        calls.append((cmd, kwargs))
+        if cmd[:3] == [sys.executable, "-c", gpu_worker.TORCH_CUDA_SMOKE_CODE]:
+            if len([c for c, _ in calls if c[:3] == [sys.executable, "-c", gpu_worker.TORCH_CUDA_SMOKE_CODE]]) == 1:
+                return FakeCompleted(1, "", "ImportError: undefined symbol: __nvJitLinkComplete_12_4")
+            return FakeCompleted(0, '{"torch_cuda_available": true, "cuda_device": "unit-test-gpu"}', "")
+        if cmd[:3] == [sys.executable, "-m", "pip"]:
+            return FakeCompleted(0, "installed cu124", "")
+        return old_run(cmd, *args, **kwargs)
+
+    gpu_worker.subprocess.run = fake_run
+    try:
+        context = gpu_worker.prepare_workbench({"jobId": "gpu_space-torch_1", "spaceId": "space torch"})
+        packages = Path(context["packages_dir"])
+        for name in ["torch", "nvidia", "triton", "torch-2.6.0.dist-info"]:
+            (packages / name).mkdir(parents=True)
+        result = gpu_worker.ensure_torch_cuda_workbench(context, force=True)
+        assert result["success"] is True, result
+        assert result["repaired"] is True
+        assert "__nvJitLinkComplete_12_4" in result["output"]
+        assert not (packages / "torch").exists()
+        assert not (packages / "nvidia").exists()
+        pip_calls = [cmd for cmd, _ in calls if cmd[:3] == [sys.executable, "-m", "pip"]]
+        assert pip_calls, "expected repair to reinstall torch CUDA wheels"
+        assert "--index-url" in pip_calls[0]
+        assert "https://download.pytorch.org/whl/cu124" in pip_calls[0]
+        assert "torch==2.5.1" in pip_calls[0]
+    finally:
+        gpu_worker.subprocess.run = old_run
+        if old_root is None:
+            os.environ.pop("AR3_WORKBENCH_ROOT", None)
+        else:
+            os.environ["AR3_WORKBENCH_ROOT"] = old_root
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def test_execute_python_code_rejects_placeholders_before_running():
     root = tempfile.mkdtemp(prefix="ar3-worker-placeholder-test-")
     old_root = os.environ.get("AR3_WORKBENCH_ROOT")
@@ -241,5 +290,6 @@ if __name__ == "__main__":
     test_huggingface_models_are_resolved_into_workbench_before_smoke_tests()
     test_fstring_item_coercion_does_not_cross_other_braces()
     test_execute_python_code_injects_missing_common_stdlib_imports()
+    test_repair_torch_workbench_removes_poisoned_cuda_packages_and_reinstalls_cu124()
     test_execute_python_code_rejects_placeholders_before_running()
     print("gpu worker workbench tests passed")

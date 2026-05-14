@@ -18,6 +18,7 @@ import threading
 import re as re_module
 import hashlib
 import shlex
+import shutil
 import ast
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -218,6 +219,127 @@ def normalize_declared_dependencies(dependencies) -> dict:
     if needs_pytorch_cu124:
         pip_args.extend(['--index-url', 'https://download.pytorch.org/whl/cu124', '--extra-index-url', 'https://pypi.org/simple'])
     return {'success': True, 'deps': deps, 'pip_args': pip_args, 'error': None}
+
+
+TORCH_CUDA_SMOKE_CODE = r'''
+import json
+try:
+    import torch
+    payload = {
+        "torch_version": getattr(torch, "__version__", None),
+        "torch_cuda_version": getattr(torch.version, "cuda", None),
+        "torch_cuda_available": bool(torch.cuda.is_available()),
+        "cuda_device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+    }
+    if torch.cuda.is_available():
+        x = torch.ones((1,), device="cuda")
+        payload["cuda_tensor_sum"] = float(x.sum().item())
+    print(json.dumps(payload, sort_keys=True))
+    raise SystemExit(0 if payload["torch_cuda_available"] else 2)
+except Exception as exc:
+    print(json.dumps({"torch_cuda_available": False, "torch_error": repr(exc)}, sort_keys=True))
+    raise
+'''.strip()
+
+
+PYTORCH_CU124_INSTALL_ARGS = [
+    '--index-url', 'https://download.pytorch.org/whl/cu124',
+    '--extra-index-url', 'https://pypi.org/simple',
+    'torch==2.5.1', 'torchvision==0.20.1', 'torchaudio==2.5.1',
+]
+
+
+TORCH_PACKAGE_PREFIXES = (
+    'torch', 'torchvision', 'torchaudio', 'torchgen', 'triton', 'nvidia',
+    'functorch', 'pytorch_triton', 'pytorch_triton_rocm',
+)
+
+
+def _combined_completed_output(result) -> str:
+    return ((getattr(result, 'stdout', '') or '') + '\n' + (getattr(result, 'stderr', '') or '')).strip()
+
+
+def _torch_cuda_broken_output(output: str) -> bool:
+    text = str(output or '').lower()
+    broken_markers = [
+        '__nvjitlinkcomplete', 'libnvjitlink', 'libcusparse', 'undefined symbol',
+        'torch_cuda_available": false', "torch_cuda_available': false", 'cuda error',
+    ]
+    return any(marker in text for marker in broken_markers)
+
+
+def _purge_torch_package_dirs(packages_dir: str) -> list:
+    """Remove per-workbench torch/nvidia wheel directories likely to shadow global CUDA libs."""
+    root = Path(packages_dir)
+    removed = []
+    if not root.exists():
+        return removed
+    for child in list(root.iterdir()):
+        name = child.name.lower()
+        normalized = name.replace('_', '-').split('-')[0]
+        if name.startswith(TORCH_PACKAGE_PREFIXES) or normalized in TORCH_PACKAGE_PREFIXES:
+            if child.is_dir():
+                shutil.rmtree(child, ignore_errors=True)
+            else:
+                child.unlink(missing_ok=True)
+            removed.append(child.name)
+    return sorted(removed)
+
+
+def ensure_torch_cuda_workbench(context: dict, force: bool = False, timeout: int = 600) -> dict:
+    """Smoke-test torch CUDA in a workbench; repair poisoned torch/nvidia wheels if needed.
+
+    VAST CUDA images can import a globally working torch while a per-space --target install
+    shadows it with an incompatible CUDA wheel set. The observed failure is often
+    `undefined symbol: __nvJitLinkComplete_12_4` from libcusparse/libnvJitLink. Detect that
+    before experiment execution, clear only the workbench-local torch/CUDA wheel dirs, install
+    a known cu124 set, then run the smoke test again and surface evidence in job output.
+    """
+    outputs = []
+    smoke = subprocess.run(
+        [sys.executable, '-c', TORCH_CUDA_SMOKE_CODE],
+        capture_output=True, text=True, timeout=min(timeout, 120), cwd=context['workbench_dir'], env=context['env']
+    )
+    first_output = _combined_completed_output(smoke)
+    outputs.append(f'torch_cuda_smoke initial exit={smoke.returncode}\n{first_output}')
+    if smoke.returncode == 0 and not force:
+        return {'success': True, 'repaired': False, 'output': '\n'.join(outputs), 'error': None}
+
+    if smoke.returncode != 0 and not (_torch_cuda_broken_output(first_output) or force):
+        return {'success': False, 'repaired': False, 'output': '\n'.join(outputs), 'error': 'Torch CUDA smoke test failed before repair: ' + first_output[-1000:]}
+
+    removed = _purge_torch_package_dirs(context['packages_dir'])
+    outputs.append('torch_cuda_repair removed=' + json.dumps(removed))
+    install_cmd = [
+        sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', '--upgrade',
+        '--target', context['packages_dir'], *PYTORCH_CU124_INSTALL_ARGS,
+    ]
+    install = subprocess.run(install_cmd, capture_output=True, text=True, timeout=timeout, env=context['env'])
+    install_output = _combined_completed_output(install)
+    outputs.append(f'torch_cuda_repair install exit={install.returncode}\n{install_output[-2000:]}')
+    if install.returncode != 0:
+        return {'success': False, 'repaired': True, 'output': '\n'.join(outputs), 'error': 'Torch CUDA repair install failed: ' + install_output[-1000:]}
+
+    smoke2 = subprocess.run(
+        [sys.executable, '-c', TORCH_CUDA_SMOKE_CODE],
+        capture_output=True, text=True, timeout=min(timeout, 120), cwd=context['workbench_dir'], env=context['env']
+    )
+    second_output = _combined_completed_output(smoke2)
+    outputs.append(f'torch_cuda_smoke after_repair exit={smoke2.returncode}\n{second_output}')
+    if smoke2.returncode != 0:
+        return {'success': False, 'repaired': True, 'output': '\n'.join(outputs), 'error': 'Torch CUDA smoke test failed after repair: ' + second_output[-1000:]}
+    return {'success': True, 'repaired': True, 'output': '\n'.join(outputs), 'error': None}
+
+
+def _code_or_deps_need_torch(code: str, dependencies=None) -> bool:
+    if re_module.search(r'(^|\n)\s*(import\s+torch|from\s+torch\b)|\btorch\.', str(code or '')):
+        return True
+    for dep in dependencies or []:
+        name = _dependency_to_pip_spec(dep)
+        dep_name = re_module.split(r'[<>=!~\[]', name, maxsplit=1)[0].strip().lower().replace('_', '-')
+        if dep_name in {'torch', 'torchvision', 'torchaudio'}:
+            return True
+    return False
 
 
 def install_declared_dependencies(dependencies, context: dict, timeout: int = 900, job_id: str = '') -> dict:
@@ -1143,6 +1265,17 @@ def execute_python_code(code: str, timeout: int = DEFAULT_JOB_TIMEOUT, context: 
             'error': 'Dependency installation failed: ' + str(dep_result.get('error', 'unknown')),
         }
 
+    torch_prep_output = ''
+    if _code_or_deps_need_torch(code, dependencies or []):
+        torch_result = ensure_torch_cuda_workbench(context)
+        torch_prep_output = torch_result.get('output', '')
+        if not torch_result.get('success'):
+            return {
+                'success': False,
+                'output': torch_prep_output,
+                'error': 'Torch CUDA workbench validation failed: ' + str(torch_result.get('error', 'unknown')),
+            }
+
     update_job_queue_status(job_id, 'running_experiment')
 
     # ── Pre-process: coerce f-string tensor.item():.Nf patterns ────────────────
@@ -1204,9 +1337,12 @@ except ModuleNotFoundError:
             pass
 
         if result.returncode == 0:
+            output = result.stdout.strip()
+            if torch_prep_output:
+                output = (torch_prep_output + '\n' + output).strip()
             return {
                 'success': True,
-                'output': result.stdout.strip(),
+                'output': output,
                 'error': None,
             }
         else:
