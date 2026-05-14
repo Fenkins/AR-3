@@ -1,7 +1,9 @@
 export const GPU_JOB_STATUSES = [
   'queued',
-  'preparing',
-  'running',
+  'preparing_workbench',
+  'installing_dependencies',
+  'running_experiment',
+  'validating_evidence',
   'failed_validation',
   'failed_runtime',
   'completed',
@@ -52,9 +54,11 @@ type GpuJobInput = {
 }
 
 const TRANSITIONS: Record<GpuJobStatus, GpuJobStatus[]> = {
-  queued: ['preparing', 'running', 'failed_validation', 'cancelled'],
-  preparing: ['running', 'failed_validation', 'failed_runtime', 'cancelled'],
-  running: ['completed', 'failed_runtime', 'cancelled'],
+  queued: ['preparing_workbench', 'running_experiment', 'failed_validation', 'cancelled'],
+  preparing_workbench: ['installing_dependencies', 'running_experiment', 'failed_validation', 'failed_runtime', 'cancelled'],
+  installing_dependencies: ['running_experiment', 'failed_validation', 'failed_runtime', 'cancelled'],
+  running_experiment: ['validating_evidence', 'completed', 'failed_runtime', 'cancelled'],
+  validating_evidence: ['completed', 'failed_runtime', 'cancelled'],
   failed_validation: [],
   failed_runtime: [],
   completed: [],
@@ -111,8 +115,8 @@ export function transitionGpuJob(job: GpuJobRecord, toStatus: GpuJobStatus, mess
 
 export function applyWorkerResultToJob(job: GpuJobRecord, result: GpuWorkerResult): GpuJobRecord {
   const toStatus: GpuJobStatus = result.error || result.success === false ? 'failed_runtime' : 'completed'
-  const base = ['queued', 'preparing'].includes(job.status)
-    ? { ...job, status: 'running' as GpuJobStatus }
+  const base = ['queued', 'preparing_workbench', 'installing_dependencies', 'running_experiment'].includes(job.status)
+    ? { ...job, status: 'validating_evidence' as GpuJobStatus }
     : job
   return {
     ...transitionGpuJob(base, toStatus, result.error ? 'GPU worker reported runtime failure' : 'GPU worker completed job', result.completedAt),
@@ -125,26 +129,38 @@ type WorkerQueueState = {
   status?: string
   claimedAt?: string
   startedAt?: string
+  updatedAt?: string
+}
+
+const WORKER_STATUS_MESSAGES: Record<GpuJobStatus, string> = {
+  queued: 'GPU job queued',
+  preparing_workbench: 'GPU worker claimed job and is preparing the persistent workbench',
+  installing_dependencies: 'GPU worker is installing declared dependencies into the workbench cache',
+  running_experiment: 'GPU worker is running experiment code',
+  validating_evidence: 'GPU worker is validating runtime evidence before completion',
+  failed_validation: 'GPU job failed validation',
+  failed_runtime: 'GPU worker reported runtime failure',
+  completed: 'GPU worker completed job',
+  cancelled: 'GPU job cancelled',
+}
+
+function mapWorkerQueueStatus(workerStatus: string): GpuJobStatus | null {
+  if (workerStatus === 'claimed') return 'preparing_workbench'
+  if (workerStatus === 'running') return 'running_experiment'
+  if (isGpuJobStatus(workerStatus)) return workerStatus
+  return null
 }
 
 export function applyWorkerQueueStateToJob(job: GpuJobRecord, workerJob: WorkerQueueState | null | undefined): GpuJobRecord {
   if (!workerJob || workerJob.jobId !== job.jobId || job.result) return job
 
-  const workerStatus = String(workerJob.status || '')
-  const mappedStatus: GpuJobStatus | null = workerStatus === 'claimed'
-    ? 'preparing'
-    : workerStatus === 'running'
-      ? 'running'
-      : null
+  const mappedStatus = mapWorkerQueueStatus(String(workerJob.status || ''))
 
   if (!mappedStatus || job.status === mappedStatus) return job
   if (!isValidGpuJobTransition(job.status, mappedStatus)) return job
 
-  const at = (mappedStatus === 'preparing' ? workerJob.claimedAt : workerJob.startedAt) || new Date().toISOString()
-  const message = mappedStatus === 'preparing'
-    ? 'GPU worker claimed job and is preparing the workbench/dependencies'
-    : 'GPU worker marked job running and started executing'
-  return transitionGpuJob(job, mappedStatus, message, at)
+  const at = workerJob.updatedAt || workerJob.startedAt || workerJob.claimedAt || new Date().toISOString()
+  return transitionGpuJob(job, mappedStatus, WORKER_STATUS_MESSAGES[mappedStatus], at)
 }
 
 export function workerQueueJob(job: GpuJobRecord) {

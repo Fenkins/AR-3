@@ -24,12 +24,14 @@ const {
   pruneFileQueueForSpace,
 } = m.exports
 
-assert.deepStrictEqual(GPU_JOB_STATUSES, ['queued', 'preparing', 'running', 'failed_validation', 'failed_runtime', 'completed', 'cancelled'])
-assert.equal(isValidGpuJobTransition('queued', 'preparing'), true)
-assert.equal(isValidGpuJobTransition('preparing', 'running'), true)
-assert.equal(isValidGpuJobTransition('running', 'completed'), true)
-assert.equal(isValidGpuJobTransition('running', 'failed_runtime'), true)
-assert.equal(isValidGpuJobTransition('completed', 'running'), false)
+assert.deepStrictEqual(GPU_JOB_STATUSES, ['queued', 'preparing_workbench', 'installing_dependencies', 'running_experiment', 'validating_evidence', 'failed_validation', 'failed_runtime', 'completed', 'cancelled'])
+assert.equal(isValidGpuJobTransition('queued', 'preparing_workbench'), true)
+assert.equal(isValidGpuJobTransition('preparing_workbench', 'installing_dependencies'), true)
+assert.equal(isValidGpuJobTransition('installing_dependencies', 'running_experiment'), true)
+assert.equal(isValidGpuJobTransition('running_experiment', 'validating_evidence'), true)
+assert.equal(isValidGpuJobTransition('validating_evidence', 'completed'), true)
+assert.equal(isValidGpuJobTransition('running_experiment', 'failed_runtime'), true)
+assert.equal(isValidGpuJobTransition('completed', 'running_experiment'), false)
 assert.equal(isValidGpuJobTransition('cancelled', 'queued'), false)
 
 {
@@ -74,20 +76,36 @@ assert.equal(isValidGpuJobTransition('cancelled', 'queued'), false)
     status: 'claimed',
     claimedAt: '2026-05-13T00:00:10Z',
   })
-  assert.equal(claimed.status, 'preparing')
+  assert.equal(claimed.status, 'preparing_workbench')
   assert.equal(claimed.updatedAt, '2026-05-13T00:00:10Z')
-  assert.equal(claimed.events.at(-1).toStatus, 'preparing')
+  assert.equal(claimed.events.at(-1).toStatus, 'preparing_workbench')
   assert.match(claimed.events.at(-1).message, /claimed/i)
 
-  const running = applyWorkerQueueStateToJob(claimed, {
+  const installing = applyWorkerQueueStateToJob(claimed, {
     jobId: job.jobId,
-    status: 'running',
+    status: 'installing_dependencies',
+    updatedAt: '2026-05-13T00:00:30Z',
+  })
+  assert.equal(installing.status, 'installing_dependencies')
+  assert.equal(installing.updatedAt, '2026-05-13T00:00:30Z')
+
+  const running = applyWorkerQueueStateToJob(installing, {
+    jobId: job.jobId,
+    status: 'running_experiment',
     startedAt: '2026-05-13T00:01:00Z',
   })
-  assert.equal(running.status, 'running')
+  assert.equal(running.status, 'running_experiment')
   assert.equal(running.updatedAt, '2026-05-13T00:01:00Z')
-  assert.equal(running.events.at(-1).toStatus, 'running')
+  assert.equal(running.events.at(-1).toStatus, 'running_experiment')
   assert.match(running.events.at(-1).message, /running/i)
+
+  const validating = applyWorkerQueueStateToJob(running, {
+    jobId: job.jobId,
+    status: 'validating_evidence',
+    updatedAt: '2026-05-13T00:02:00Z',
+  })
+  assert.equal(validating.status, 'validating_evidence')
+  assert.equal(validating.updatedAt, '2026-05-13T00:02:00Z')
 }
 
 {

@@ -68,8 +68,14 @@ function gpuJobDelegate(): any | null {
   return (prisma as any).gpuJob || null
 }
 
+function normalizeStoredStatus(value: string): GpuJobStatus {
+  if (value === 'preparing') return 'preparing_workbench'
+  if (value === 'running') return 'running_experiment'
+  return isGpuJobStatus(value) ? value : 'queued'
+}
+
 function rowToRecord(row: any): GpuJobRecord {
-  const status = isGpuJobStatus(row.status) ? row.status : 'queued'
+  const status = normalizeStoredStatus(row.status)
   return {
     jobId: row.jobId,
     spaceId: row.spaceId,
@@ -325,7 +331,7 @@ export async function DELETE(request: NextRequest) {
   const delegate = gpuJobDelegate()
   if (delegate) {
     const result = await delegate.updateMany({
-      where: { spaceId, status: { in: ['queued', 'preparing', 'running'] } },
+      where: { spaceId, status: { in: ['queued', 'preparing', 'running', 'preparing_workbench', 'installing_dependencies', 'running_experiment', 'validating_evidence'] } },
       data: { status: 'cancelled' as GpuJobStatus },
     })
     dbRemoved = result.count || 0

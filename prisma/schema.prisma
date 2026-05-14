@@ -138,7 +138,7 @@ model GpuJob {
   stageName   String
   prompt      String
   context     String   @default("")
-  status      String   @default("queued") // queued | preparing | running | failed_validation | failed_runtime | completed | cancelled
+  status      String   @default("queued") // queued | preparing_workbench | installing_dependencies | running_experiment | validating_evidence | failed_validation | failed_runtime | completed | cancelled
   resultJson  String?
   eventsJson  String   @default("[]")
   submittedAt DateTime @default(now())

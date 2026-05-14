@@ -2,6 +2,7 @@
 """Regression tests for GPU worker command extraction contract."""
 
 import importlib.util
+import json
 import pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parent
@@ -81,6 +82,50 @@ def test_install_dependencies_upgrades_existing_workbench_packages(monkeypatch, 
     assert result['success'] is True
     assert '--upgrade' in captured['cmd']
     assert 'torch==2.5.1' in captured['cmd']
+
+
+def test_worker_queue_status_tracks_preparation_install_execution_and_validation(tmp_path, monkeypatch):
+    queue_file = tmp_path / 'gpu_jobs.json'
+    monkeypatch.setattr(gpu_worker, 'JOB_QUEUE_FILE', str(queue_file))
+    monkeypatch.setenv("AR3_WORKBENCH_ROOT", str(tmp_path / "workbenches"))
+
+    job = {
+        "jobId": "job-status-lifecycle",
+        "spaceId": "space-status-test",
+        "spaceName": "Status Test",
+        "stageName": "Implementation",
+        "prompt": json.dumps({
+            "action": "run_python",
+            "dependencies": ["torch"],
+            "code": "import torch\nprint({'cuda_available': torch.cuda.is_available(), 'gpu_name': 'test gpu'})",
+        }),
+    }
+    queue_file.write_text(json.dumps([{**job, "status": "claimed"}]))
+    observed = []
+
+    original_write_queue = gpu_worker.write_queue
+
+    def tracking_write_queue(jobs):
+        observed.append(jobs[0]["status"])
+        original_write_queue(jobs)
+
+    class RunResult:
+        returncode = 0
+        stdout = "{'cuda_available': True, 'gpu_name': 'test gpu'}"
+        stderr = ""
+
+    monkeypatch.setattr(gpu_worker, 'write_queue', tracking_write_queue)
+    monkeypatch.setattr(gpu_worker.subprocess, 'run', lambda *args, **kwargs: RunResult())
+
+    result = gpu_worker.execute_gpu_command(job, timeout=30)
+
+    assert result["success"] is True
+    assert observed == [
+        "preparing_workbench",
+        "installing_dependencies",
+        "running_experiment",
+        "validating_evidence",
+    ]
 
 
 def test_self_reported_contract_failure_output_fails_job(tmp_path, monkeypatch):

@@ -56,6 +56,28 @@ def write_queue(jobs):
     except Exception as e:
         log(f"Error writing queue: {e}")
 
+
+def update_job_queue_status(job_id: str, status: str):
+    """Persist a fine-grained worker lifecycle status for API/UI polling."""
+    if not job_id:
+        return
+    with queue_lock:
+        queue = read_queue()
+        changed = False
+        now = datetime.now().isoformat()
+        for job in queue:
+            if job.get('jobId') == job_id:
+                job['status'] = status
+                job['updatedAt'] = now
+                if status == 'preparing_workbench':
+                    job['claimedAt'] = job.get('claimedAt') or now
+                if status == 'running_experiment':
+                    job['startedAt'] = job.get('startedAt') or now
+                changed = True
+                break
+        if changed:
+            write_queue(queue)
+
 def read_results():
     try:
         if not os.path.exists(JOB_RESULTS_FILE):
@@ -198,7 +220,7 @@ def normalize_declared_dependencies(dependencies) -> dict:
     return {'success': True, 'deps': deps, 'pip_args': pip_args, 'error': None}
 
 
-def install_declared_dependencies(dependencies, context: dict, timeout: int = 900) -> dict:
+def install_declared_dependencies(dependencies, context: dict, timeout: int = 900, job_id: str = '') -> dict:
     """Install JSON-declared Python deps into the space workbench, not globally."""
     normalized = normalize_declared_dependencies(dependencies)
     if not normalized.get('success'):
@@ -208,6 +230,7 @@ def install_declared_dependencies(dependencies, context: dict, timeout: int = 90
         return {'success': True, 'output': 'no declared dependencies', 'error': None}
 
     cmd = [sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', '--upgrade', *normalized['pip_args'], '--target', context['packages_dir'], *deps]
+    update_job_queue_status(job_id, 'installing_dependencies')
     log('Installing declared dependencies into workbench: ' + ' '.join(shlex.quote(d) for d in deps),
         thread_id=threading.current_thread().name)
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=context['env'])
@@ -441,7 +464,7 @@ print(json.dumps({
     return {'success': True, 'output': '\n'.join(output_parts), 'error': None}
 
 
-def prepare_manifest_environment(manifest: dict, context: dict, timeout: int = 900) -> dict:
+def prepare_manifest_environment(manifest: dict, context: dict, timeout: int = 900, job_id: str = '') -> dict:
     """Install manifest dependencies, resolve models, and run smoke tests before experiment code."""
     if not isinstance(manifest, dict):
         return {'success': True, 'output': 'no preparation manifest supplied', 'error': None}
@@ -450,7 +473,7 @@ def prepare_manifest_environment(manifest: dict, context: dict, timeout: int = 9
     with open(manifest_path, 'w') as f:
         json.dump(manifest, f, indent=2, sort_keys=True)
 
-    dep_result = install_declared_dependencies(manifest.get('dependencies') or [], context, timeout=timeout)
+    dep_result = install_declared_dependencies(manifest.get('dependencies') or [], context, timeout=timeout, job_id=job_id)
     output_parts = [f'preparation_manifest={manifest_path}']
     if dep_result.get('output'):
         output_parts.append('dependency_install:\n' + dep_result.get('output', ''))
@@ -1070,7 +1093,7 @@ def validate_execution_result_evidence(result: dict) -> dict:
     return result
 
 
-def execute_python_code(code: str, timeout: int = DEFAULT_JOB_TIMEOUT, context: dict = None, dependencies=None) -> dict:
+def execute_python_code(code: str, timeout: int = DEFAULT_JOB_TIMEOUT, context: dict = None, dependencies=None, job_id: str = '') -> dict:
     """Execute Python code inside a persistent per-space workbench."""
     context = context or prepare_workbench({'spaceId': 'default'})
     log(f"Executing Python code ({len(code)} chars) in {context['workbench_dir']}",
@@ -1080,13 +1103,15 @@ def execute_python_code(code: str, timeout: int = DEFAULT_JOB_TIMEOUT, context: 
     if not validation.get('ok'):
         return {'success': False, 'output': '', 'error': validation.get('error')}
 
-    dep_result = install_declared_dependencies(dependencies or [], context)
+    dep_result = install_declared_dependencies(dependencies or [], context, job_id=job_id)
     if not dep_result.get('success'):
         return {
             'success': False,
             'output': dep_result.get('output', ''),
             'error': 'Dependency installation failed: ' + str(dep_result.get('error', 'unknown')),
         }
+
+    update_job_queue_status(job_id, 'running_experiment')
 
     # ── Pre-process: coerce f-string tensor.item():.Nf patterns ────────────────
     # .item() can return int/str/float — wrapping with float() prevents format errors
@@ -1296,6 +1321,7 @@ def execute_gpu_command(job: dict, timeout: int = DEFAULT_JOB_TIMEOUT) -> dict:
     try:
         gpu_command = extract_gpu_command(prompt)
         action = gpu_command.get('action', 'run_python')
+        update_job_queue_status(job_id, 'preparing_workbench')
         context_info = prepare_workbench(job)
         preparation_manifest = extract_preparation_manifest(job)
         result_metadata = {
@@ -1307,7 +1333,7 @@ def execute_gpu_command(job: dict, timeout: int = DEFAULT_JOB_TIMEOUT) -> dict:
         preparation_output = ''
         if preparation_manifest:
             log('Applying preparation manifest before experiment execution', thread_id=tid)
-            prep_result = prepare_manifest_environment(preparation_manifest, context_info, timeout=min(timeout, 1800))
+            prep_result = prepare_manifest_environment(preparation_manifest, context_info, timeout=min(timeout, 1800), job_id=job_id)
             preparation_output = prep_result.get('output', '')
             if not prep_result.get('success'):
                 return {
@@ -1331,6 +1357,7 @@ def execute_gpu_command(job: dict, timeout: int = DEFAULT_JOB_TIMEOUT) -> dict:
                 timeout=timeout,
                 context=context_info,
                 dependencies=[*(preparation_manifest or {}).get('dependencies', []), *gpu_command.get('dependencies', [])],
+                job_id=job_id,
             )
 
         elif action == 'run_quantized':
@@ -1386,6 +1413,7 @@ def execute_gpu_command(job: dict, timeout: int = DEFAULT_JOB_TIMEOUT) -> dict:
         result['code'] = gpu_command.get('code', '')
         if preparation_output:
             result['output'] = (preparation_output + '\n' + result.get('output', '')).strip()
+        update_job_queue_status(job_id, 'validating_evidence')
         result = validate_execution_result_evidence(result)
         result.update(result_metadata)
         cleanup_gpu_memory()
@@ -1403,15 +1431,6 @@ def execute_gpu_command(job: dict, timeout: int = DEFAULT_JOB_TIMEOUT) -> dict:
 def process_job(job: dict, timeout: int) -> dict:
     """Process a single job (called from worker thread)."""
     job_id = job['jobId']
-
-    with queue_lock:
-        queue = read_queue()
-        for j in queue:
-            if j['jobId'] == job_id:
-                j['status'] = 'running'
-                j['startedAt'] = datetime.now().isoformat()
-                write_queue(queue)
-                break
 
     tid = threading.current_thread().name
     log(f"Executing GPU job {job_id}", thread_id=tid)
