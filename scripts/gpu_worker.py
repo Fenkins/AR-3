@@ -1179,21 +1179,49 @@ def validate_executable_experiment_code(code: str) -> dict:
 
 
 def _iter_json_objects_from_output(output: str):
-    """Yield JSON objects embedded in stdout/stderr evidence."""
+    """Yield all JSON objects embedded in stdout/stderr evidence.
+
+    Worker output often prepends a one-line torch smoke JSON before the actual
+    pretty-printed experiment evidence. A first-object-only scan lets later
+    self-reported contract failures hide behind valid GPU smoke evidence, so scan
+    the full stream with quote-aware brace matching.
+    """
     text = str(output or '')
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped or not stripped.startswith('{'):
+    seen = set()
+    in_str = False
+    escape_next = False
+    brace_depth = 0
+    json_start = -1
+    for i, ch in enumerate(text):
+        if escape_next:
+            escape_next = False
             continue
-        try:
-            parsed = json.loads(stripped)
-        except Exception:
-            parsed = _extract_first_json_object(stripped)
-        if isinstance(parsed, dict):
-            yield parsed
-    embedded = _extract_first_json_object(text)
-    if isinstance(embedded, dict):
-        yield embedded
+        if ch == '\\' and in_str:
+            escape_next = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if ch == '{':
+            if brace_depth == 0:
+                json_start = i
+            brace_depth += 1
+        elif ch == '}' and brace_depth:
+            brace_depth -= 1
+            if brace_depth == 0 and json_start >= 0:
+                raw = text[json_start:i + 1]
+                json_start = -1
+                try:
+                    parsed = json.loads(raw)
+                except Exception:
+                    continue
+                if isinstance(parsed, dict):
+                    key = (json_start, i, raw[:120])
+                    if key not in seen:
+                        seen.add(key)
+                        yield parsed
 
 
 def validate_execution_result_evidence(result: dict) -> dict:
@@ -1606,6 +1634,21 @@ def execute_gpu_command(job: dict, timeout: int = DEFAULT_JOB_TIMEOUT) -> dict:
         }
 
 
+def classify_terminal_job_status(result: dict) -> str:
+    """Map a finished worker result to the persisted lifecycle terminal state."""
+    if result.get('success'):
+        return 'completed'
+    error = str(result.get('error') or '').lower()
+    validation_markers = (
+        'contract_failure_reason', 'self-reported', 'validation', 'rejected',
+        'no valid python code', 'executable code rejected', 'placeholder',
+        'missing runtime gpu evidence', 'json action must', 'did not parse',
+    )
+    if any(marker in error for marker in validation_markers):
+        return 'failed_validation'
+    return 'failed_runtime'
+
+
 def process_job(job: dict, timeout: int) -> dict:
     """Process a single job (called from worker thread)."""
     job_id = job['jobId']
@@ -1632,9 +1675,10 @@ def process_job(job: dict, timeout: int) -> dict:
         write_results(results)
 
         queue = read_queue()
+        terminal_status = classify_terminal_job_status(result)
         for j in queue:
             if j['jobId'] == job_id:
-                j['status'] = 'completed'
+                j['status'] = terminal_status
                 j['completedAt'] = datetime.now().isoformat()
                 break
         write_queue(queue)

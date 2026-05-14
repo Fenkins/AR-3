@@ -256,6 +256,56 @@ def test_repair_torch_workbench_removes_poisoned_cuda_packages_and_reinstalls_cu
         shutil.rmtree(root, ignore_errors=True)
 
 
+def test_validation_rejects_pretty_printed_contract_failure_after_gpu_smoke_json():
+    output = """
+torch_cuda_smoke initial exit=0
+{"cuda_device": "NVIDIA GeForce RTX 3060", "torch_cuda_available": true}
+{
+  "contract_failure_reason": "response did not parse as the required JSON object",
+  "gpu": {
+    "cuda_available": true,
+    "gpu_name": "NVIDIA GeForce RTX 3060"
+  }
+}
+"""
+    result = gpu_worker.validate_execution_result_evidence({"success": True, "output": output, "error": None})
+    assert result["success"] is False
+    assert "contract_failure_reason" in result["error"]
+
+
+def test_process_job_marks_validation_failures_as_failed_validation():
+    root = tempfile.mkdtemp(prefix="ar3-worker-status-test-")
+    old_queue = gpu_worker.JOB_QUEUE_FILE
+    old_results = gpu_worker.JOB_RESULTS_FILE
+    old_execute = gpu_worker.execute_gpu_command
+    try:
+        queue_path = Path(root, "jobs.json")
+        results_path = Path(root, "results.json")
+        gpu_worker.JOB_QUEUE_FILE = str(queue_path)
+        gpu_worker.JOB_RESULTS_FILE = str(results_path)
+        queue_path.write_text(__import__("json").dumps([{"jobId": "job-validation", "status": "validating_evidence"}]))
+
+        def fake_execute(job, timeout):
+            return {
+                "success": False,
+                "output": "{}",
+                "error": "Experiment output self-reported contract_failure_reason: bad contract",
+            }
+
+        gpu_worker.execute_gpu_command = fake_execute
+        result = gpu_worker.process_job({"jobId": "job-validation"}, timeout=1)
+        assert result["success"] is False
+        queue = __import__("json").loads(queue_path.read_text())
+        assert queue[0]["status"] == "failed_validation"
+        stored = __import__("json").loads(results_path.read_text())["job-validation"]
+        assert stored["success"] is False
+    finally:
+        gpu_worker.execute_gpu_command = old_execute
+        gpu_worker.JOB_QUEUE_FILE = old_queue
+        gpu_worker.JOB_RESULTS_FILE = old_results
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def test_execute_python_code_rejects_placeholders_before_running():
     root = tempfile.mkdtemp(prefix="ar3-worker-placeholder-test-")
     old_root = os.environ.get("AR3_WORKBENCH_ROOT")
@@ -292,5 +342,7 @@ if __name__ == "__main__":
     test_fstring_item_coercion_does_not_cross_other_braces()
     test_execute_python_code_injects_missing_common_stdlib_imports()
     test_repair_torch_workbench_removes_poisoned_cuda_packages_and_reinstalls_cu124()
+    test_validation_rejects_pretty_printed_contract_failure_after_gpu_smoke_json()
+    test_process_job_marks_validation_failures_as_failed_validation()
     test_execute_python_code_rejects_placeholders_before_running()
     print("gpu worker workbench tests passed")
