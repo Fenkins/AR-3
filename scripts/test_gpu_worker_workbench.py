@@ -161,6 +161,28 @@ print(f'Sharpness {sharp}: merged norm = {dynamic_merged.item():.4f}')
         shutil.rmtree(root, ignore_errors=True)
 
 
+def test_execute_python_code_injects_missing_common_stdlib_imports():
+    root = tempfile.mkdtemp(prefix="ar3-worker-stdlib-import-test-")
+    old_root = os.environ.get("AR3_WORKBENCH_ROOT")
+    os.environ["AR3_WORKBENCH_ROOT"] = root
+    try:
+        context = gpu_worker.prepare_workbench({"jobId": "gpu_space-stdlib_1", "spaceId": "space stdlib"})
+        code = """
+result = {"status": "ok", "cwd_name": pathlib.Path(os.getcwd()).name}
+print(json.dumps(result, sort_keys=True))
+"""
+        result = gpu_worker.execute_python_code(code, context=context, dependencies=[])
+        assert result["success"] is True, result
+        assert '"status": "ok"' in result["output"]
+        assert '"cwd_name":' in result["output"]
+    finally:
+        if old_root is None:
+            os.environ.pop("AR3_WORKBENCH_ROOT", None)
+        else:
+            os.environ["AR3_WORKBENCH_ROOT"] = old_root
+        shutil.rmtree(root, ignore_errors=True)
+
+
 if __name__ == "__main__":
     test_prepare_workbench_is_stable_per_space_and_sets_cache_env()
     test_strategy4_line_assembly_does_not_crash_on_markdown_headers()

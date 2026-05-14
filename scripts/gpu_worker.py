@@ -18,6 +18,7 @@ import threading
 import re as re_module
 import hashlib
 import shlex
+import ast
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -765,6 +766,49 @@ def auto_fix_code(code: str) -> str:
     return fixed
 
 
+COMMON_STDLIB_MODULES = {
+    'json', 'os', 'sys', 'math', 'random', 'time', 'datetime', 'pathlib', 'statistics',
+    'itertools', 'functools', 'collections', 'subprocess', 're', 'csv', 'tempfile', 'shutil',
+}
+
+
+def inject_missing_common_stdlib_imports(code: str) -> str:
+    """Prepend imports for common stdlib modules referenced but not imported.
+
+    Weak implementer models often emit otherwise executable experiments that use
+    json.dumps/os.getcwd/pathlib.Path in final metrics reporting but omit the
+    import line. Repair only top-level stdlib module names, and only after AST
+    parsing succeeds, so pseudocode/syntax errors still fail fast.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    imported = set()
+    loaded_names = set()
+    assigned_names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                imported.add((alias.asname or alias.name.split('.')[0]))
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                imported.add(node.module.split('.')[0])
+            for alias in node.names:
+                imported.add(alias.asname or alias.name)
+        elif isinstance(node, ast.Name):
+            if isinstance(node.ctx, ast.Load):
+                loaded_names.add(node.id)
+            elif isinstance(node.ctx, (ast.Store, ast.Del)):
+                assigned_names.add(node.id)
+
+    missing = sorted((loaded_names & COMMON_STDLIB_MODULES) - imported - assigned_names)
+    if not missing:
+        return code
+    return ''.join(f'import {name}\n' for name in missing) + code
+
+
 def execute_python_code(code: str, timeout: int = DEFAULT_JOB_TIMEOUT, context: dict = None, dependencies=None) -> dict:
     """Execute Python code inside a persistent per-space workbench."""
     context = context or prepare_workbench({'spaceId': 'default'})
@@ -790,6 +834,7 @@ def execute_python_code(code: str, timeout: int = DEFAULT_JOB_TIMEOUT, context: 
     )
 
     fixed_code = repair_embedded_newline_string_literals(fixed_code)
+    fixed_code = inject_missing_common_stdlib_imports(fixed_code)
 
     # ── Patch: Handle LLaDA transformers 5.x compatibility ────────────────────
     # LLaDA's custom model code (modeling_llada.py) is missing `all_tied_weights_keys`
