@@ -189,7 +189,7 @@ function testDeterministicGpuExperimentFallbackUsesManifestAndPassesEvidenceGate
   })
   assert.equal(command.action, 'run_python')
   assert.ok(command.dependencies.includes('requests'))
-  assert.ok(command.dependencies.includes('torch'))
+  assert.equal(command.dependencies.some(dep => /^torch/i.test(dep)), false)
   assert.match(command.code, /deterministic_gpu_experiment/)
   assert.match(command.code, /torch\.cuda\.is_available/)
   assert.match(command.code, /tensor_sum/)

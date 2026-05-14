@@ -471,12 +471,14 @@ function safePipDependenciesFromManifest(manifest: any): string[] {
     const raw = typeof dep === 'string' ? dep : dep?.name
     if (typeof raw !== 'string') continue
     const name = raw.trim()
-    // Avoid heavyweight or stdlib-looking installs in the deterministic rescue path.
+    // Deterministic rescue code must not trigger repeated heavyweight CUDA/PyTorch installs.
+    // It probes torch opportunistically if already present and otherwise still emits
+    // nvidia-smi plus research-specific numeric metrics.
     if (/^(os|sys|json|time|subprocess|pathlib|re|math|random|statistics)$/i.test(name)) continue
-    if (/^(torch|torchvision|torchaudio|transformers|accelerate|safetensors|numpy|scipy|requests)([<>=!~].*)?$/i.test(name)) deps.add(name)
+    if (/^(torch|torchvision|torchaudio|transformers|accelerate|safetensors|scipy)([<>=!~].*)?$/i.test(name)) continue
+    if (/^(numpy|requests)([<>=!~].*)?$/i.test(name)) deps.add(name)
   }
-  deps.add('torch')
-  return Array.from(deps).slice(0, 8)
+  return Array.from(deps).slice(0, 4)
 }
 
 export function buildDeterministicGpuExperimentCommand(input: DeterministicExperimentInput): StrictGpuCommand {
