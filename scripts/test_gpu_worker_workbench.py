@@ -183,6 +183,32 @@ print(json.dumps(result, sort_keys=True))
         shutil.rmtree(root, ignore_errors=True)
 
 
+def test_execute_python_code_rejects_placeholders_before_running():
+    root = tempfile.mkdtemp(prefix="ar3-worker-placeholder-test-")
+    old_root = os.environ.get("AR3_WORKBENCH_ROOT")
+    os.environ["AR3_WORKBENCH_ROOT"] = root
+    try:
+        context = gpu_worker.prepare_workbench({"jobId": "gpu_space-placeholder_1", "spaceId": "space placeholder"})
+        marker = Path(context["artifacts_dir"], "should-not-exist.txt")
+        code = """
+from pathlib import Path
+import os
+# TODO: replace this placeholder with the actual GPU experiment
+Path(os.environ['AR3_ARTIFACTS_DIR'], 'should-not-exist.txt').write_text('bad')
+print('accuracy=1.0')
+"""
+        result = gpu_worker.execute_python_code(code, context=context, dependencies=[])
+        assert result["success"] is False, result
+        assert "placeholder" in result["error"].lower()
+        assert not marker.exists()
+    finally:
+        if old_root is None:
+            os.environ.pop("AR3_WORKBENCH_ROOT", None)
+        else:
+            os.environ["AR3_WORKBENCH_ROOT"] = old_root
+        shutil.rmtree(root, ignore_errors=True)
+
+
 if __name__ == "__main__":
     test_prepare_workbench_is_stable_per_space_and_sets_cache_env()
     test_strategy4_line_assembly_does_not_crash_on_markdown_headers()
@@ -191,4 +217,6 @@ if __name__ == "__main__":
     test_safe_smoke_command_uses_current_python_interpreter()
     test_required_model_smoke_tests_execute_before_experiments()
     test_fstring_item_coercion_does_not_cross_other_braces()
+    test_execute_python_code_injects_missing_common_stdlib_imports()
+    test_execute_python_code_rejects_placeholders_before_running()
     print("gpu worker workbench tests passed")

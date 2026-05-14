@@ -809,11 +809,43 @@ def inject_missing_common_stdlib_imports(code: str) -> str:
     return ''.join(f'import {name}\n' for name in missing) + code
 
 
+def validate_executable_experiment_code(code: str) -> dict:
+    """Fail fast on prose/pseudocode before any dependency install or execution.
+
+    TypeScript validation catches normal API submissions, but the worker also accepts
+    queued jobs directly and has legacy markdown extraction paths. This guard keeps
+    weak-model prose from consuming GPU time or mutating persistent workbenches.
+    """
+    text = str(code or '')
+    placeholder_patterns = [
+        r'\bTODO\b',
+        r'\bFIXME\b',
+        r'placeholder',
+        r'pseudocode',
+        r'your code here',
+        r'\bpass\s*(?:#.*)?$',
+        r'\.\.\.',
+        r'implement (?:this|the actual|real)',
+    ]
+    for pattern in placeholder_patterns:
+        if re_module.search(pattern, text, flags=re_module.IGNORECASE | re_module.MULTILINE):
+            return {'ok': False, 'error': f'Executable code rejected: placeholder/pseudocode marker matched {pattern!r}'}
+
+    if not re_module.search(r'\b(print\s*\(|json\.dump|json\.dumps|logging\.)', text):
+        return {'ok': False, 'error': 'Executable code rejected: experiment must print/log measurable evidence'}
+
+    return {'ok': True, 'error': None}
+
+
 def execute_python_code(code: str, timeout: int = DEFAULT_JOB_TIMEOUT, context: dict = None, dependencies=None) -> dict:
     """Execute Python code inside a persistent per-space workbench."""
     context = context or prepare_workbench({'spaceId': 'default'})
     log(f"Executing Python code ({len(code)} chars) in {context['workbench_dir']}",
         thread_id=threading.current_thread().name)
+
+    validation = validate_executable_experiment_code(code)
+    if not validation.get('ok'):
+        return {'success': False, 'output': '', 'error': validation.get('error')}
 
     dep_result = install_declared_dependencies(dependencies or [], context)
     if not dep_result.get('success'):
