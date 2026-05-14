@@ -125,6 +125,27 @@ function testPreparationProbeShapeIsInvalidEvenIfFallbackFlagIsLost() {
   assert.match(assessed.reason, /preparation probe/i)
 }
 
+function testLongProseOutputIsNotValidGpuEvidence() {
+  const assessed = contract.assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    fallbackUsed: false,
+    success: true,
+    output: 'This experiment would compare several approaches and then report whether the idea is promising. It contains no JSON metrics, files, numeric measurements, artifacts, GPU facts, or stdout evidence from executable work.',
+  })
+  assert.equal(assessed.valid, false)
+  assert.match(assessed.reason, /measurable evidence/i)
+}
+
+function testJsonMetricsOutputIsValidGpuEvidence() {
+  const assessed = contract.assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    fallbackUsed: false,
+    success: true,
+    output: JSON.stringify({ accuracy: 0.91, loss: 0.12, cuda_available: true }),
+  })
+  assert.equal(assessed.valid, true, assessed.reason)
+}
+
 testExtractsJsonAfterUnclosedThink()
 testFallbackPreparationCommandIsExecutableAndPromptIndependent()
 testPreparationStageWithValidatedManifestSubmitsExecutableFallbackInsteadOfRawManifestJson()
@@ -132,4 +153,6 @@ testAutonomousPreparationFallbackIsLimitedToPreparationStages()
 testFallbackUsesWorkerProvidedWorkbenchDirectory()
 testAutonomousPreparationFallbackDoesNotCompleteExperimentSteps()
 testPreparationProbeShapeIsInvalidEvenIfFallbackFlagIsLost()
+testLongProseOutputIsNotValidGpuEvidence()
+testJsonMetricsOutputIsValidGpuEvidence()
 console.log('strict gpu contract tests passed')

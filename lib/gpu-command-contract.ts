@@ -61,7 +61,36 @@ export function assessGpuExecutionEvidence(input: GpuEvidenceInput): GpuEvidence
     return { valid: false, reason: 'GPU execution produced too little evidence' }
   }
 
-  return { valid: true, reason: 'GPU execution produced evidence' }
+  const measurableEvidence = hasMeasurableGpuEvidence(output, parsedOutput)
+  if (!measurableEvidence) {
+    return {
+      valid: false,
+      reason: 'GPU execution did not produce measurable evidence (expected JSON metrics, numeric measurements, artifact paths, stdout fields, or GPU/runtime facts).',
+    }
+  }
+
+  return { valid: true, reason: 'GPU execution produced measurable evidence' }
+}
+
+function hasMeasurableGpuEvidence(output: string, parsedOutput: any): boolean {
+  const containsMetricValue = (value: unknown): boolean => {
+    if (typeof value === 'number' || typeof value === 'boolean') return true
+    if (Array.isArray(value)) return value.some(containsMetricValue)
+    if (value && typeof value === 'object') return Object.values(value as Record<string, unknown>).some(containsMetricValue)
+    return false
+  }
+
+  if (parsedOutput && typeof parsedOutput === 'object') {
+    const metricKeys = Object.keys(parsedOutput).filter(key =>
+      /metric|score|loss|accuracy|acc|f1|precision|recall|latency|throughput|seconds|runtime|cuda|gpu|memory|vram|artifact|path|file|stdout|stderr|result|measurement/i.test(key)
+    )
+    if (metricKeys.length > 0 && containsMetricValue(parsedOutput)) return true
+  }
+
+  const hasNumber = /[-+]?\d*\.?\d+(?:e[-+]?\d+)?\s*(?:%|ms|s|sec|seconds|MB|MiB|GB|GiB|tokens\/s|it\/s)?/i.test(output)
+  const hasEvidenceKeyword = /\b(metric|score|loss|accuracy|acc|f1|precision|recall|latency|throughput|runtime|seconds|cuda|gpu|vram|memory|artifact|saved|file|path|stdout|stderr|shape|tensor|mean|std|p\d+|epoch|step)\b/i.test(output)
+  const hasArtifactPath = /(?:^|\s)(?:\.\/|\/tmp\/|\/workspace\/|\/opt\/|[A-Za-z0-9_.-]+\.(?:json|csv|pt|pth|safetensors|png|txt|log|npz|npy))(?:\s|$)/i.test(output)
+  return (hasNumber && hasEvidenceKeyword) || hasArtifactPath
 }
 
 function stripCodeFence(text: string): string {
