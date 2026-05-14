@@ -254,6 +254,54 @@ function testFallbackPreparationCommandSanitizesContractReasonMarkers() {
   assert.equal(extracted.ok, true, extracted.reason)
 }
 
+function runPythonCode(code) {
+  const script = path.join(outDir, `fallback-${Date.now()}-${Math.random().toString(16).slice(2)}.py`)
+  fs.writeFileSync(script, code)
+  const output = childProcess.execFileSync('python3', [script], { encoding: 'utf8', timeout: 120000 })
+  return JSON.parse(output)
+}
+
+function testAutonomousPreparationFallbackEmitsStepSpecificResearchPlan() {
+  const fallback = contract.buildAutonomousPreparationCommand({
+    researchGoal: 'Improve diffusion model inference with latent gasket ODE trajectory consensus.',
+    stepDescription: 'Implement projection metrics for comparing latent trajectories between two model streams.',
+    stageName: 'Investigation',
+    reason: 'JSON action must be "run_python"',
+  })
+  const manifest = runPythonCode(fallback.code)
+  assert.equal(manifest.research_goal, 'Improve diffusion model inference with latent gasket ODE trajectory consensus.')
+  assert.equal(manifest.step_description, 'Implement projection metrics for comparing latent trajectories between two model streams.')
+  assert.ok(Array.isArray(manifest.focus_terms), 'focus_terms should be present')
+  assert.ok(manifest.focus_terms.includes('latent'), `expected latent focus term, got ${manifest.focus_terms}`)
+  assert.ok(manifest.focus_terms.includes('trajectory'), `expected trajectory focus term, got ${manifest.focus_terms}`)
+  assert.ok(manifest.recommended_experiment && /projection metrics/i.test(manifest.recommended_experiment.objective))
+  assert.ok(manifest.recommended_experiment.metrics.some(metric => /trajectory/i.test(metric)))
+}
+
+function testPersistedPreparationManifestKeepsResearchSpecificObjective() {
+  const output = JSON.stringify({
+    type: 'autonomous_preparation_manifest',
+    stage: 'Investigation',
+    research_goal: 'Improve diffusion model inference with latent gasket ODE trajectory consensus.',
+    step_description: 'Implement projection metrics for comparing latent trajectories between two model streams.',
+    focus_terms: ['latent', 'gasket', 'trajectory'],
+    recommended_experiment: {
+      objective: 'Run projection metrics for comparing latent trajectories between two model streams.',
+      metrics: ['trajectory_cosine_similarity'],
+    },
+    gpu: { cuda_available: true, gpu_name: 'RTX 3060' },
+    model_ids: ['GSAI-ML/LLaDA-8B-Base'],
+    installed_dependencies: ['torch==2.5.1+cu124', 'requests==2.32.0'],
+    grading_criteria: ['prints trajectory_cosine_similarity and CUDA evidence'],
+  })
+  const extracted = contract.extractPersistablePreparationManifest(output)
+  assert.equal(extracted.ok, true, extracted.reason)
+  assert.match(extracted.manifest.objective, /projection metrics/i)
+  assert.match(extracted.manifest.objective, /latent trajectories/i)
+  assert.deepEqual(extracted.manifest.focusTerms, ['latent', 'gasket', 'trajectory'])
+  assert.equal(extracted.manifest.recommendedExperiment.metrics[0], 'trajectory_cosine_similarity')
+}
+
 function testStrictGpuCommandRejectsExecutableGpuProbeCodeWithUnterminatedPythonString() {
   const badCode = 'import json\nimport torch\nresult = {"cuda_available": torch.cuda.is_available()}\nmanifest = {\n    "smokeTests": [\n        {\n            "name": "latent_space_probing",\n            "command": "python -c \\"import numpy as np; print(\'vector_norm:\', np.linalg.norm(v))\\",\n            "expectedEvidence": "vector_norm: float"\n        }\n    ]\n}\nprint(json.dumps(manifest | result))'
   const extracted = contract.extractStrictGpuCommand(JSON.stringify({
@@ -288,6 +336,8 @@ testJsonMetricsOutputIsValidGpuEvidence()
 testStrictGpuCommandRejectsCpuOnlyMetricsCode()
 testStrictGpuCommandAcceptsExecutableGpuProbeCode()
 testFallbackPreparationCommandSanitizesContractReasonMarkers()
+testAutonomousPreparationFallbackEmitsStepSpecificResearchPlan()
+testPersistedPreparationManifestKeepsResearchSpecificObjective()
 testStrictGpuCommandRejectsExecutableGpuProbeCodeWithUnterminatedPythonString()
 testPreparationStagesShortCircuitWeakModelContractFailures()
 console.log('strict gpu contract tests passed')

@@ -83,12 +83,27 @@ export function extractPersistablePreparationManifest(output: string): Persistab
       const workbenchPath = typeof parsed.workbench === 'string' ? parsed.workbench : ''
       const reuseKey = workbenchPath.split('/').filter(Boolean).pop() || 'autonomous-preparation'
       const gpu = parsed.gpu && typeof parsed.gpu === 'object' ? parsed.gpu : {}
+      const focusTerms = Array.isArray(parsed.focus_terms) ? parsed.focus_terms.map(String).filter(Boolean).slice(0, 12) : []
+      const recommendedExperiment = parsed.recommended_experiment && typeof parsed.recommended_experiment === 'object' ? parsed.recommended_experiment : null
+      const stepDescription = typeof parsed.step_description === 'string' ? parsed.step_description.trim() : ''
+      const researchGoal = typeof parsed.research_goal === 'string' ? parsed.research_goal.trim() : ''
+      const objective = typeof recommendedExperiment?.objective === 'string' && recommendedExperiment.objective.trim()
+        ? recommendedExperiment.objective.trim()
+        : stepDescription
+          ? `Persisted autonomous GPU preparation probe for: ${stepDescription}`
+          : researchGoal
+            ? `Persisted autonomous GPU preparation probe for: ${researchGoal}`
+            : 'Persisted autonomous GPU preparation probe; use this to run concrete Implementation experiments instead of repeating preparation.'
       const manifest = {
         schemaVersion: 'ar3.preparation-probe.v1',
         researchType: 'gpu-autonomous-research',
-        objective: 'Persisted autonomous GPU preparation probe; use this to run concrete Implementation experiments instead of repeating preparation.',
+        objective,
         sourceStage: parsed.stage || 'Investigation',
         contractFailureReason: parsed.contract_failure_reason || null,
+        researchGoal: researchGoal || undefined,
+        stepDescription: stepDescription || undefined,
+        focusTerms,
+        recommendedExperiment: recommendedExperiment || undefined,
         models: modelIds.slice(0, 10).map((id: string) => ({ id, source: 'huggingface', required: true })),
         dependencies: Array.from(depNames).slice(0, 12).map(name => ({ name, importName: name === 'huggingface-hub' ? 'huggingface_hub' : name.replace(/-/g, '_') })),
         resources: [
@@ -533,7 +548,7 @@ def discover_model_ids(text):
             found.append(model_id)
     explicit_patterns = [
         r"(?:model|checkpoint|model_id|repo|repository|huggingface|hf)[:=]\\s*([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)",
-        r"(?:from_pretrained|snapshot_download)\\(\\s*\"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\"",
+        r'(?:from_pretrained|snapshot_download)\\(\\s*"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)"',
     ]
     reject = {"odt/odes", "reasoning/refinement", "inference/time", "latent/space"}
     for pattern in explicit_patterns:
@@ -628,13 +643,59 @@ def pip_freeze_sample():
     except Exception as exc:
         return ["pip freeze failed: " + repr(exc)]
 
+def extract_focus_terms(text):
+    stop = {
+        "about", "after", "against", "between", "compare", "comparing", "complete", "concrete", "create", "design",
+        "develop", "diffusion", "during", "evidence", "experiment", "implement", "improve", "inference", "metrics",
+        "model", "models", "prepare", "research", "stream", "streams", "system", "that", "their", "these", "this",
+        "using", "with", "without", "would",
+    }
+    words = re.findall(r"[A-Za-z][A-Za-z0-9_-]{3,}", text.lower())
+    focus = []
+    for word in words:
+        normalized = word.replace("_", "-")
+        if normalized in stop:
+            continue
+        if normalized not in focus:
+            focus.append(normalized)
+    priority = ["latent", "trajectory", "trajectories", "gasket", "projection", "consensus", "ode", "odt", "denoising", "embedding", "confidence", "reasoning"]
+    focus.sort(key=lambda item: (0 if item in priority else 1, priority.index(item) if item in priority else len(priority), words.index(item) if item in words else 999))
+    return focus[:12]
+
+def build_recommended_experiment(focus_terms):
+    phrase = step_description.strip().rstrip(".") or research_goal.strip().rstrip(".") or "the target research step"
+    metrics = ["cuda_available", "gpu_name", "runtime_seconds"]
+    joined = " ".join(focus_terms).lower()
+    if re.search(r"latent|embedding|projection|trajectory|trajectories|gasket|consensus|ode|odt", joined):
+        metrics.extend(["latent_vector_norm", "trajectory_cosine_similarity", "projection_residual"])
+    if re.search(r"confidence|gating|weight", joined):
+        metrics.extend(["confidence_weight_entropy", "gate_activation_rate"])
+    if re.search(r"reasoning|quality|benchmark", joined):
+        metrics.extend(["baseline_score", "gasket_score", "delta_score"])
+    seen = []
+    for metric in metrics:
+        if metric not in seen:
+            seen.append(metric)
+    return {
+        "objective": "Run a concrete GPU-backed probe for: " + phrase,
+        "implementation_hint": "Generate Python that creates small tensors or hooks cached model artifacts to measure the named metrics; do not repeat generic setup only.",
+        "metrics": seen[:8],
+        "focus_terms": focus_terms,
+    }
+
 model_ids = discover_model_ids(research_goal + "\\n" + step_description)
+focus_terms = extract_focus_terms(research_goal + " " + step_description)
+recommended_experiment = build_recommended_experiment(focus_terms)
 manifest = {
     "type": "autonomous_preparation_manifest",
     "stage": stage_name,
+    "research_goal": research_goal,
+    "step_description": step_description,
     "contract_failure_reason": contract_failure_reason,
     "workbench": str(workbench),
     "model_ids": model_ids,
+    "focus_terms": focus_terms,
+    "recommended_experiment": recommended_experiment,
     "gpu": gpu_snapshot(),
     "huggingface": query_huggingface(model_ids),
     "installed_dependencies": pip_freeze_sample(),
