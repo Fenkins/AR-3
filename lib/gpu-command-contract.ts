@@ -514,7 +514,7 @@ started = time.time()
 metrics = {
     "type": "deterministic_gpu_experiment",
     "stage": stage_name,
-    "contract_failure_reason": contract_failure_reason,
+    "contract_repair_reason": contract_failure_reason,
     "research_goal_chars": len(research_goal),
     "step_description_chars": len(step_description),
     "workbench": str(workbench),
