@@ -6,6 +6,7 @@ import { addToCache } from './model-cache'
 import { assessGpuExecutionEvidence, buildAutonomousPreparationCommand, buildDeterministicGpuExperimentCommand, extractPersistablePreparationManifest, extractStrictGpuCommand, selectGpuSubmissionCommand, shouldShortCircuitPreparationFallback, shouldUseAutonomousPreparationFallback } from './gpu-command-contract'
 import { buildPreparationManifestInstructions, buildPreparationRetryMessage, extractPreparationManifestCandidate, validatePreparationManifest } from './preparation-manifest'
 import fs from 'fs'
+import { getInternalGpuApiBase } from './internal-api-base'
 
 const logFile = '/tmp/ar1_debug.log'
 function debugLog(...args: any[]) {
@@ -555,8 +556,9 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
         try { return JSON.parse(space.setupStep) } catch { return null }
       })()
 
+      const internalGpuApiBase = getInternalGpuApiBase()
       try {
-        const gpuResponse = await fetch(`${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/api/jobs/gpu`, {
+        const gpuResponse = await fetch(`${internalGpuApiBase}/api/jobs/gpu`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -581,7 +583,7 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
           while (waited < maxWait) {
             await new Promise(r => setTimeout(r, pollInterval))
             waited += pollInterval
-            const statusRes = await fetch(`${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/api/jobs/gpu?jobId=${jobId}`)
+            const statusRes = await fetch(`${internalGpuApiBase}/api/jobs/gpu?jobId=${jobId}`)
             if (statusRes.ok) {
               const statusData = await statusRes.json()
               if (statusData.status === 'completed') {
@@ -993,8 +995,9 @@ ${useGpu && shouldUseAutonomousPreparationFallback(stageName) ? `## Preparation 
         response.content = JSON.stringify(strictCommand.command)
 
         // Submit validated LLM output to GPU worker for execution
+        const internalGpuApiBase = getInternalGpuApiBase()
         try {
-          const gpuResponse = await fetch(`${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/api/jobs/gpu`, {
+          const gpuResponse = await fetch(`${internalGpuApiBase}/api/jobs/gpu`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1021,7 +1024,7 @@ ${useGpu && shouldUseAutonomousPreparationFallback(stageName) ? `## Preparation 
             while (waited < maxWait) {
               await new Promise(r => setTimeout(r, pollInterval))
               waited += pollInterval
-              const statusRes = await fetch(`${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/api/jobs/gpu?jobId=${jobId}`)
+              const statusRes = await fetch(`${internalGpuApiBase}/api/jobs/gpu?jobId=${jobId}`)
               if (statusRes.ok) {
                 const statusData = await statusRes.json()
                 if (statusData.status === 'completed') {
