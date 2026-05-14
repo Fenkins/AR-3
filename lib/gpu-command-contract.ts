@@ -155,10 +155,12 @@ export function extractStrictGpuCommand(text: string): StrictGpuResult {
       const codeLines = code.split('\n').map((l: string) => l.trim()).filter(Boolean)
       const hasPython = /(^|\n)\s*(import |from |def |class |for |while |try:|with |print\(|[A-Za-z_][A-Za-z0-9_]*\s*=)/m.test(code)
       const hasMeasurableOutput = /print\(|json\.dump|json\.dumps|logging\./.test(code)
+      const hasGpuProbe = /\b(torch|cuda|cupy|triton|tensorflow|jax|nvidia-smi|nvml|device\s*=|cuda_available|gpu_name|gpu_memory|vram)\b|\.cuda\(|\.to\(\s*['"]cuda|torch\.cuda|subprocess\.[\s\S]*?nvidia-smi/i.test(code)
       const hasPlaceholder = /TODO|pass\s*(#|$)|pseudocode|your code here|placeholder|\.\.\./i.test(code)
       if (codeLines.length < 5) return { ok: false, reason: `code too short (${codeLines.length} non-empty lines)` }
       if (!hasPython) return { ok: false, reason: 'code lacks Python syntax indicators' }
       if (!hasMeasurableOutput) return { ok: false, reason: 'code must print/log measurable outputs' }
+      if (!hasGpuProbe) return { ok: false, reason: 'code must include an executable GPU/CUDA probe or GPU runtime evidence path' }
       if (hasPlaceholder) return { ok: false, reason: 'code contains placeholder/pseudocode markers' }
       return { ok: true, command: { action: 'run_python', dependencies: Array.isArray(parsed.dependencies) ? parsed.dependencies.map(String).slice(0, 20) : [], code } }
     } catch {}

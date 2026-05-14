@@ -50,7 +50,7 @@ GPU OUTPUT CONTRACT (MANDATORY)
 Return ONLY a single JSON object, no markdown, no prose, no <think> tags:
 {"action":"run_python","dependencies":["package-or-pip-spec"],"code":"<complete executable Python>"}
 
-The code must be self-contained for this step, must import its dependencies, must print measurable outputs, and must not contain placeholders or pseudocode. If a model is needed, use the loadable paths from Model Cache context when present; otherwise write a short smoke-test that discovers/validates the missing requirement and fails clearly.
+The code must be self-contained for this step, must import its dependencies, must execute a GPU/CUDA probe or GPU runtime path (for example torch.cuda.is_available(), tensor allocation on cuda when available, nvidia-smi/NVML inspection, or an explicit GPU fallback explanation in printed JSON), must print measurable outputs, and must not contain placeholders or pseudocode. If a model is needed, use the loadable paths from Model Cache context when present; otherwise write a short smoke-test that discovers/validates the missing requirement and fails clearly.
 `
 
 function buildStrictGpuRetryMessage(stepDescription: string, reason: string, previous: string): AIMessage {
