@@ -634,7 +634,10 @@ def prepare_manifest_environment(manifest: dict, context: dict, timeout: int = 9
         if model.get('required') is not True:
             continue
         model_id = str(model.get('id') or 'required-model')
-        smoke_command = model.get('smokeTest') or ''
+        smoke_command = str(model.get('smokeTest') or '').strip()
+        if not smoke_command:
+            output_parts.append(f'model_smoke {model_id} skipped: no smoke test command supplied; model resolution evidence accepted')
+            continue
         argv, err = _safe_smoke_command(smoke_command)
         if err:
             return {'success': False, 'output': '\n'.join(output_parts), 'error': f'Required model smoke test {model_id!r} rejected: {err}'}

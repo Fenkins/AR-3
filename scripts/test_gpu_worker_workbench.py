@@ -105,6 +105,35 @@ def test_safe_smoke_command_uses_current_python_interpreter():
     assert argv[0] == sys.executable
 
 
+def test_required_model_without_smoke_test_does_not_block_research_execution():
+    root = tempfile.mkdtemp(prefix="ar3-worker-empty-model-smoke-test-")
+    old_root = os.environ.get("AR3_WORKBENCH_ROOT")
+    old_resolve = gpu_worker.resolve_manifest_models
+    os.environ["AR3_WORKBENCH_ROOT"] = root
+    try:
+        gpu_worker.resolve_manifest_models = lambda manifest, context, timeout=900: {
+            "success": True,
+            "output": "model_resolve example/tiny-model exit=0\nresolved from cache",
+            "error": None,
+        }
+        context = gpu_worker.prepare_workbench({"jobId": "gpu_space-empty-smoke_1", "spaceId": "space empty smoke"})
+        manifest = {
+            "models": [{"id": "example/tiny-model", "source": "huggingface", "required": True}],
+            "dependencies": [],
+            "smokeTests": [],
+        }
+        result = gpu_worker.prepare_manifest_environment(manifest, context)
+        assert result["success"] is True, result
+        assert "model_smoke example/tiny-model skipped" in result["output"]
+    finally:
+        gpu_worker.resolve_manifest_models = old_resolve
+        if old_root is None:
+            os.environ.pop("AR3_WORKBENCH_ROOT", None)
+        else:
+            os.environ["AR3_WORKBENCH_ROOT"] = old_root
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def test_huggingface_models_are_resolved_into_workbench_before_smoke_tests():
     root = tempfile.mkdtemp(prefix="ar3-worker-model-resolve-test-")
     old_root = os.environ.get("AR3_WORKBENCH_ROOT")
