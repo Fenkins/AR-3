@@ -183,6 +183,49 @@ function jsonObjectCandidates(text: string): string[] {
   return Array.from(new Set(candidates.map(c => c.trim()).filter(Boolean)))
 }
 
+function findLikelyPythonStringSyntaxIssue(code: string): string | null {
+  const lines = code.split('\n')
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    const line = lines[lineIndex]
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+
+    let quote: 'single' | 'double' | null = null
+    let tripleQuote: 'single' | 'double' | null = null
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i]
+      const next3 = line.slice(i, i + 3)
+      const escaped = i > 0 && line[i - 1] === '\\' && (i < 2 || line[i - 2] !== '\\')
+
+      if (tripleQuote) {
+        if ((tripleQuote === 'single' && next3 === "'''") || (tripleQuote === 'double' && next3 === '"""')) {
+          tripleQuote = null
+          i += 2
+        }
+        continue
+      }
+
+      if (!quote && (next3 === "'''" || next3 === '"""')) {
+        tripleQuote = next3 === "'''" ? 'single' : 'double'
+        i += 2
+        continue
+      }
+
+      if (escaped) continue
+      if (ch === "'" && quote !== 'double') {
+        quote = quote === 'single' ? null : 'single'
+      } else if (ch === '"' && quote !== 'single') {
+        quote = quote === 'double' ? null : 'double'
+      }
+    }
+
+    if (quote && !line.trimEnd().endsWith('\\')) {
+      return `unterminated ${quote}-quoted string on line ${lineIndex + 1}`
+    }
+  }
+  return null
+}
+
 export function extractStrictGpuCommand(text: string): StrictGpuResult {
   for (const candidate of jsonObjectCandidates(text)) {
     try {
@@ -197,6 +240,8 @@ export function extractStrictGpuCommand(text: string): StrictGpuResult {
       const hasPlaceholder = /TODO|pass\s*(#|$)|pseudocode|your code here|placeholder|\.\.\./i.test(code)
       if (codeLines.length < 5) return { ok: false, reason: `code too short (${codeLines.length} non-empty lines)` }
       if (!hasPython) return { ok: false, reason: 'code lacks Python syntax indicators' }
+      const syntaxIssue = findLikelyPythonStringSyntaxIssue(code)
+      if (syntaxIssue) return { ok: false, reason: `python syntax appears invalid: ${syntaxIssue}` }
       if (!hasMeasurableOutput) return { ok: false, reason: 'code must print/log measurable outputs' }
       if (!hasGpuProbe) return { ok: false, reason: 'code must include an executable GPU/CUDA probe or GPU runtime evidence path' }
       if (hasPlaceholder) return { ok: false, reason: 'code contains placeholder/pseudocode markers' }
@@ -504,7 +549,7 @@ def pip_freeze_sample():
     except Exception as exc:
         return ["pip freeze failed: " + repr(exc)]
 
-model_ids = discover_model_ids(research_goal + "\n" + step_description)
+model_ids = discover_model_ids(research_goal + "\\n" + step_description)
 manifest = {
     "type": "autonomous_preparation_manifest",
     "stage": stage_name,

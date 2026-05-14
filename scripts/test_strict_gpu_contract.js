@@ -217,6 +217,17 @@ function testStrictGpuCommandAcceptsExecutableGpuProbeCode() {
   assert.equal(extracted.ok, true, extracted.reason)
 }
 
+function testStrictGpuCommandRejectsExecutableGpuProbeCodeWithUnterminatedPythonString() {
+  const badCode = 'import json\nimport torch\nresult = {"cuda_available": torch.cuda.is_available()}\nmanifest = {\n    "smokeTests": [\n        {\n            "name": "latent_space_probing",\n            "command": "python -c \\"import numpy as np; print(\'vector_norm:\', np.linalg.norm(v))\\",\n            "expectedEvidence": "vector_norm: float"\n        }\n    ]\n}\nprint(json.dumps(manifest | result))'
+  const extracted = contract.extractStrictGpuCommand(JSON.stringify({
+    action: 'run_python',
+    dependencies: ['torch'],
+    code: badCode,
+  }))
+  assert.equal(extracted.ok, false)
+  assert.match(extracted.reason, /python syntax/i)
+}
+
 function testPreparationStagesShortCircuitWeakModelContractFailures() {
   assert.equal(contract.shouldShortCircuitPreparationFallback('Investigation', 'response did not parse as the required JSON object'), true)
   assert.equal(contract.shouldShortCircuitPreparationFallback('Planning', 'JSON action must be "run_python"'), true)
@@ -238,5 +249,6 @@ testLongProseOutputIsNotValidGpuEvidence()
 testJsonMetricsOutputIsValidGpuEvidence()
 testStrictGpuCommandRejectsCpuOnlyMetricsCode()
 testStrictGpuCommandAcceptsExecutableGpuProbeCode()
+testStrictGpuCommandRejectsExecutableGpuProbeCodeWithUnterminatedPythonString()
 testPreparationStagesShortCircuitWeakModelContractFailures()
 console.log('strict gpu contract tests passed')
