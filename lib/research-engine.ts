@@ -928,6 +928,21 @@ ${useGpu && shouldUseAutonomousPreparationFallback(stageName) ? `## Preparation 
           }
         }
 
+        if (strictCommand.ok && shouldUseAutonomousPreparationFallback(stageName)) {
+          const selectedSubmission = selectGpuSubmissionCommand({
+            llmResponse: response.content,
+            stageName,
+            researchGoal: space.initialPrompt,
+            stepDescription: step.description,
+          })
+          if (selectedSubmission.ok && selectedSubmission.fallbackUsed) {
+            debugLog(`[executeVariant] Preparation-stage GPU command was a weak wrapper; submitting autonomous preparation fallback: ${selectedSubmission.reason}`)
+            gpuSubmissionUsedFallback = true
+            strictCommand = { ok: true, command: selectedSubmission.command }
+            variant.failureMode = 'GPU_CONTRACT_FALLBACK_PREPARATION'
+          }
+        }
+
         if (!strictCommand.ok) {
           const strictReason = (strictCommand as { ok: false; reason: string }).reason
           if (!shouldUseAutonomousPreparationFallback(stageName)) {
