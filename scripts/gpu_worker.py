@@ -464,6 +464,18 @@ def _safe_smoke_command(command: str):
     command = str(command or '').strip()
     if not command:
         return None, 'empty smoke test command'
+
+    heredoc_match = re_module.match(
+        r"^(python(?:3)?|/[^\s]+/python(?:3)?)\s+-\s+<<['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?\s*\n(.*?)\n\2\s*$",
+        command,
+        flags=re_module.DOTALL,
+    )
+    if heredoc_match:
+        code = heredoc_match.group(3).strip('\n')
+        if not code.strip():
+            return None, 'empty python heredoc smoke test command'
+        return [sys.executable or heredoc_match.group(1), '-c', code], None
+
     try:
         argv = shlex.split(command)
     except Exception as exc:

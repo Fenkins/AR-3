@@ -105,6 +105,16 @@ def test_safe_smoke_command_uses_current_python_interpreter():
     assert argv[0] == sys.executable
 
 
+def test_safe_smoke_command_converts_python_heredoc_to_inline_code():
+    command = """python - <<PY
+import json
+print(json.dumps({"ok": True}))
+PY"""
+    argv, err = gpu_worker._safe_smoke_command(command)
+    assert err is None
+    assert argv == [sys.executable, "-c", 'import json\nprint(json.dumps({"ok": True}))']
+
+
 def test_required_model_without_smoke_test_does_not_block_research_execution():
     root = tempfile.mkdtemp(prefix="ar3-worker-empty-model-smoke-test-")
     old_root = os.environ.get("AR3_WORKBENCH_ROOT")
