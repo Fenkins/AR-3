@@ -231,16 +231,60 @@ const repeatedJsonCommandWithModels = (id, modelContext = {}) => ({
   const first = variantCodeSignature(repeatedJsonCommandWithModels('a', {
     preparation_manifest: {
       models: [{ id: 'GSAI-ML/LLaDA-8B-Base', source: 'huggingface' }],
+      dependencies: [{ name: 'torch', versionSpec: '==2.4.0', importName: 'torch' }],
       workbench: { reuseKey: 'llada-base' },
     },
   }))
   const second = variantCodeSignature(repeatedJsonCommandWithModels('b', {
     preparation_manifest: {
       models: [{ id: 'Dream-org/Dream-v0-Base', source: 'huggingface' }],
+      dependencies: [{ name: 'torch', versionSpec: '==2.4.0', importName: 'torch' }],
       workbench: { reuseKey: 'dream-base' },
     },
   }))
   assert.notEqual(first, second, 'changed nested manifest model/workbench context should reset repeated executable signatures')
+}
+
+{
+  const first = variantCodeSignature(repeatedJsonCommandWithModels('a', {
+    dependencies: [],
+    preparation_manifest: {
+      dependencies: [
+        { name: 'torch', versionSpec: '==2.4.0', importName: 'torch' },
+        { package: 'transformers', version: '>=4.45.0', import: 'transformers' },
+      ],
+      workbench: { reuseKey: 'shared-workbench' },
+    },
+  }))
+  const second = variantCodeSignature(repeatedJsonCommandWithModels('b', {
+    dependencies: [],
+    preparation_manifest: {
+      dependencies: [
+        { package: 'transformers', version: '>=4.45.0', import: 'transformers' },
+        { name: 'torch', versionSpec: '==2.4.0', importName: 'torch' },
+      ],
+      workbench: { reuseKey: 'shared-workbench' },
+    },
+  }))
+  assert.equal(first, second, 'structured manifest dependency order should not create a new executable signature')
+}
+
+{
+  const first = variantCodeSignature(repeatedJsonCommandWithModels('a', {
+    dependencies: [],
+    preparation_manifest: {
+      dependencies: [{ name: 'torch', versionSpec: '==2.4.0', importName: 'torch' }],
+      workbench: { reuseKey: 'shared-workbench' },
+    },
+  }))
+  const second = variantCodeSignature(repeatedJsonCommandWithModels('b', {
+    dependencies: [],
+    preparation_manifest: {
+      dependencies: [{ name: 'torch', versionSpec: '==2.5.0', importName: 'torch' }],
+      workbench: { reuseKey: 'shared-workbench' },
+    },
+  }))
+  assert.notEqual(first, second, 'changed structured manifest dependency specs should reset repeated executable signatures')
 }
 
 {

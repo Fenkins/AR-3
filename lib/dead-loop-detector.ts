@@ -245,13 +245,42 @@ function normalizeCodeText(value: string): string {
 }
 
 function normalizeDependencies(value: unknown): string {
-  if (!Array.isArray(value)) return ''
-  const dependencies = value
-    .filter((dependency): dependency is string => typeof dependency === 'string')
-    .map(dependency => dependency.trim().toLowerCase())
+  const dependencies = collectDependencyContext(value)
     .filter(Boolean)
     .sort()
   return dependencies.length ? JSON.stringify(dependencies) : ''
+}
+
+function collectDependencyContext(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const dependencies: string[] = []
+  for (const dependency of value) {
+    if (typeof dependency === 'string') {
+      dependencies.push(dependency)
+      continue
+    }
+    if (!dependency || typeof dependency !== 'object') continue
+    const row = dependency as Record<string, any>
+    const name = firstString(row.name, row.package, row.pip, row.pipPackage)
+    if (!name) continue
+    const versionSpec = firstString(row.versionSpec, row.version, row.constraint)
+    const importName = firstString(row.importName, row.import)
+    dependencies.push([
+      name,
+      versionSpec ? `version=${versionSpec}` : '',
+      importName ? `import=${importName}` : '',
+    ].filter(Boolean).join('|'))
+  }
+  return dependencies
+    .map(dependency => dependency.trim().toLowerCase())
+    .filter(Boolean)
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return null
 }
 
 function normalizeStringList(values: unknown[]): string {
@@ -301,7 +330,10 @@ function normalizeWorkbenchContext(value: unknown): string {
 
 function normalizeCommandContext(parsed: Record<string, any>): string {
   const nestedManifest = parsed.preparation_manifest || parsed.preparationManifest || parsed.manifest
-  const normalizedDependencies = normalizeDependencies(parsed.dependencies)
+  const normalizedDependencies = normalizeStringList([
+    ...collectDependencyContext(parsed.dependencies),
+    ...collectDependencyContext(nestedManifest?.dependencies),
+  ])
   const normalizedModels = normalizeStringList([
     ...collectModelContext(parsed),
     ...collectModelContext(nestedManifest),
