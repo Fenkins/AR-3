@@ -288,6 +288,60 @@ const repeatedJsonCommandWithModels = (id, modelContext = {}) => ({
 }
 
 {
+  const first = variantCodeSignature(repeatedJsonCommandWithModels('a', {
+    preparation_manifest: {
+      smokeTests: [
+        { name: 'model-smoke', command: 'python smoke_model.py', expectedEvidence: ['model_or_error', 'cuda_available'] },
+        { name: 'metrics-smoke', command: 'python collect_metrics.py', expectedEvidence: ['metrics_json'] },
+      ],
+      workbench: { reuseKey: 'shared-workbench', expectedArtifacts: ['metrics.json', 'stdout.log'] },
+    },
+  }))
+  const second = variantCodeSignature(repeatedJsonCommandWithModels('b', {
+    preparation_manifest: {
+      smokeTests: [
+        { name: 'metrics-smoke', command: 'python collect_metrics.py', expectedEvidence: ['metrics_json'] },
+        { name: 'model-smoke', command: 'python smoke_model.py', expectedEvidence: ['cuda_available', 'model_or_error'] },
+      ],
+      workbench: { reuseKey: 'shared-workbench', expectedArtifacts: ['stdout.log', 'metrics.json'] },
+    },
+  }))
+  assert.equal(first, second, 'smoke test and artifact order should not create a new executable signature')
+}
+
+{
+  const first = variantCodeSignature(repeatedJsonCommandWithModels('a', {
+    preparation_manifest: {
+      smokeTests: [{ name: 'model-smoke', command: 'python smoke_model.py', expectedEvidence: ['cuda_available'] }],
+      workbench: { reuseKey: 'shared-workbench', expectedArtifacts: ['metrics.json'] },
+    },
+  }))
+  const second = variantCodeSignature(repeatedJsonCommandWithModels('b', {
+    preparation_manifest: {
+      smokeTests: [{ name: 'model-smoke', command: 'python smoke_model_v2.py', expectedEvidence: ['cuda_available'] }],
+      workbench: { reuseKey: 'shared-workbench', expectedArtifacts: ['metrics.json'] },
+    },
+  }))
+  assert.notEqual(first, second, 'changed smoke-test command should reset repeated executable signatures')
+}
+
+{
+  const first = variantCodeSignature(repeatedJsonCommandWithModels('a', {
+    preparation_manifest: {
+      smokeTests: [{ name: 'model-smoke', command: 'python smoke_model.py', expectedEvidence: ['cuda_available'] }],
+      workbench: { reuseKey: 'shared-workbench', expectedArtifacts: ['metrics.json'] },
+    },
+  }))
+  const second = variantCodeSignature(repeatedJsonCommandWithModels('b', {
+    preparation_manifest: {
+      smokeTests: [{ name: 'model-smoke', command: 'python smoke_model.py', expectedEvidence: ['cuda_available'] }],
+      workbench: { reuseKey: 'shared-workbench', expectedArtifacts: ['metrics.json', 'model_status.json'] },
+    },
+  }))
+  assert.notEqual(first, second, 'changed expected artifacts should reset repeated executable signatures')
+}
+
+{
   const assessment = assessDeadLoop([
     repeatedJsonCommandFailure('a', ['torch==2.4.0']),
     repeatedJsonCommandFailure('b', ['torch==2.5.0']),

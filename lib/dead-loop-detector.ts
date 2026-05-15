@@ -292,6 +292,22 @@ function normalizeStringList(values: unknown[]): string {
   return normalized.length ? JSON.stringify(normalized) : ''
 }
 
+function collectArtifactContext(value: unknown): string[] {
+  if (!value || typeof value !== 'object') return []
+  const source = value as Record<string, any>
+  const values: string[] = []
+  for (const key of ['artifact', 'artifact_path', 'artifactPath', 'output_path', 'outputPath']) {
+    if (typeof source[key] === 'string') values.push(source[key])
+  }
+  for (const key of ['artifacts', 'artifact_paths', 'artifactPaths', 'expectedArtifacts']) {
+    if (Array.isArray(source[key])) values.push(...source[key].filter((item: unknown): item is string => typeof item === 'string'))
+  }
+  if (source.workbench && typeof source.workbench === 'object') {
+    values.push(...collectArtifactContext(source.workbench))
+  }
+  return values
+}
+
 function collectModelContext(value: unknown): string[] {
   if (!value || typeof value !== 'object') return []
   const source = value as Record<string, any>
@@ -317,6 +333,32 @@ function collectModelContext(value: unknown): string[] {
   return values
 }
 
+function collectSmokeTestContext(value: unknown): string[] {
+  if (!value || typeof value !== 'object') return []
+  const source = value as Record<string, any>
+  if (!Array.isArray(source.smokeTests)) return []
+
+  const values: string[] = []
+  for (const test of source.smokeTests) {
+    if (typeof test === 'string') {
+      values.push(test)
+      continue
+    }
+    if (!test || typeof test !== 'object') continue
+    const row = test as Record<string, any>
+    const command = firstString(row.command, row.test)
+    const evidence = Array.isArray(row.expectedEvidence)
+      ? normalizeStringList(row.expectedEvidence)
+      : firstString(row.expectedEvidence)
+    values.push([
+      firstString(row.name),
+      command ? `command=${command}` : '',
+      evidence ? `evidence=${evidence}` : '',
+    ].filter(Boolean).join('|'))
+  }
+  return values
+}
+
 function normalizeWorkbenchContext(value: unknown): string {
   if (!value || typeof value !== 'object') return ''
   const source = value as Record<string, any>
@@ -338,10 +380,20 @@ function normalizeCommandContext(parsed: Record<string, any>): string {
     ...collectModelContext(parsed),
     ...collectModelContext(nestedManifest),
   ])
+  const normalizedSmokeTests = normalizeStringList([
+    ...collectSmokeTestContext(parsed),
+    ...collectSmokeTestContext(nestedManifest),
+  ])
+  const normalizedArtifacts = normalizeStringList([
+    ...collectArtifactContext(parsed),
+    ...collectArtifactContext(nestedManifest),
+  ])
   const workbenchContext = normalizeWorkbenchContext(nestedManifest) || normalizeWorkbenchContext(parsed)
   return [
     normalizedDependencies ? `dependencies=${normalizedDependencies}` : '',
     normalizedModels ? `models=${normalizedModels}` : '',
+    normalizedSmokeTests ? `smoke_tests=${normalizedSmokeTests}` : '',
+    normalizedArtifacts ? `artifacts=${normalizedArtifacts}` : '',
     workbenchContext ? `workbench=${workbenchContext}` : '',
   ].filter(Boolean).join('\n')
 }
