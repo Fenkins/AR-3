@@ -53,30 +53,57 @@ function normalizeProgressText(value: string): string {
 function metricObjectCandidates(text: string): Record<string, unknown>[] {
   const candidates: Record<string, unknown>[] = []
   for (const candidate of jsonObjectCandidates(text)) {
-    try {
-      const parsed = JSON.parse(candidate)
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        candidates.push(parsed)
-        const metrics = (parsed as Record<string, unknown>).metrics
-        if (metrics && typeof metrics === 'object' && !Array.isArray(metrics)) {
-          candidates.push(metrics as Record<string, unknown>)
-        }
-      }
-    } catch {}
+    addMetricObjectCandidate(candidates, candidate)
   }
 
   const inlineMetrics = text.match(/metrics\s*=\s*(\{[^\n\r]+\})/gi) || []
   for (const match of inlineMetrics) {
     const objectText = match.replace(/^metrics\s*=\s*/i, '')
-    try {
-      const parsed = JSON.parse(objectText)
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        candidates.push(parsed)
-      }
-    } catch {}
+    addMetricObjectCandidate(candidates, objectText)
   }
 
   return candidates
+}
+
+function addMetricObjectCandidate(candidates: Record<string, unknown>[], objectText: string): void {
+  const parsed = parseMetricObjectCandidate(objectText)
+  if (!parsed) return
+  candidates.push(parsed)
+  const metrics = parsed.metrics
+  if (metrics && typeof metrics === 'object' && !Array.isArray(metrics)) {
+    candidates.push(metrics as Record<string, unknown>)
+  }
+}
+
+function parseMetricObjectCandidate(objectText: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(objectText)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null
+  } catch {}
+
+  const jsonLike = pythonLiteralObjectToJson(objectText)
+  if (!jsonLike) return null
+  try {
+    const parsed = JSON.parse(jsonLike)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null
+  } catch {
+    return null
+  }
+}
+
+function pythonLiteralObjectToJson(objectText: string): string | null {
+  const source = String(objectText || '').trim()
+  if (!source.startsWith('{') || !source.endsWith('}')) return null
+  if (/[^\s\w{}\[\],.:+\/\'"-]/.test(source)) return null
+  return source
+    .replace(/'([^'\\]*(?:\\.[^'\\]*)*)'/g, (_, value) => JSON.stringify(value.replace(/\\'/g, "'")))
+    .replace(/\bTrue\b/g, 'true')
+    .replace(/\bFalse\b/g, 'false')
+    .replace(/\bNone\b/g, 'null')
 }
 
 function normalizeMetricValue(value: unknown): string | null {

@@ -83,6 +83,22 @@ const repeatedLooseMetricCompletion = (id, accuracy = 0.42, grade = 0) => ({
   }],
 })
 
+const repeatedPythonDictMetricCompletion = (id, accuracy = 0.42, grade = 0) => ({
+  id,
+  stageId: 'stage_3',
+  name: `Implementation ${id}`,
+  status: 'COMPLETED',
+  grade,
+  feedback: 'No measurable improvement over baseline.',
+  steps: [{
+    status: 'COMPLETED',
+    result: [
+      `started_at=2026-05-15T16:37:0${id}Z artifact=/tmp/ar3-workbenches/${id}/metrics.json`,
+      `metrics={'accuracy': ${accuracy}, 'cuda_available': True, 'elapsed_ms': ${1000 + id.charCodeAt(0)}, 'artifact_path': '/tmp/ar3-workbenches/${id}/metrics.json'}`,
+    ].join('\n'),
+  }],
+})
+
 const repeatedCodeFailure = (id, error) => ({
   id,
   stageId: 'stage_3',
@@ -342,6 +358,32 @@ const repeatedJsonCommandWithModels = (id, modelContext = {}) => ({
     repeatedLooseMetricCompletion('a', 0.42),
     repeatedLooseMetricCompletion('b', 0.43),
     repeatedLooseMetricCompletion('c', 0.44),
+  ], 'stage_3')
+  assert.equal(assessment.stuck, false)
+}
+
+{
+  const first = variantProgressSignature(repeatedPythonDictMetricCompletion('a'))
+  const second = variantProgressSignature(repeatedPythonDictMetricCompletion('b'))
+  assert.equal(first, second, 'Python-style metric dicts should create the same progress signature despite noisy runtime fields')
+}
+
+{
+  const assessment = assessDeadLoop([
+    repeatedPythonDictMetricCompletion('a'),
+    repeatedPythonDictMetricCompletion('b'),
+    repeatedPythonDictMetricCompletion('c'),
+  ], 'stage_3')
+  assert.equal(assessment.stuck, true)
+  assert.equal(assessment.repeatedCount, 3)
+  assert.match(assessment.reason, /no grade improvement/)
+}
+
+{
+  const assessment = assessDeadLoop([
+    repeatedPythonDictMetricCompletion('a', 0.42),
+    repeatedPythonDictMetricCompletion('b', 0.43),
+    repeatedPythonDictMetricCompletion('c', 0.44),
   ], 'stage_3')
   assert.equal(assessment.stuck, false)
 }
