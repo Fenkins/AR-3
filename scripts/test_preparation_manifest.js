@@ -134,6 +134,44 @@ function validManifest(overrides = {}) {
 
 {
   const result = validatePreparationManifest(validManifest({
+    smokeTests: [{
+      name: 'prose-placeholder',
+      command: 'please run python somehow and inspect the output',
+      expectedEvidence: ['cuda_available'],
+      timeoutSeconds: 300,
+    }],
+  }))
+  assert.equal(result.ok, false)
+  assert(result.errors.some((e) => e.includes('smokeTests[0].command')), result.errors.join('\n'))
+}
+
+{
+  const result = validatePreparationManifest(validManifest({
+    smokeTests: [{
+      name: 'destructive-shell',
+      command: 'bash -lc "rm -rf /tmp/ar3-workbench && python smoke_test.py"',
+      expectedEvidence: ['cuda_available'],
+      timeoutSeconds: 300,
+    }],
+  }))
+  assert.equal(result.ok, false)
+  assert(result.errors.some((e) => e.includes('destructive')), result.errors.join('\n'))
+}
+
+{
+  const result = validatePreparationManifest(validManifest({
+    smokeTests: [{
+      name: 'env-wrapped-python',
+      command: 'env CUDA_VISIBLE_DEVICES=0 python -c "import json; print(json.dumps({\\\"cuda_available\\\": False}))"',
+      expectedEvidence: ['cuda_available'],
+      timeoutSeconds: 300,
+    }],
+  }))
+  assert.equal(result.ok, true, result.errors.join('\n'))
+}
+
+{
+  const result = validatePreparationManifest(validManifest({
     gradingCriteria: [
       'stdout contains JSON metrics with cuda_available and tensor_sum',
       'model_metadata includes HuggingFace status_code or a precise failure error',

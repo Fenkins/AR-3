@@ -64,6 +64,9 @@ const VAGUE_GRADING_CRITERIA = new Set([
   'useful',
   'interesting',
 ])
+const SMOKE_TEST_EXECUTABLES = new Set(['python', 'python3', 'pytest', 'node', 'npm', 'npx', 'bash', 'sh', 'nvidia-smi'])
+const PROSE_COMMAND_MARKERS = /\b(?:please|should|could|would|try to|somehow|maybe|probably|manually|then inspect|as needed)\b/i
+const DESTRUCTIVE_COMMAND_MARKERS = /\b(?:rm\s+-rf|mkfs|shutdown|reboot|poweroff|halt|dd\s+if=|:>\s*\/)\b/i
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -94,6 +97,26 @@ function validGradingCriterion(value: string): boolean {
   if (VAGUE_GRADING_CRITERIA.has(normalized)) return false
 
   return /\b(json|metric|metrics|score|loss|accuracy|acc|f1|precision|recall|latency|throughput|runtime|seconds|cuda|gpu|vram|memory|artifact|artifacts|stdout|stderr|file|path|model|dependency|dependencies|smoke|failure|error|exception|evidence|measurement|tensor|shape|count|version)\b|[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*/i.test(value)
+}
+
+function commandStartsWithExecutable(command: string): boolean {
+  const trimmed = command.trim()
+  if (!trimmed) return false
+
+  const firstToken = trimmed.match(/^([A-Za-z0-9_.-]+)/)?.[1]
+  if (firstToken && SMOKE_TEST_EXECUTABLES.has(firstToken)) return true
+
+  // Permit common environment wrappers only when the wrapped command is also explicit.
+  const wrapped = trimmed.match(/^(?:env\s+(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+)*|timeout\s+\d+[smh]?\s+)([A-Za-z0-9_.-]+)/)
+  return Boolean(wrapped?.[1] && SMOKE_TEST_EXECUTABLES.has(wrapped[1]))
+}
+
+function validSmokeTestCommand(command: string): boolean {
+  const trimmed = command.trim()
+  if (trimmed.length < 4) return false
+  if (PROSE_COMMAND_MARKERS.test(trimmed)) return false
+  if (DESTRUCTIVE_COMMAND_MARKERS.test(trimmed)) return false
+  return commandStartsWithExecutable(trimmed)
 }
 
 function pushStringError(errors: string[], path: string, value: unknown) {
@@ -242,8 +265,8 @@ export function validatePreparationManifest(value: unknown): PreparationManifest
       return
     }
     pushStringError(errors, `smokeTests[${i}].name`, test.name)
-    if (!nonEmptyString(test.command) || !/(python|pytest|node|bash|sh|nvidia-smi)/.test(test.command)) {
-      errors.push(`smokeTests[${i}].command must be an executable command`)
+    if (!nonEmptyString(test.command) || !validSmokeTestCommand(test.command)) {
+      errors.push(`smokeTests[${i}].command must start with an allowed executable command, not prose or destructive shell text`)
     }
     if (!Array.isArray(test.expectedEvidence) || test.expectedEvidence.length === 0 || !test.expectedEvidence.every(nonEmptyString)) {
       errors.push(`smokeTests[${i}].expectedEvidence must list concrete evidence fields`)
