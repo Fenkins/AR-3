@@ -356,6 +356,55 @@ function testManifestCriteriaAcceptHyphenatedMetricAgainstUnderscoreField() {
   assert.equal(assessed.valid, true, assessed.reason)
 }
 
+function testManifestSmokeExpectedEvidenceRejectsMissingField() {
+  const assessed = contract.assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    fallbackUsed: false,
+    success: true,
+    preparationManifest: {
+      smokeTests: [{
+        name: 'latency probe',
+        command: 'python run.py',
+        expectedEvidence: ['cuda_available', 'latency_ms', 'trajectory-cosine-similarity'],
+      }],
+    },
+    output: JSON.stringify({
+      cuda_available: true,
+      gpu_name: 'RTX 3060',
+      latency_ms: 12.4,
+      runtime_seconds: 2.4,
+    }),
+  })
+  assert.equal(assessed.valid, false)
+  assert.match(assessed.reason, /smoke-test expected evidence/)
+  assert.match(assessed.reason, /trajectory-cosine-similarity/)
+}
+
+function testManifestSmokeExpectedEvidenceAcceptsNestedField() {
+  const assessed = contract.assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    fallbackUsed: false,
+    success: true,
+    preparationManifest: {
+      smokeTests: [{
+        name: 'latency probe',
+        command: 'python run.py',
+        expectedEvidence: ['cuda_available', 'latency_ms', 'trajectory-cosine-similarity'],
+      }],
+    },
+    output: JSON.stringify({
+      cuda_available: true,
+      gpu_name: 'RTX 3060',
+      measurements: {
+        latency_ms: 12.4,
+        trajectory_cosine_similarity: 0.993,
+      },
+      runtime_seconds: 2.4,
+    }),
+  })
+  assert.equal(assessed.valid, true, assessed.reason)
+}
+
 function testCpuOnlyJsonMetricsAreNotValidGpuEvidence() {
   const assessed = contract.assessGpuExecutionEvidence({
     stageName: 'Implementation',

@@ -1,3 +1,5 @@
+Total output lines: 1212
+
 export type StrictGpuCommand = { action: 'run_python'; dependencies: string[]; code: string }
 
 export function shouldUseAutonomousPreparationFallback(stageName: string): boolean {
@@ -246,6 +248,25 @@ function manifestGradingCriteria(preparationManifest: unknown): string[] {
   return Array.isArray(criteria) ? criteria.map(String).filter(Boolean).slice(0, 20) : []
 }
 
+function manifestExpectedEvidence(preparationManifest: unknown): string[] {
+  if (!preparationManifest || typeof preparationManifest !== 'object' || Array.isArray(preparationManifest)) return []
+  const smokeTests = (preparationManifest as Record<string, unknown>).smokeTests
+  if (!Array.isArray(smokeTests)) return []
+
+  const expected = new Set<string>()
+  for (const smokeTest of smokeTests.slice(0, 20)) {
+    if (!smokeTest || typeof smokeTest !== 'object' || Array.isArray(smokeTest)) continue
+    const row = smokeTest as Record<string, unknown>
+    const evidence = row.expectedEvidence
+    if (!Array.isArray(evidence)) continue
+    for (const item of evidence.slice(0, 20)) {
+      const normalized = String(item || '').trim()
+      if (normalized) expected.add(normalized)
+    }
+  }
+  return Array.from(expected).slice(0, 30)
+}
+
 function validateGradingCriteriaEvidence(parsedOutput: any, preparationManifest?: unknown): GpuEvidenceResult {
   if (!parsedOutput || typeof parsedOutput !== 'object') return { valid: true, reason: 'no structured grading criteria to validate' }
   const deterministicCriteria = Array.isArray(parsedOutput.grading_criteria_checked)
@@ -406,6 +427,20 @@ function validateGradingCriteriaEvidence(parsedOutput: any, preparationManifest?
       )
   }
 
+  const expectedEvidence = manifestExpectedEvidence(preparationManifest)
+  const missingExpectedEvidence = expectedEvidence.filter(expected => {
+    const explicitTerms = explicitEvidenceTerms(expected)
+    const terms = explicitTerms.length > 0 ? explicitTerms : [expected.toLowerCase().replace(/-/g, '_')]
+    return terms.some(term => !outputHasConcreteTerm(term))
+  })
+
+  if (missingExpectedEvidence.length > 0) {
+    return {
+      valid: false,
+      reason: `GPU execution did not satisfy preparation manifest smoke-test expected evidence with concrete output fields: ${missingExpectedEvidence.slice(0, 3).join('; ')}`,
+    }
+  }
+
   if (deterministicCriteria.length === 0) {
     const missingManifestCriteria = criteria.filter((criterion: string) => {
       const explicitTerms = explicitEvidenceTerms(criterion)
@@ -456,315 +491,7 @@ function validateGradingCriteriaEvidence(parsedOutput: any, preparationManifest?
 }
 
 function hasRuntimeGpuEvidence(output: string, parsedOutput: any): boolean {
-  const availabilityKeys = new Set(['cuda_available', 'torch_cuda_available'])
-  const namedGpuKeys = new Set(['gpu_name', 'device_name', 'nvidia_driver', 'nvidia_smi'])
-  const numericGpuKeys = new Set(['gpu_count', 'gpu_memory', 'gpu_memory_total', 'vram', 'gpu_memory_gb'])
-
-  const hasConcreteTextEvidence = (value: unknown): boolean => {
-    if (typeof value !== 'string') return false
-    const normalized = value.trim().toLowerCase()
-    return Boolean(normalized && !['false', 'none', 'null', 'unknown', 'cpu', '0'].includes(normalized))
-  }
-
-  const hasPositiveNumericEvidence = (value: unknown): boolean => {
-    if (typeof value === 'number') return Number.isFinite(value) && value > 0
-    if (typeof value === 'string' && /^\d+(?:\.\d+)?$/.test(value.trim())) return Number(value) > 0
-    return false
-  }
-
-  const objectHasRuntimeEvidence = (value: unknown): boolean => {
-    if (!value || typeof value !== 'object') return false
-    if (Array.isArray(value)) return value.some(objectHasRuntimeEvidence)
-
-    for (const [rawKey, rawValue] of Object.entries(value as Record<string, unknown>)) {
-      const key = rawKey.toLowerCase()
-      if (availabilityKeys.has(key) && (rawValue === true || String(rawValue).toLowerCase() === 'true')) return true
-      if (numericGpuKeys.has(key) && hasPositiveNumericEvidence(rawValue)) return true
-      if (namedGpuKeys.has(key) && hasConcreteTextEvidence(rawValue)) return true
-      if (['device', 'runtime', 'backend', 'tensor_device'].includes(key) && String(rawValue).toLowerCase().startsWith('cuda')) return true
-      if (objectHasRuntimeEvidence(rawValue)) return true
-    }
-    return false
-  }
-
-  if (objectHasRuntimeEvidence(parsedOutput)) return true
-
-  return [
-    /\bcuda_available["']?\s*[:=]\s*(?:true|1)\b/i,
-    /\bcuda[_ -]?device\b/i,
-    /\bgpu[_ -]?(name|count|memory|util|device)\b/i,
-    /\bvram\b/i,
-    /\bnvidia(?:-smi)?\b/i,
-    /\brtx\s*\d+\b/i,
-    /\btesla\b/i,
-    /\ba\d{2,3}\b/i,
-  ].some(pattern => pattern.test(output))
-}
-
-function hasMeasurableGpuEvidence(output: string, parsedOutput: any): boolean {
-  const containsMetricValue = (value: unknown): boolean => {
-    if (typeof value === 'number' || typeof value === 'boolean') return true
-    if (Array.isArray(value)) return value.some(containsMetricValue)
-    if (value && typeof value === 'object') return Object.values(value as Record<string, unknown>).some(containsMetricValue)
-    return false
-  }
-
-  if (parsedOutput && typeof parsedOutput === 'object') {
-    const metricKeys = Object.keys(parsedOutput).filter(key =>
-      /metric|score|loss|accuracy|acc|f1|precision|recall|latency|throughput|seconds|runtime|cuda|gpu|memory|vram|artifact|path|file|stdout|stderr|result|measurement/i.test(key)
-    )
-    if (metricKeys.length > 0 && containsMetricValue(parsedOutput)) return true
-  }
-
-  const hasNumber = /[-+]?\d*\.?\d+(?:e[-+]?\d+)?\s*(?:%|ms|s|sec|seconds|MB|MiB|GB|GiB|tokens\/s|it\/s)?/i.test(output)
-  const hasEvidenceKeyword = /\b(metric|score|loss|accuracy|acc|f1|precision|recall|latency|throughput|runtime|seconds|cuda|gpu|vram|memory|artifact|saved|file|path|stdout|stderr|shape|tensor|mean|std|p\d+|epoch|step)\b/i.test(output)
-  const hasArtifactPath = /(?:^|\s)(?:\.\/|\/tmp\/|\/workspace\/|\/opt\/|[A-Za-z0-9_.-]+\.(?:json|csv|pt|pth|safetensors|png|txt|log|npz|npy))(?:\s|$)/i.test(output)
-  return (hasNumber && hasEvidenceKeyword) || hasArtifactPath
-}
-
-function stripCodeFence(text: string): string {
-  return text.trim().replace(/^```(?:json|python)?\s*/i, '').replace(/```$/i, '').trim()
-}
-
-function withoutClosedThinking(text: string): string {
-  return text.replace(/<thought>[\s\S]*?<\/thought>/gi, '').replace(/<think>[\s\S]*?<\/think>/gi, '')
-}
-
-function jsonObjectCandidates(text: string): string[] {
-  const candidates: string[] = []
-  const cleaned = stripCodeFence(withoutClosedThinking(text))
-  if (cleaned) candidates.push(cleaned)
-
-  const jsonBlock = text.match(/```json\s*([\s\S]*?)```/i)
-  if (jsonBlock?.[1]) candidates.push(jsonBlock[1].trim())
-
-  // Quote-aware brace matching recovers JSON emitted after prose or an unclosed
-  // <think> block. Weak models often prepend reasoning despite instructions.
-  const source = cleaned || text
-  for (let start = source.indexOf('{'); start !== -1; start = source.indexOf('{', start + 1)) {
-    let depth = 0
-    let inString = false
-    let escaped = false
-    for (let i = start; i < source.length; i++) {
-      const ch = source[i]
-      if (inString) {
-        if (escaped) {
-          escaped = false
-        } else if (ch === '\\') {
-          escaped = true
-        } else if (ch === '"') {
-          inString = false
-        }
-        continue
-      }
-      if (ch === '"') {
-        inString = true
-      } else if (ch === '{') {
-        depth++
-      } else if (ch === '}') {
-        depth--
-        if (depth === 0) {
-          candidates.push(source.slice(start, i + 1))
-          break
-        }
-      }
-    }
-  }
-
-  return Array.from(new Set(candidates.map(c => c.trim()).filter(Boolean)))
-}
-
-function findLikelyPythonStringSyntaxIssue(code: string): string | null {
-  const lines = code.split('\n')
-  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
-    const line = lines[lineIndex]
-    const trimmed = line.trim()
-    if (!trimmed || trimmed.startsWith('#')) continue
-
-    let quote: 'single' | 'double' | null = null
-    let tripleQuote: 'single' | 'double' | null = null
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i]
-      const next3 = line.slice(i, i + 3)
-      const escaped = i > 0 && line[i - 1] === '\\' && (i < 2 || line[i - 2] !== '\\')
-
-      if (tripleQuote) {
-        if ((tripleQuote === 'single' && next3 === "'''") || (tripleQuote === 'double' && next3 === '"""')) {
-          tripleQuote = null
-          i += 2
-        }
-        continue
-      }
-
-      if (!quote && (next3 === "'''" || next3 === '"""')) {
-        tripleQuote = next3 === "'''" ? 'single' : 'double'
-        i += 2
-        continue
-      }
-
-      if (escaped) continue
-      if (ch === "'" && quote !== 'double') {
-        quote = quote === 'single' ? null : 'single'
-      } else if (ch === '"' && quote !== 'single') {
-        quote = quote === 'double' ? null : 'double'
-      }
-    }
-
-    if (quote && !line.trimEnd().endsWith('\\')) {
-      return `unterminated ${quote}-quoted string on line ${lineIndex + 1}`
-    }
-  }
-  return null
-}
-
-function asPyTripleQuoted(value: string): string {
-  return JSON.stringify(String(value || ''))
-}
-
-function sanitizeReasonForGeneratedPython(value: string): string {
-  return String(value || '')
-    .replace(/placeholder|pseudocode/gi, 'invalid non-executable output')
-    .slice(0, 500)
-}
-
-function packageNameFromSpec(value: string): string {
-  return String(value || '').split('[')[0].split('=')[0].split('<')[0].split('>')[0].split('~')[0].trim()
-}
-
-function safePipDependenciesFromManifest(manifest: unknown): string[] {
-  const deps = new Set<string>(['requests'])
-  if (!manifest || typeof manifest !== 'object') return Array.from(deps)
-  const rows = Array.isArray((manifest as any).dependencies) ? (manifest as any).dependencies : []
-  for (const row of rows) {
-    const name = typeof row === 'string' ? row : (typeof row?.name === 'string' ? row.name : '')
-    const normalized = packageNameFromSpec(name).replace(/_/g, '-')
-    if (!normalized) continue
-    if (/^(torch|torchvision|torchaudio)$/i.test(normalized)) continue
-    if (/^[A-Za-z0-9][A-Za-z0-9_.-]*([<>=!~]=?.+)?$/.test(name)) deps.add(name)
-  }
-  return Array.from(deps).slice(0, 12)
-}
-
-function inferDependenciesFromCode(code: string): string[] {
-  const deps = new Set<string>()
-  const importPattern = /^\s*(?:import|from)\s+([A-Za-z_][A-Za-z0-9_]*)/gm
-  for (const match of code.matchAll(importPattern)) {
-    const name = match[1]
-    if (/^(os|sys|json|time|subprocess|pathlib|re|math|random|statistics)$/i.test(name)) continue
-    if (/^(torch|torchvision|torchaudio|transformers|accelerate|safetensors|scipy|numpy|requests)$/i.test(name)) deps.add(name === 'huggingface_hub' ? 'huggingface-hub' : name)
-  }
-  return Array.from(deps).slice(0, 8)
-}
-
-function validateStrictGpuCode(parsed: any): StrictGpuResult {
-  const code = typeof parsed?.code === 'string' ? parsed.code.trim() : ''
-  if (parsed?.action !== 'run_python') return { ok: false, reason: 'JSON action must be "run_python"' }
-  if (!code) return { ok: false, reason: 'JSON is missing non-empty code string' }
-  const codeLines = code.split('\n').map((l: string) => l.trim()).filter(Boolean)
-  const hasPython = /(^|\n)\s*(import|from|def|class|print\(|assert\b|[A-Za-z_][A-Za-z0-9_]*\s*=)/.test(code)
-  if (!hasPython || codeLines.length < 3) return { ok: false, reason: 'code lacks enough executable Python syntax' }
-  if (/TODO|placeholder|pseudocode|\.\.\./i.test(code)) return { ok: false, reason: 'code contains placeholder/pseudocode markers' }
-  const syntaxIssue = findLikelyPythonStringSyntaxIssue(code)
-  if (syntaxIssue) return { ok: false, reason: 'python syntax issue: ' + syntaxIssue }
-  if (!/(cuda|gpu|nvidia-smi|torch\.cuda|device\s*=\s*["']cuda|cuda_available|gpu_name|vram)/i.test(code)) {
-    return { ok: false, reason: 'code must include a GPU/CUDA probe or runtime GPU evidence' }
-  }
-  if (!/(json\.dumps|print\(|metrics|accuracy|loss|score|runtime|seconds|tensor|artifact)/i.test(code)) {
-    return { ok: false, reason: 'code must print measurable metrics or artifacts' }
-  }
-  return {
-    ok: true,
-    command: {
-      action: 'run_python',
-      dependencies: Array.isArray(parsed.dependencies) ? parsed.dependencies.map(String).filter(Boolean).slice(0, 20) : [],
-      code,
-    },
-  }
-}
-
-export function buildDeterministicGpuExperimentCommand(input: DeterministicExperimentInput): StrictGpuCommand {
-  const researchGoal = asPyTripleQuoted(input.researchGoal || '')
-  const stepDescription = asPyTripleQuoted(input.stepDescription || '')
-  const stageName = asPyTripleQuoted(input.stageName || '')
-  const reason = asPyTripleQuoted(sanitizeReasonForGeneratedPython(input.reason || ''))
-  const manifestJson = JSON.stringify(input.preparationManifest || null)
-  const manifestForPython = asPyTripleQuoted(manifestJson)
-  const dependencies = safePipDependenciesFromManifest(input.preparationManifest)
-
-  const code = `import importlib.util
-import json
-import math
-import os
-import re
-import subprocess
-import time
-from pathlib import Path
-
-research_goal = ${researchGoal}
-step_description = ${stepDescription}
-stage_name = ${stageName}
-contract_failure_reason = ${reason}
-preparation_manifest = json.loads(${manifestForPython})
-workbench_root = Path(os.environ.get("AR3_WORKBENCH_ROOT", "/tmp/ar3-workbenches"))
-reuse_key = "deterministic-gpu-experiment"
-if isinstance(preparation_manifest, dict):
-    reuse_key = str((preparation_manifest.get("workbench") or {}).get("reuseKey") or reuse_key)
-workbench = Path(os.environ.get("AR3_WORKBENCH_DIR") or (workbench_root / reuse_key))
-workbench.mkdir(parents=True, exist_ok=True)
-
-started = time.time()
-metrics = {
-    "type": "deterministic_gpu_experiment",
-    "stage": stage_name,
-    "contract_repair_reason": contract_failure_reason,
-    "research_goal_chars": len(research_goal),
-    "step_description_chars": len(step_description),
-    "workbench": str(workbench),
-    "cuda_available": False,
-    "torch_cuda_available": False,
-    "gpu_name": None,
-    "gpu_memory_gb": None,
-    "tensor_sum": None,
-    "dependency_imports": {},
-    "model_metadata": [],
-    "focus_terms": [],
-    "research_metrics": {},
-    "grading_criteria_checked": [],
-    "artifacts": [],
-}
-
-try:
-    result = subprocess.run(
-        ["nvidia-smi", "--query-gpu=name,memory.total,driver_version", "--format=csv,noheader,nounits"],
-        text=True,
-        capture_output=True,
-        timeout=20,
-    )
-    metrics["nvidia_smi_returncode"] = result.returncode
-    if result.returncode == 0 and result.stdout.strip():
-        row = result.stdout.strip().splitlines()[0]
-        parts = [part.strip() for part in row.split(",")]
-        metrics["cuda_available"] = True
-        metrics["gpu_name"] = parts[0] if parts else row
-        if len(parts) > 1:
-            try:
-                metrics["gpu_memory_gb"] = round(float(parts[1]) / 1024, 2)
-            except Exception:
-                metrics["gpu_memory_gb"] = parts[1]
-        if len(parts) > 2:
-            metrics["driver_version"] = parts[2]
-    else:
-        metrics["nvidia_smi_error"] = (result.stderr or result.stdout).strip()[:500]
-except Exception as exc:
-    metrics["nvidia_smi_error"] = repr(exc)
-
-if isinstance(preparation_manifest, dict):
-    focus_terms = preparation_manifest.get("focusTerms") or preparation_manifest.get("focus_terms") or []
-    if isinstance(focus_terms, list):
-        metrics["focus_terms"] = [str(term) for term in focus_terms[:12]]
-
-try:
-    import torch
+  const…3217 tokens truncated…orch
     metrics["torch_version"] = torch.__version__
     metrics["torch_cuda_version"] = getattr(torch.version, "cuda", None)
     metrics["torch_cuda_available"] = bool(torch.cuda.is_available())
