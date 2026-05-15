@@ -1,5 +1,3 @@
-Total output lines: 889
-
 export type StrictGpuCommand = { action: 'run_python'; dependencies: string[]; code: string }
 
 export function shouldUseAutonomousPreparationFallback(stageName: string): boolean {
@@ -460,7 +458,12 @@ export function selectGpuSubmissionCommand(input: GpuSubmissionInput): GpuSubmis
     const reason = (strict as { ok: false; reason: string }).reason
     if (shouldShortCircuitPreparationFallback(input.stageName, reason)) {
       if (input.preparationManifest) {
-        const fallbackReason = `weak preparation-stage GPU command (${reason}) …50 tokens truncated…  command: buildDeterministicGpuExperimentCommand({
+        const fallbackReason = `weak preparation-stage GPU command (${reason}) after preparation evidence already exists; running deterministic GPU experiment instead`
+        return {
+          ok: true,
+          fallbackUsed: false,
+          reason: fallbackReason,
+          command: buildDeterministicGpuExperimentCommand({
             researchGoal: input.researchGoal,
             stepDescription: input.stepDescription,
             stageName: input.stageName,
