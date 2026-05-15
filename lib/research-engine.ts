@@ -8,6 +8,7 @@ import { buildPreparationManifestInstructions, buildPreparationRetryMessage, ext
 import fs from 'fs'
 import { getInternalGpuApiBase } from './internal-api-base'
 import { removeSpaceWorkbenchDirs } from './space-cleanup'
+import { buildFallbackThinkingSetupResponse } from './thinking-setup'
 
 const logFile = '/tmp/ar1_debug.log'
 function debugLog(...args: any[]) {
@@ -3576,9 +3577,15 @@ export function runThinkingSetupBackground(spaceId: string): void {
         const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('AI call timeout (10 min)')), 600000))
         response = await Promise.race([aiPromise, timeoutPromise])
       } catch (aiErr: any) {
-        debugLog(`[runThinkingSetup] AI call failed at step ${step}: ${aiErr.message}`)
-        await prisma.space.update({ where: { id: spaceId }, data: { setupStatus: 'FAILED', setupError: `AI call failed: ${aiErr.message}`, setupStep: null } })
-        return
+        debugLog(`[runThinkingSetup] AI call failed at step ${step}: ${aiErr.message}; continuing with deterministic fallback setup`)
+        response = buildFallbackThinkingSetupResponse(space.initialPrompt, aiErr)
+        await prisma.space.update({
+          where: { id: spaceId },
+          data: {
+            setupError: `Thinking setup used deterministic fallback after AI call failed: ${aiErr.message}`,
+            setupStep: 'Creating fallback stage pipeline...',
+          },
+        })
       }
 
       // Always use ALL DEFAULT_STAGES -- don't trust AI recommendations
