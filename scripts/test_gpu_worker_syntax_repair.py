@@ -63,6 +63,22 @@ def test_auto_fix_applies_torch_cuda_device_total_mem_alias():
     assert "props.total_mem)" not in fixed
 
 
+def test_auto_fix_repairs_malformed_dict_value_format_spec():
+    broken = "metrics = {'agreement': consensus_result['avg_agreement']:.3f, 'loss': stats['loss']:.4f}\nprint(metrics)\n"
+    fixed = gpu_worker.auto_fix_code(broken)
+    assert "round(consensus_result['avg_agreement'], 3)" in fixed
+    assert "round(stats['loss'], 4)" in fixed
+    compile(fixed, '<fixed>', 'exec')
+
+
+def test_injects_missing_defaultdict_import():
+    code = "groups = defaultdict(list)\ngroups['a'].append(1)\nprint(dict(groups))\n"
+    fixed = gpu_worker.inject_missing_common_stdlib_imports(code)
+    assert fixed.startswith('from collections import defaultdict\n')
+    namespace = {}
+    exec(fixed, namespace)
+
+
 if __name__ == '__main__':
     test_repairs_newline_join_literal()
     test_repairs_newline_concat_literal()
@@ -70,4 +86,6 @@ if __name__ == '__main__':
     test_leaves_normal_code_unchanged()
     test_repairs_torch_cuda_device_total_mem_alias()
     test_auto_fix_applies_torch_cuda_device_total_mem_alias()
+    test_auto_fix_repairs_malformed_dict_value_format_spec()
+    test_injects_missing_defaultdict_import()
     print('gpu worker syntax repair tests passed')

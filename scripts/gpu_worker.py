@@ -1058,6 +1058,20 @@ def repair_common_torch_api_mistakes(code: str) -> str:
     return re_module.sub(r'(?<![A-Za-z0-9_])total_mem(?![A-Za-z0-9_])', 'total_memory', code)
 
 
+def repair_malformed_dict_value_format_specs(code: str) -> str:
+    """Repair LLM-emitted dict values that use f-string format specs outside f-strings.
+
+    Generated experiments sometimes produce invalid Python such as
+    ``{'agreement': consensus_result['avg_agreement']:.3f}``.  The intent is a
+    rounded numeric metric value, not a type annotation.  Keep the repair narrow:
+    only dict-style key/value separators followed by a simple name/attribute/
+    subscript expression and a ``:.Nf`` suffix before a comma or closing brace.
+    """
+    expr = r"[A-Za-z_][A-Za-z0-9_]*(?:\[[^\n\[\]]+\]|\.[A-Za-z_][A-Za-z0-9_]*|\([^\n()]*\))*"
+    pattern = re_module.compile(rf"(:\s*)({expr})\s*:\.(\d+)f(?=\s*[,}}])")
+    return pattern.sub(lambda m: f"{m.group(1)}round({m.group(2)}, {m.group(3)})", code)
+
+
 def auto_fix_code(code: str) -> str:
     """Attempt to fix common SyntaxError/IndentationError issues in one pass."""
     import re as re_module
@@ -1075,6 +1089,7 @@ def auto_fix_code(code: str) -> str:
     # (e.g. item.update({ ... })) when the only real syntax error is a decoded "\n".
     fixed = repair_embedded_newline_string_literals(code)
     fixed = repair_common_torch_api_mistakes(fixed)
+    fixed = repair_malformed_dict_value_format_specs(fixed)
     if fixed != code and _compiles(fixed):
         return fixed
 
@@ -1139,6 +1154,12 @@ COMMON_STDLIB_MODULES = {
     'itertools', 'functools', 'collections', 'subprocess', 're', 'csv', 'tempfile', 'shutil',
 }
 
+COMMON_STDLIB_SYMBOL_IMPORTS = {
+    'defaultdict': 'from collections import defaultdict',
+    'Counter': 'from collections import Counter',
+    'deque': 'from collections import deque',
+}
+
 
 def inject_missing_common_stdlib_imports(code: str) -> str:
     """Prepend imports for common stdlib modules referenced but not imported.
@@ -1172,9 +1193,14 @@ def inject_missing_common_stdlib_imports(code: str) -> str:
                 assigned_names.add(node.id)
 
     missing = sorted((loaded_names & COMMON_STDLIB_MODULES) - imported - assigned_names)
-    if not missing:
+    missing_symbol_imports = [
+        import_line for symbol, import_line in sorted(COMMON_STDLIB_SYMBOL_IMPORTS.items())
+        if symbol in loaded_names and symbol not in imported and symbol not in assigned_names
+    ]
+    if not missing and not missing_symbol_imports:
         return code
-    return ''.join(f'import {name}\n' for name in missing) + code
+    import_lines = [f'import {name}' for name in missing] + missing_symbol_imports
+    return ''.join(f'{line}\n' for line in import_lines) + code
 
 
 def validate_executable_experiment_code(code: str) -> dict:
@@ -1394,6 +1420,7 @@ def execute_python_code(code: str, timeout: int = DEFAULT_JOB_TIMEOUT, context: 
 
     fixed_code = repair_embedded_newline_string_literals(fixed_code)
     fixed_code = repair_common_torch_api_mistakes(fixed_code)
+    fixed_code = repair_malformed_dict_value_format_specs(fixed_code)
     fixed_code = inject_missing_common_stdlib_imports(fixed_code)
 
     # ── Patch: Handle LLaDA transformers 5.x compatibility ────────────────────
