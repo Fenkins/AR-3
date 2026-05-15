@@ -124,7 +124,7 @@ async function callMiniMax(config: AIConfig, messages: AIMessage[]): Promise<AIR
   })
 
   console.log('[MiniMax] Making API call with:', { model: config.model, messageCount: messages.length })
-  console.log('[MiniMax] Using API key prefix:', config.apiKey.substring(0, 10) + '...')
+  console.log('[MiniMax] API key configured:', Boolean(config.apiKey))
   console.log('[MiniMax] Endpoint:', openai.baseURL)
 
   let completion
