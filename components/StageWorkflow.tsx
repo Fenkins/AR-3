@@ -550,6 +550,7 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
   const totalSteps = runningVariant?.steps.length || 0
 
   const stageVariantsCompleted = (stageId: string) => allVariants.filter(v => v.stageId === stageId && v.status === 'COMPLETED').length
+  const visibleHistoryVariants = allVariants.filter(v => v.stageId !== currentStage?.id)
 
   const toggleHistoryExpand = (id: string) => {
     setExpandedHistoryIds(prev => {
@@ -772,13 +773,13 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
         <div className="bg-dark-900 rounded-xl border border-dark-700 p-4 flex flex-col max-h-[calc(100vh-220px)]">
           <h3 className="text-sm font-bold text-dark-300 mb-3 uppercase tracking-wider">Variant History</h3>
           <div className="flex-1 overflow-y-auto space-y-2">
-            {allVariants.length === 0 ? (
+            {visibleHistoryVariants.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-12 text-dark-400">
                 <div className="text-3xl mb-2">📭</div>
-                <p className="text-sm">No history yet</p>
+                <p className="text-sm">No previous-stage history yet</p>
               </div>
             ) : (
-              allVariants.map((variant) => {
+              visibleHistoryVariants.map((variant) => {
                 const isExpanded = expandedHistoryIds.has(variant.id)
                 const stage = stages.find(s => s.id === variant.stageId)
                 const isFailed = variant.status === 'FAILED'
