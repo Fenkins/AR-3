@@ -158,4 +158,27 @@ function testSnakeCaseManifestArtifactAliasesAreEnforced() {
 
 testSnakeCaseManifestEvidenceAliasesAreEnforced()
 testSnakeCaseManifestArtifactAliasesAreEnforced()
+
+function testEvidenceParserPrefersMetricsJsonLineOverTrailingStatus() {
+  const result = assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    success: true,
+    output: [
+      'starting deterministic experiment',
+      JSON.stringify({
+        cuda_available: true,
+        gpu_name: 'Test GPU',
+        tensor_sum: 120,
+        runtime_seconds: 0.02,
+        artifacts: ['/tmp/ar3-workbenches/json-lines/metrics.json'],
+      }),
+      JSON.stringify({ status: 'done' }),
+    ].join('\n'),
+    preparationManifest: manifestWithExpectedArtifacts(['metrics.json']),
+  })
+
+  assert.strictEqual(result.valid, true, result.reason)
+}
+
+testEvidenceParserPrefersMetricsJsonLineOverTrailingStatus()
 console.log('gpu-command-contract tests passed')

@@ -170,7 +170,32 @@ function parseGpuEvidenceJson(output: string): any {
       }
     }
   }
-  return candidates.reverse().find(obj => obj && typeof obj === 'object' && (obj.type || obj.gpu || obj.model_ids || obj.installed_dependencies)) || candidates[candidates.length - 1] || null
+  const scoreEvidenceCandidate = (value: any): number => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return 0
+    let score = 0
+    const visit = (node: unknown, depth: number) => {
+      if (!node || typeof node !== 'object' || depth > 4) return
+      if (Array.isArray(node)) {
+        node.slice(0, 20).forEach(item => visit(item, depth + 1))
+        return
+      }
+      for (const [rawKey, rawValue] of Object.entries(node as Record<string, unknown>)) {
+        const key = rawKey.toLowerCase()
+        if (/^(type|gpu|model_ids|huggingface|installed_dependencies|workbench|contract_failure_reason)$/.test(key)) score += 6
+        if (/metric|score|loss|accuracy|acc|f1|precision|recall|latency|throughput|seconds|runtime|cuda|gpu|memory|vram|artifact|path|file|stdout|stderr|result|measurement/i.test(key)) score += 3
+        if (typeof rawValue === 'number' && Number.isFinite(rawValue)) score += 2
+        if (typeof rawValue === 'boolean') score += 1
+        if (typeof rawValue === 'string' && rawValue.trim()) score += 1
+        visit(rawValue, depth + 1)
+      }
+    }
+    visit(value, 0)
+    return score
+  }
+
+  return candidates
+    .map((obj, index) => ({ obj, index, score: scoreEvidenceCandidate(obj) }))
+    .sort((a, b) => b.score - a.score || b.index - a.index)[0]?.obj || null
 }
 
 export function assessGpuExecutionEvidence(input: GpuEvidenceInput): GpuEvidenceResult {
