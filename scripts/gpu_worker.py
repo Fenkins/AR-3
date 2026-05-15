@@ -1799,7 +1799,7 @@ def process_job(job: dict, timeout: int) -> dict:
     return result
 
 
-STALE_INFLIGHT_RECLAIM_SECONDS = int(os.environ.get('GPU_STALE_INFLIGHT_RECLAIM_SECONDS', '900'))
+STALE_INFLIGHT_RECLAIM_SECONDS = int(os.environ.get('GPU_STALE_INFLIGHT_RECLAIM_SECONDS', '120'))
 INFLIGHT_JOB_STATUSES = {
     'claimed',
     'preparing_workbench',
