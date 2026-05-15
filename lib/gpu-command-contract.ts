@@ -227,7 +227,41 @@ export function assessGpuExecutionEvidence(input: GpuEvidenceInput): GpuEvidence
     }
   }
 
+  const criteriaEvidence = validateGradingCriteriaEvidence(parsedOutput)
+  if (!criteriaEvidence.valid) {
+    return criteriaEvidence
+  }
+
   return { valid: true, reason: 'GPU execution produced measurable evidence with runtime GPU evidence' }
+}
+
+function validateGradingCriteriaEvidence(parsedOutput: any): GpuEvidenceResult {
+  if (!parsedOutput || typeof parsedOutput !== 'object') return { valid: true, reason: 'no structured grading criteria to validate' }
+  if (parsedOutput.type !== 'deterministic_gpu_experiment') return { valid: true, reason: 'not a deterministic fallback output' }
+
+  const criteria = Array.isArray(parsedOutput.grading_criteria_checked)
+    ? parsedOutput.grading_criteria_checked.map(String).filter(Boolean)
+    : []
+  if (criteria.length === 0) return { valid: true, reason: 'no grading criteria declared by output' }
+
+  const evidence = parsedOutput.grading_criteria_evidence
+  if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) {
+    return { valid: false, reason: 'Deterministic GPU experiment echoed grading criteria but did not map them to concrete evidence fields.' }
+  }
+
+  const missing = criteria.filter((criterion: string) => {
+    const row = evidence[criterion]
+    return !row || typeof row !== 'object' || row.matched !== true || !Array.isArray(row.matched_keys) || row.matched_keys.length === 0
+  })
+
+  if (missing.length > 0) {
+    return {
+      valid: false,
+      reason: `Deterministic GPU experiment did not map grading criteria to concrete evidence fields: ${missing.slice(0, 3).join('; ')}`,
+    }
+  }
+
+  return { valid: true, reason: 'deterministic GPU experiment mapped grading criteria to evidence fields' }
 }
 
 function hasRuntimeGpuEvidence(output: string, parsedOutput: any): boolean {
@@ -566,6 +600,7 @@ export function buildDeterministicGpuExperimentCommand(input: DeterministicExper
 import json
 import math
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -724,6 +759,28 @@ if isinstance(preparation_manifest, dict):
     criteria = [str(c) for c in (preparation_manifest.get("gradingCriteria") or [])]
     metrics["grading_criteria_checked"] = criteria[:10]
     metrics["smoke_tests_declared"] = len(preparation_manifest.get("smokeTests") or [])
+    stopwords = {"with", "that", "this", "must", "print", "prints", "json", "metric", "metrics", "evidence", "and", "the", "for", "from", "contains", "contain"}
+    def flatten_evidence(prefix, value, out):
+        if isinstance(value, dict):
+            for key, nested in value.items():
+                flatten_evidence((prefix + "." if prefix else "") + str(key), nested, out)
+        elif isinstance(value, list):
+            for idx, nested in enumerate(value[:10]):
+                flatten_evidence(f"{prefix}[{idx}]", nested, out)
+        else:
+            out[prefix] = str(value)
+    flattened = {}
+    flatten_evidence("", {k: v for k, v in metrics.items() if k not in {"grading_criteria_checked", "grading_criteria_evidence"}}, flattened)
+    evidence_map = {}
+    for criterion in metrics["grading_criteria_checked"]:
+        terms = [t for t in re.findall(r"[a-zA-Z][a-zA-Z0-9_]{3,}", criterion.lower()) if t not in stopwords]
+        matched = []
+        for key, value in flattened.items():
+            haystack = (key + " " + value).lower()
+            if any(term in haystack for term in terms):
+                matched.append(key)
+        evidence_map[criterion] = {"matched": bool(matched), "matched_keys": matched[:8]}
+    metrics["grading_criteria_evidence"] = evidence_map
 
 metrics["runtime_seconds"] = round(time.time() - started, 3)
 metrics_path = workbench / "deterministic_gpu_experiment_metrics.json"

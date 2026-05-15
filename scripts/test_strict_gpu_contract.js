@@ -460,6 +460,50 @@ function testDeterministicExperimentFallbackEmitsResearchSpecificMetrics() {
   assert.equal(typeof result.research_metrics.trajectory_cosine_similarity, 'number')
   assert.equal(typeof result.research_metrics.projection_residual, 'number')
   assert.ok(result.focus_terms.includes('trajectory'))
+  assert.ok(result.grading_criteria_evidence, 'expected grading criteria evidence map')
+  const criterionEvidence = result.grading_criteria_evidence['prints cuda_available and trajectory_cosine_similarity metrics']
+  assert.equal(criterionEvidence.matched, true)
+  assert.ok(criterionEvidence.matched_keys.some(key => /cuda_available|trajectory_cosine_similarity/.test(key)), criterionEvidence.matched_keys.join(', '))
+}
+
+function testDeterministicExperimentCriteriaEchoWithoutEvidenceIsRejected() {
+  const assessed = contract.assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    fallbackUsed: false,
+    success: true,
+    output: JSON.stringify({
+      type: 'deterministic_gpu_experiment',
+      cuda_available: true,
+      gpu_name: 'RTX 3060',
+      tensor_sum: 123.0,
+      grading_criteria_checked: ['prints cuda_available and trajectory_cosine_similarity metrics'],
+    }),
+  })
+  assert.equal(assessed.valid, false)
+  assert.match(assessed.reason, /grading criteria/i)
+}
+
+function testDeterministicExperimentCriteriaEvidencePassesGate() {
+  const assessed = contract.assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    fallbackUsed: false,
+    success: true,
+    output: JSON.stringify({
+      type: 'deterministic_gpu_experiment',
+      cuda_available: true,
+      gpu_name: 'RTX 3060',
+      tensor_sum: 123.0,
+      research_metrics: { trajectory_cosine_similarity: 0.99 },
+      grading_criteria_checked: ['prints cuda_available and trajectory_cosine_similarity metrics'],
+      grading_criteria_evidence: {
+        'prints cuda_available and trajectory_cosine_similarity metrics': {
+          matched: true,
+          matched_keys: ['cuda_available', 'research_metrics.trajectory_cosine_similarity'],
+        },
+      },
+    }),
+  })
+  assert.equal(assessed.valid, true, assessed.reason)
 }
 
 function testPreparationStagesShortCircuitWeakModelContractFailures() {
@@ -497,5 +541,7 @@ testStrictGpuCommandRejectsExecutableGpuProbeCodeWithUnterminatedPythonString()
 testPreparationStageWithExistingManifestPromotesWeakOutputToDeterministicExperiment()
 testPreparationStageWithExistingManifestPromotesWrapperToDeterministicExperiment()
 testDeterministicExperimentFallbackEmitsResearchSpecificMetrics()
+testDeterministicExperimentCriteriaEchoWithoutEvidenceIsRejected()
+testDeterministicExperimentCriteriaEvidencePassesGate()
 testPreparationStagesShortCircuitWeakModelContractFailures()
 console.log('strict gpu contract tests passed')
