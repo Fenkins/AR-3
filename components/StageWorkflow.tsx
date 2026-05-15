@@ -194,10 +194,14 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
     if (showDebugLog) {
       const fetchLog = async () => {
         try {
-          const res = await fetch('/api/debug/log')
+          const res = await fetch('/api/debug/log', {
+            headers: { Authorization: `Bearer ${token}` },
+          })
           if (res.ok) {
             const lines = await res.text()
             setDebugLog(lines.split('\n').filter(Boolean).slice(-30))
+          } else {
+            setDebugLog([`(debug log unavailable: HTTP ${res.status})`])
           }
         } catch {
           setDebugLog(['(debug log unavailable)'])

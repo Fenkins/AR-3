@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { authMiddleware } from '../../middleware'
 import { prisma } from '@/lib/prisma'
+import { normalizeSpaceForClient, normalizeVariantForClient } from '@/lib/space-api-shape'
 import {
   startSpace,
   executeResearchCycle,
@@ -72,10 +73,11 @@ export async function GET(
 
     // Merge DB variants with execution state variants
     const executionVariants = executionState?.variants || []
-    const mergedVariants = dbVariants.length > 0 ? dbVariants : executionVariants
+    const mergedVariants = (dbVariants.length > 0 ? dbVariants : executionVariants).map(normalizeVariantForClient)
+    const clientSpace = normalizeSpaceForClient(space)
 
     return NextResponse.json({
-      space,
+      space: { ...clientSpace, variants: mergedVariants },
       stages,
       execution: { ...executionState, variants: mergedVariants },
       isRunning: executionState?.isRunning ?? (space.status === 'RUNNING'),
