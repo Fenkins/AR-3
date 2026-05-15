@@ -244,6 +244,118 @@ function testJsonMetricsOutputIsValidGpuEvidence() {
   assert.equal(assessed.valid, true, assessed.reason)
 }
 
+function testManifestCriteriaRejectMissingExplicitMetricEvidence() {
+  const assessed = contract.assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    fallbackUsed: false,
+    success: true,
+    preparationManifest: {
+      gradingCriteria: ['stdout contains JSON metrics with cuda_available and trajectory_cosine_similarity'],
+    },
+    output: JSON.stringify({
+      cuda_available: true,
+      gpu_name: 'RTX 3060',
+      runtime_seconds: 2.4,
+      tensor_sum: 123.0,
+    }),
+  })
+  assert.equal(assessed.valid, false)
+  assert.match(assessed.reason, /preparation manifest grading criteria/i)
+  assert.match(assessed.reason, /trajectory_cosine_similarity/)
+}
+
+function testManifestCriteriaAcceptNestedExplicitMetricEvidence() {
+  const assessed = contract.assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    fallbackUsed: false,
+    success: true,
+    preparationManifest: {
+      gradingCriteria: ['stdout contains JSON metrics with cuda_available and trajectory_cosine_similarity'],
+    },
+    output: JSON.stringify({
+      cuda_available: true,
+      gpu_name: 'RTX 3060',
+      research_metrics: { trajectory_cosine_similarity: 0.993 },
+      runtime_seconds: 2.4,
+    }),
+  })
+  assert.equal(assessed.valid, true, assessed.reason)
+}
+
+function testManifestCriteriaRejectMissingPlainMetricEvidence() {
+  const assessed = contract.assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    fallbackUsed: false,
+    success: true,
+    preparationManifest: {
+      gradingCriteria: ['stdout contains JSON metrics with cuda_available and accuracy'],
+    },
+    output: JSON.stringify({
+      cuda_available: true,
+      gpu_name: 'RTX 3060',
+      runtime_seconds: 2.4,
+      tensor_sum: 123.0,
+    }),
+  })
+  assert.equal(assessed.valid, false)
+  assert.match(assessed.reason, /accuracy/)
+}
+
+function testManifestCriteriaAcceptPlainMetricEvidence() {
+  const assessed = contract.assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    fallbackUsed: false,
+    success: true,
+    preparationManifest: {
+      gradingCriteria: ['stdout contains JSON metrics with cuda_available and accuracy'],
+    },
+    output: JSON.stringify({
+      cuda_available: true,
+      gpu_name: 'RTX 3060',
+      accuracy: 0.91,
+      runtime_seconds: 2.4,
+    }),
+  })
+  assert.equal(assessed.valid, true, assessed.reason)
+}
+
+function testManifestCriteriaRejectHyphenatedMetricWithoutEvidence() {
+  const assessed = contract.assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    fallbackUsed: false,
+    success: true,
+    preparationManifest: {
+      gradingCriteria: ['stdout contains JSON metrics with cuda_available and trajectory-cosine-similarity'],
+    },
+    output: JSON.stringify({
+      cuda_available: true,
+      gpu_name: 'RTX 3060',
+      runtime_seconds: 2.4,
+      tensor_sum: 123.0,
+    }),
+  })
+  assert.equal(assessed.valid, false)
+  assert.match(assessed.reason, /trajectory-cosine-similarity/)
+}
+
+function testManifestCriteriaAcceptHyphenatedMetricAgainstUnderscoreField() {
+  const assessed = contract.assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    fallbackUsed: false,
+    success: true,
+    preparationManifest: {
+      gradingCriteria: ['stdout contains JSON metrics with cuda_available and trajectory-cosine-similarity'],
+    },
+    output: JSON.stringify({
+      cuda_available: true,
+      gpu_name: 'RTX 3060',
+      research_metrics: { trajectory_cosine_similarity: 0.993 },
+      runtime_seconds: 2.4,
+    }),
+  })
+  assert.equal(assessed.valid, true, assessed.reason)
+}
+
 function testCpuOnlyJsonMetricsAreNotValidGpuEvidence() {
   const assessed = contract.assessGpuExecutionEvidence({
     stageName: 'Implementation',
@@ -618,6 +730,12 @@ testDeterministicGpuExperimentFallbackUsesManifestAndPassesEvidenceGate()
 testPreparationProbeShapeIsInvalidForImplementationEvenIfFallbackFlagIsLost()
 testLongProseOutputIsNotValidGpuEvidence()
 testJsonMetricsOutputIsValidGpuEvidence()
+testManifestCriteriaRejectMissingExplicitMetricEvidence()
+testManifestCriteriaAcceptNestedExplicitMetricEvidence()
+testManifestCriteriaRejectMissingPlainMetricEvidence()
+testManifestCriteriaAcceptPlainMetricEvidence()
+testManifestCriteriaRejectHyphenatedMetricWithoutEvidence()
+testManifestCriteriaAcceptHyphenatedMetricAgainstUnderscoreField()
 testCpuOnlyJsonMetricsAreNotValidGpuEvidence()
 testFalseCudaAvailabilityIsNotRuntimeGpuEvidence()
 testGpuIdentityCanValidateRuntimeEvidenceWhenTorchCudaIsFalse()

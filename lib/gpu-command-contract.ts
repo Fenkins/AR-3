@@ -54,6 +54,7 @@ type GpuEvidenceInput = {
   success?: boolean
   output?: string | null
   error?: string | null
+  preparationManifest?: unknown
 }
 
 type GpuEvidenceResult = { valid: true; reason: string } | { valid: false; reason: string }
@@ -231,7 +232,7 @@ export function assessGpuExecutionEvidence(input: GpuEvidenceInput): GpuEvidence
     }
   }
 
-  const criteriaEvidence = validateGradingCriteriaEvidence(parsedOutput)
+  const criteriaEvidence = validateGradingCriteriaEvidence(parsedOutput, input.preparationManifest)
   if (!criteriaEvidence.valid) {
     return criteriaEvidence
   }
@@ -239,17 +240,22 @@ export function assessGpuExecutionEvidence(input: GpuEvidenceInput): GpuEvidence
   return { valid: true, reason: 'GPU execution produced measurable evidence with runtime GPU evidence' }
 }
 
-function validateGradingCriteriaEvidence(parsedOutput: any): GpuEvidenceResult {
-  if (!parsedOutput || typeof parsedOutput !== 'object') return { valid: true, reason: 'no structured grading criteria to validate' }
-  if (parsedOutput.type !== 'deterministic_gpu_experiment') return { valid: true, reason: 'not a deterministic fallback output' }
+function manifestGradingCriteria(preparationManifest: unknown): string[] {
+  if (!preparationManifest || typeof preparationManifest !== 'object' || Array.isArray(preparationManifest)) return []
+  const criteria = (preparationManifest as Record<string, unknown>).gradingCriteria
+  return Array.isArray(criteria) ? criteria.map(String).filter(Boolean).slice(0, 20) : []
+}
 
-  const criteria = Array.isArray(parsedOutput.grading_criteria_checked)
+function validateGradingCriteriaEvidence(parsedOutput: any, preparationManifest?: unknown): GpuEvidenceResult {
+  if (!parsedOutput || typeof parsedOutput !== 'object') return { valid: true, reason: 'no structured grading criteria to validate' }
+  const deterministicCriteria = Array.isArray(parsedOutput.grading_criteria_checked)
     ? parsedOutput.grading_criteria_checked.map(String).filter(Boolean)
     : []
+  const criteria = deterministicCriteria.length > 0 ? deterministicCriteria : manifestGradingCriteria(preparationManifest)
   if (criteria.length === 0) return { valid: true, reason: 'no grading criteria declared by output' }
 
   const evidence = parsedOutput.grading_criteria_evidence
-  if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) {
+  if (deterministicCriteria.length > 0 && (!evidence || typeof evidence !== 'object' || Array.isArray(evidence))) {
     return { valid: false, reason: 'Deterministic GPU experiment echoed grading criteria but did not map them to concrete evidence fields.' }
   }
 
@@ -314,6 +320,23 @@ function validateGradingCriteriaEvidence(parsedOutput: any): GpuEvidenceResult {
       .some(candidate => hasConcreteEvidenceValue(valueAtPath(parsedOutput, candidate)))
   }
 
+  const keyMatchesTerm = (key: string, term: string): boolean => {
+    const normalizedKey = key.toLowerCase().replace(/-/g, '_')
+    const normalizedTerm = term.toLowerCase().replace(/-/g, '_')
+    return normalizedKey === normalizedTerm ||
+      normalizedKey.endsWith('.' + normalizedTerm) ||
+      normalizedKey.includes('.' + normalizedTerm + '.') ||
+      normalizedKey.includes('.' + normalizedTerm + '[') ||
+      normalizedKey.endsWith('[' + normalizedTerm + ']') ||
+      normalizedKey.split(/[.[\]]+/).filter(Boolean).includes(normalizedTerm)
+  }
+
+  const outputHasConcreteTerm = (term: string): boolean => {
+    return Array.from(flattenedEvidenceKeys).some(candidate =>
+      keyMatchesTerm(candidate, term) && hasConcreteEvidenceValue(valueAtPath(parsedOutput, candidate))
+    )
+  }
+
   const explicitEvidenceTerms = (criterion: string): string[] => {
     const stopwords = new Set([
       'artifact',
@@ -339,15 +362,65 @@ function validateGradingCriteriaEvidence(parsedOutput: any): GpuEvidenceResult {
       'stderr',
       'with',
     ])
+    const concreteEvidenceTerms = new Set([
+      'accuracy',
+      'acc',
+      'allocated_vram_mb',
+      'baseline_score',
+      'cuda',
+      'cuda_available',
+      'device',
+      'driver_version',
+      'f1',
+      'gate_activation_rate',
+      'gpu',
+      'gpu_memory_gb',
+      'gpu_name',
+      'latency',
+      'latent_vector_norm',
+      'loss',
+      'memory',
+      'precision',
+      'projection_residual',
+      'recall',
+      'runtime_seconds',
+      'score',
+      'tensor_shape',
+      'tensor_sum',
+      'throughput',
+      'torch_cuda_available',
+      'trajectory_cosine_similarity',
+      'vram',
+    ])
     return Array.from(new Set(
       criterion
         .toLowerCase()
-        .match(/[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)?/g) || []
-    )).filter(term =>
-      term.includes('_') ||
-      term.includes('.') ||
-      (/^[a-z]+[0-9]+[a-z0-9_]*$/.test(term) && !stopwords.has(term))
-    )
+        .match(/[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)?/g) || []
+    ))
+      .map(term => term.replace(/-/g, '_'))
+      .filter(term =>
+        term.includes('_') ||
+        term.includes('.') ||
+        concreteEvidenceTerms.has(term) ||
+        (/^[a-z]+[0-9]+[a-z0-9_]*$/.test(term) && !stopwords.has(term))
+      )
+  }
+
+  if (deterministicCriteria.length === 0) {
+    const missingManifestCriteria = criteria.filter((criterion: string) => {
+      const explicitTerms = explicitEvidenceTerms(criterion)
+      if (explicitTerms.length === 0) return false
+      return explicitTerms.some(term => !outputHasConcreteTerm(term))
+    })
+
+    if (missingManifestCriteria.length > 0) {
+      return {
+        valid: false,
+        reason: `GPU execution did not satisfy preparation manifest grading criteria with concrete output fields: ${missingManifestCriteria.slice(0, 3).join('; ')}`,
+      }
+    }
+
+    return { valid: true, reason: 'GPU execution output satisfies preparation manifest grading criteria fields' }
   }
 
   const missing = criteria.filter((criterion: string) => {

@@ -550,12 +550,18 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
         response.content += warning
       }
 
+      const preparationManifest = preparationManifestForGpu || (() => {
+        if (space.setupStatus !== 'VALIDATED' || !space.setupStep) return null
+        try { return JSON.parse(space.setupStep) } catch { return null }
+      })()
+
       const selectedGpuCommand = selectGpuSubmissionCommand({
         stageName: currentStage.name,
         llmResponse: response.content,
         researchGoal: space.initialPrompt,
         stepDescription: currentStage.description || currentStage.name,
         manifestValidatedThisCycle: preparationManifestValidatedThisCycle,
+        preparationManifest,
       })
 
       if (!selectedGpuCommand.ok) {
@@ -567,11 +573,6 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
           response.content += `\n\n[GPU Preparation Probe]: ${selectedGpuCommand.reason}`
         }
         response.content = JSON.stringify(selectedGpuCommand.command)
-
-      const preparationManifest = preparationManifestForGpu || (() => {
-        if (space.setupStatus !== 'VALIDATED' || !space.setupStep) return null
-        try { return JSON.parse(space.setupStep) } catch { return null }
-      })()
 
       const internalGpuApiBase = getInternalGpuApiBase()
       try {
@@ -615,6 +616,7 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
                   success: result.success,
                   output: result.output,
                   error: result.error,
+                  preparationManifest,
                 })
                 if (!evidence.valid) {
                   gpuEvidenceInvalidReasonForExperiment = evidence.reason
@@ -1096,6 +1098,7 @@ ${useGpu && shouldUseAutonomousPreparationFallback(stageName) ? `## Preparation 
                     success: statusData.result.success,
                     output: statusData.result.output,
                     error: statusData.result.error,
+                    preparationManifest: preparationManifestForRescue,
                   })
                   if (!evidence.valid) gpuEvidenceInvalidReason = evidence.reason
                   if (evidence.valid && gpuSubmissionUsedFallback && shouldUseAutonomousPreparationFallback(stageName)) {
