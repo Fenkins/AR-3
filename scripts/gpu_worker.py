@@ -1843,7 +1843,7 @@ def get_pending_jobs() -> list:
         queue = read_queue()
         results = read_results()
         reclaimed = _reclaim_stale_inflight_jobs(queue, results, STALE_INFLIGHT_RECLAIM_SECONDS)
-        pending = [j for j in queue if j.get('status') == 'pending']
+        pending = [j for j in queue if j.get('status') in ('pending', 'queued')]
 
         config = get_gpu_config()
         max_concurrent = config.get('maxConcurrent', DEFAULT_MAX_CONCURRENT)
