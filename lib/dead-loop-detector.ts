@@ -176,31 +176,44 @@ export function assessDeadLoop(
   const stageVariants = variants.filter(variant => variant.stageId === stageId)
   const completed = stageVariants.filter(variant => variant.status === 'COMPLETED')
   if (completed.length > 0) {
+    const progressBySignature = new Map<string, VariantLike[]>()
+    for (const variant of completed) {
+      const signature = variantProgressSignature(variant)
+      if (!signature) continue
+      const matches = progressBySignature.get(signature) || []
+      matches.push(variant)
+      progressBySignature.set(signature, matches)
+    }
+
+    if (progressBySignature.size > 0) {
+      const repeatedProgress = Array.from(progressBySignature.entries()).sort((a, b) => b[1].length - a[1].length)[0]
+      if (repeatedProgress && repeatedProgress[1].length >= repeatThreshold) {
+        const grades = repeatedProgress[1]
+          .map(variant => typeof variant.grade === 'number' ? variant.grade : null)
+          .filter((grade): grade is number => grade !== null)
+        const lowestGrade = grades.length ? Math.min(...grades) : null
+        const highestGrade = grades.length ? Math.max(...grades) : null
+        const hasGradeImprovement = lowestGrade !== null && highestGrade !== null && highestGrade > lowestGrade
+
+        if (!hasGradeImprovement) {
+          return {
+            stuck: true,
+            repeatedSignature: repeatedProgress[0],
+            repeatedCount: repeatedProgress[1].length,
+            reason: `Dead-loop detector found ${repeatedProgress[1].length} completed ${stageId} variants with the same normalized output signature ${repeatedProgress[0]} and no grade improvement. Pausing so the next retry changes the experiment, grading evidence, or preparation manifest instead of repeating the same non-improving result.`,
+          }
+        }
+      }
+
+      return { stuck: false, reason: 'stage has completed variants with progress evidence' }
+    }
+
     const grades = completed
       .map(variant => typeof variant.grade === 'number' ? variant.grade : null)
       .filter((grade): grade is number => grade !== null)
     const bestGrade = grades.length ? Math.max(...grades) : null
     if (bestGrade === null || bestGrade > 0) {
       return { stuck: false, reason: 'stage has completed variants with progress evidence' }
-    }
-
-    const progressSignatures = completed
-      .map(variant => variantProgressSignature(variant))
-      .filter((signature): signature is string => Boolean(signature))
-    if (progressSignatures.length >= repeatThreshold) {
-      const progressCounts = new Map<string, number>()
-      for (const signature of progressSignatures) {
-        progressCounts.set(signature, (progressCounts.get(signature) || 0) + 1)
-      }
-      const repeatedProgress = Array.from(progressCounts.entries()).sort((a, b) => b[1] - a[1])[0]
-      if (repeatedProgress && repeatedProgress[1] >= repeatThreshold) {
-        return {
-          stuck: true,
-          repeatedSignature: repeatedProgress[0],
-          repeatedCount: repeatedProgress[1],
-          reason: `Dead-loop detector found ${repeatedProgress[1]} completed ${stageId} variants with the same normalized output signature ${repeatedProgress[0]} and no positive grade improvement. Pausing so the next retry changes the experiment, grading evidence, or preparation manifest instead of repeating the same non-improving result.`,
-        }
-      }
     }
   }
 

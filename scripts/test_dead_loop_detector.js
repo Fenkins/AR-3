@@ -30,12 +30,12 @@ const repeatedFailure = (id, suffix = '') => ({
   }],
 })
 
-const repeatedNonImprovingCompletion = (id, metric = '0.1000') => ({
+const repeatedNonImprovingCompletion = (id, metric = '0.1000', grade = 0) => ({
   id,
   stageId: 'stage_3',
   name: `Implementation ${id}`,
   status: 'COMPLETED',
-  grade: 0,
+  grade,
   feedback: 'No measurable improvement over baseline.',
   steps: [{
     status: 'COMPLETED',
@@ -129,7 +129,27 @@ const repeatedCodeFailure = (id, error) => ({
   ], 'stage_3')
   assert.equal(assessment.stuck, true)
   assert.equal(assessment.repeatedCount, 3)
-  assert.match(assessment.reason, /no positive grade improvement/)
+  assert.match(assessment.reason, /no grade improvement/)
+}
+
+{
+  const assessment = assessDeadLoop([
+    repeatedNonImprovingCompletion('a', '0.1000', 42),
+    repeatedNonImprovingCompletion('b', '0.1000', 42),
+    repeatedNonImprovingCompletion('c', '0.1000', 42),
+  ], 'stage_3')
+  assert.equal(assessment.stuck, true)
+  assert.equal(assessment.repeatedCount, 3)
+  assert.match(assessment.reason, /no grade improvement/)
+}
+
+{
+  const assessment = assessDeadLoop([
+    repeatedNonImprovingCompletion('a', '0.1000', 10),
+    repeatedNonImprovingCompletion('b', '0.1000', 20),
+    repeatedNonImprovingCompletion('c', '0.1000', 30),
+  ], 'stage_3')
+  assert.equal(assessment.stuck, false)
 }
 
 {
