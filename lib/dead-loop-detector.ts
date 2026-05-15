@@ -93,6 +93,81 @@ export function variantProgressSignature(variant: VariantLike): string | null {
   return normalized ? hashText(normalized) : null
 }
 
+function jsonObjectCandidates(text: string): string[] {
+  const source = String(text || '')
+  const candidates: string[] = []
+  for (let start = source.indexOf('{'); start !== -1; start = source.indexOf('{', start + 1)) {
+    let depth = 0
+    let inString = false
+    let escaped = false
+    for (let i = start; i < source.length; i++) {
+      const ch = source[i]
+      if (inString) {
+        if (escaped) escaped = false
+        else if (ch === '\\') escaped = true
+        else if (ch === '"') inString = false
+        continue
+      }
+      if (ch === '"') inString = true
+      else if (ch === '{') depth += 1
+      else if (ch === '}') {
+        depth -= 1
+        if (depth === 0) {
+          candidates.push(source.slice(start, i + 1))
+          break
+        }
+      }
+    }
+  }
+  return candidates
+}
+
+function normalizeCodeText(value: string): string {
+  return value
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map(line => line.trimEnd())
+    .join('\n')
+    .replace(/\/tmp\/[^\s'"]+/g, '<tmp-path>')
+    .replace(/gpu_[a-z0-9_.-]+/gi, '<gpu-job>')
+    .trim()
+    .slice(0, 20000)
+}
+
+function extractExecutableCodeText(value: string): string | null {
+  const text = String(value || '')
+  const codeBlock = text.match(/\[CODE\]\s*([\s\S]*?)\s*\[\/CODE\]/i)
+  if (codeBlock?.[1]?.trim()) return codeBlock[1]
+
+  for (const candidate of jsonObjectCandidates(text)) {
+    try {
+      const parsed = JSON.parse(candidate)
+      if (parsed?.action === 'run_python' && typeof parsed.code === 'string' && parsed.code.trim()) {
+        return parsed.code
+      }
+    } catch {}
+  }
+
+  return null
+}
+
+export function variantCodeSignature(variant: VariantLike): string | null {
+  const texts = [
+    variant.feedback || '',
+    ...(Array.isArray(variant.steps)
+      ? variant.steps.map(step => [step.result, step.feedback].filter(Boolean).join('\n'))
+      : []),
+  ]
+
+  for (const value of texts) {
+    const code = extractExecutableCodeText(value)
+    if (!code) continue
+    const normalized = normalizeCodeText(code)
+    if (normalized) return hashText(normalized)
+  }
+  return null
+}
+
 export function assessDeadLoop(
   variants: VariantLike[],
   stageId: string,
@@ -125,6 +200,26 @@ export function assessDeadLoop(
           repeatedCount: repeatedProgress[1],
           reason: `Dead-loop detector found ${repeatedProgress[1]} completed ${stageId} variants with the same normalized output signature ${repeatedProgress[0]} and no positive grade improvement. Pausing so the next retry changes the experiment, grading evidence, or preparation manifest instead of repeating the same non-improving result.`,
         }
+      }
+    }
+  }
+
+  const codeSignatures = stageVariants
+    .filter(variant => variant.status === 'COMPLETED' || variant.status === 'FAILED')
+    .map(variant => variantCodeSignature(variant))
+    .filter((signature): signature is string => Boolean(signature))
+  if (codeSignatures.length >= repeatThreshold) {
+    const codeCounts = new Map<string, number>()
+    for (const signature of codeSignatures) {
+      codeCounts.set(signature, (codeCounts.get(signature) || 0) + 1)
+    }
+    const repeatedCode = Array.from(codeCounts.entries()).sort((a, b) => b[1] - a[1])[0]
+    if (repeatedCode && repeatedCode[1] >= repeatThreshold) {
+      return {
+        stuck: true,
+        repeatedSignature: repeatedCode[0],
+        repeatedCount: repeatedCode[1],
+        reason: 'Dead-loop detector found ' + repeatedCode[1] + ' ' + stageId + ' variants with the same normalized executable code signature ' + repeatedCode[0] + '. Pausing so the next retry changes the implementation, preparation manifest, or grading target instead of rerunning identical code.',
       }
     }
   }

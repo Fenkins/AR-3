@@ -15,7 +15,7 @@ m.filename = sourcePath
 m.paths = Module._nodeModulePaths(path.dirname(sourcePath))
 m._compile(compiled, sourcePath)
 
-const { assessDeadLoop, variantFailureSignature, variantProgressSignature } = m.exports
+const { assessDeadLoop, variantFailureSignature, variantProgressSignature, variantCodeSignature } = m.exports
 
 const repeatedFailure = (id, suffix = '') => ({
   id,
@@ -43,6 +43,24 @@ const repeatedNonImprovingCompletion = (id, metric = '0.1000') => ({
   }],
 })
 
+const repeatedCodeFailure = (id, error) => ({
+  id,
+  stageId: 'stage_3',
+  name: 'Implementation ' + id,
+  status: 'FAILED',
+  failureMode: 'RUNTIME_' + id,
+  feedback: error,
+  steps: [{
+    status: 'FAILED',
+    result: '[GPU Execution Error] job:gpu_space_' + id + ': ' + error + '\n' +
+      '[CODE]\n' +
+      'import json\n' +
+      'import torch\n' +
+      'print(json.dumps({"cuda_available": torch.cuda.is_available(), "metric": 0.1}))\n' +
+      '[/CODE]',
+  }],
+})
+
 {
   const first = variantFailureSignature(repeatedFailure('a', 'retry 1'))
   const second = variantFailureSignature(repeatedFailure('b', 'retry 2'))
@@ -67,6 +85,23 @@ const repeatedNonImprovingCompletion = (id, metric = '0.1000') => ({
     { ...repeatedFailure('c'), feedback: 'CUDA out of memory while allocating tensor' },
   ], 'stage_3')
   assert.equal(assessment.stuck, false)
+}
+
+{
+  const first = variantCodeSignature(repeatedCodeFailure('a', 'ModuleNotFoundError: no module named transformers'))
+  const second = variantCodeSignature(repeatedCodeFailure('b', 'CUDA out of memory while allocating tensor'))
+  assert.equal(first, second, 'same executable code should create the same code signature despite different runtime errors')
+}
+
+{
+  const assessment = assessDeadLoop([
+    repeatedCodeFailure('a', 'ModuleNotFoundError: no module named transformers'),
+    repeatedCodeFailure('b', 'CUDA out of memory while allocating tensor'),
+    repeatedCodeFailure('c', 'FileNotFoundError: missing artifact'),
+  ], 'stage_3')
+  assert.equal(assessment.stuck, true)
+  assert.equal(assessment.repeatedCount, 3)
+  assert.match(assessment.reason, /same normalized executable code signature/)
 }
 
 {
