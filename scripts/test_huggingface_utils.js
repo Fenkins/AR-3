@@ -29,10 +29,20 @@ downloads:
 `)
   assert.deepStrictEqual(names(downloads), [
     'https://huggingface.co/GSAI-ML/LLaDA-8B-Base',
-    'https://huggingface.co/GSAI-ML/LLaDA-8B-Base/resolve/main/model-00001-of-00006.safetensors',
   ])
   assert(!names(downloads).includes('https://huggingface.co/LLaDA-8B-Base/resolve'), 'must not parse URL path fragments as model IDs')
   assert(!names(downloads).includes('https://huggingface.co/main/model-00001-of-00006.safetensors'), 'must not parse file path fragments as model IDs')
+}
+
+{
+  const downloads = parseHuggingFaceDownloads(`
+downloads:
+- https://huggingface.co/ssslakter/LLaDA-8B-Base/resolve/main/model-00001-of-00006.safetensors
+`)
+  assert.deepStrictEqual(downloads.map((d) => d.downloadUrl), [
+    'https://huggingface.co/ssslakter/LLaDA-8B-Base',
+  ])
+  assert.strictEqual(downloads[0].description, 'ssslakter/LLaDA-8B-Base snapshot')
 }
 
 {

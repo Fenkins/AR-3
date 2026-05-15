@@ -22,6 +22,10 @@ function repoUrl(modelId: string): string {
   return `https://huggingface.co/${modelId}`
 }
 
+function isShardedModelFile(url: string): boolean {
+  return /\/[^/]+-\d{5}-of-\d{5}\.safetensors(?:\?|$)/.test(url)
+}
+
 function addDownload(downloads: CacheDownloadSpec[], seen: Set<string>, spec: CacheDownloadSpec): void {
   if (seen.has(spec.downloadUrl)) return
   seen.add(spec.downloadUrl)
@@ -45,7 +49,13 @@ export function parseHuggingFaceDownloads(text: string, limit = 5): CacheDownloa
     const modelId = match[1]
     urlSpans.push([match.index || 0, (match.index || 0) + match[0].length])
 
-    if (rawUrl.includes('/resolve/') || rawUrl.includes('/blob/')) {
+    if (isShardedModelFile(rawUrl)) {
+      addDownload(downloads, seen, {
+        fileName: modelId.replace('/', '_'),
+        downloadUrl: repoUrl(modelId),
+        description: `${modelId} snapshot`,
+      })
+    } else if (rawUrl.includes('/resolve/') || rawUrl.includes('/blob/')) {
       const label = rawUrl.split('/').pop() || modelId.replace('/', '_')
       addDownload(downloads, seen, { fileName: label, downloadUrl: rawUrl, description: label })
     } else {
