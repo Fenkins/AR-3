@@ -535,18 +535,56 @@ CRITICAL: You MUST generate AT LEAST ${numStepsTarget} steps. Replace ALL step p
         'Integration Stress Test',
       ]
       const strategy = strategyNames[i % strategyNames.length]
-      name = `${strategy} ${stageConfig.name}`
+      name = strategy
       description = `Fallback ${stageConfig.name} variant generated after the planning model timed out. It explores ${focusTerms.slice(0, 4).join(', ') || 'the research goal'} through the ${strategy.toLowerCase()} strategy so execution can continue with distinct alternatives instead of blocking.`
+      const strategyActions: Record<string, string[]> = {
+        'Evidence-First Probe': [
+          'Collect baseline evidence',
+          'Measure a minimal executable case',
+          'Compare output against a simple control',
+          'Capture artifact paths and metrics',
+          'Summarize the strongest observed signal',
+        ],
+        'Mechanism Isolation': [
+          'Isolate one mechanism',
+          'Disable confounding components',
+          'Probe the smallest reproducible behavior',
+          'Record sensitivity to one variable',
+          'State what mechanism remains plausible',
+        ],
+        'Ablation Baseline': [
+          'Build the simplest baseline',
+          'Remove one feature or assumption',
+          'Run a paired comparison',
+          'Quantify the delta from baseline',
+          'Flag the next ablation target',
+        ],
+        'Failure-Mode Search': [
+          'Force a likely failure case',
+          'Capture the exact error surface',
+          'Reduce the failing case',
+          'Test one recovery path',
+          'Convert the failure into a guardrail',
+        ],
+        'Integration Stress Test': [
+          'Exercise the full handoff path',
+          'Stress dependency and model loading',
+          'Run a retained-workbench check',
+          'Measure resource and timing pressure',
+          'Document the integration bottleneck',
+        ],
+      }
+      const actionTemplates = strategyActions[strategy] || strategyActions['Evidence-First Probe']
       const templates = Array.from({ length: Math.max(5, numStepsTarget) }, (_, idx) => {
         const term = focusTerms[idx % Math.max(1, focusTerms.length)] || 'target behavior'
-        const stepNo = idx + 1
-        if (stageConfig.name === 'Investigation') return `Run ${strategy.toLowerCase()} investigation step ${stepNo}: produce executable GPU evidence about ${term}, print JSON metrics, and record what changed from prior observations`
-        if (stageConfig.name === 'Planning') return `Plan ${strategy.toLowerCase()} step ${stepNo}: convert findings about ${term} into concrete implementation tasks, dependencies, smoke tests, and grading criteria`
-        if (stageConfig.name === 'Implementation') return `Implement ${strategy.toLowerCase()} step ${stepNo}: write runnable code for ${term}, execute it in the retained workbench, and save measurable artifacts`
-        if (stageConfig.name === 'Testing') return `Test ${strategy.toLowerCase()} step ${stepNo}: run a benchmark or regression check for ${term}, compare against a baseline, and print pass/fail metrics`
-        if (stageConfig.name === 'Verification') return `Verify ${strategy.toLowerCase()} step ${stepNo}: reproduce the strongest claim about ${term} with independent evidence and artifact paths`
-        if (stageConfig.name === 'Evaluation') return `Evaluate ${strategy.toLowerCase()} step ${stepNo}: grade evidence about ${term}, identify remaining uncertainty, and recommend the next cycle adjustment`
-        return `Execute ${strategy.toLowerCase()} step ${stepNo}: gather concrete evidence about ${term} and record measurable output`
+        const action = actionTemplates[idx % actionTemplates.length]
+        if (stageConfig.name === 'Investigation') return `${action} for ${term}: run a GPU-backed probe, print JSON metrics, and record the observation`
+        if (stageConfig.name === 'Planning') return `${action} for ${term}: produce implementation tasks, dependency decisions, smoke tests, and grading criteria`
+        if (stageConfig.name === 'Implementation') return `${action} for ${term}: write runnable code, execute it in the retained workbench, and save artifacts`
+        if (stageConfig.name === 'Testing') return `${action} for ${term}: run a benchmark or regression check, compare baseline output, and print pass/fail metrics`
+        if (stageConfig.name === 'Verification') return `${action} for ${term}: reproduce the claim independently and record evidence paths`
+        if (stageConfig.name === 'Evaluation') return `${action} for ${term}: grade evidence, identify uncertainty, and recommend the next cycle adjustment`
+        return `${action} for ${term}: gather concrete evidence and record measurable output`
       })
       steps = templates.slice(0, numStepsTarget).map((desc, idx) => ({
         id: `step_${Date.now()}_${i}_${idx}`,
