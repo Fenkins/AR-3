@@ -121,9 +121,11 @@ export async function PUT(
 
       case 'run': {
         console.log('[Spaces API] Running research cycle(s):', params.id)
-        // Non-blocking: run cycles in background without waiting
-        runLoopBackground(params.id, numCycles || 3)
-        return NextResponse.json({ success: true, status: 'RUNNING', message: `${numCycles || 3} cycles started in background - poll /status for updates` })
+        // Hydrate execution state after server restarts and let the continuous
+        // background loop own execution. Direct runResearchLoop calls can see an
+        // empty in-memory state and incorrectly stop immediately.
+        await resumeSpace(params.id)
+        return NextResponse.json({ success: true, status: 'RUNNING', message: 'Background loop resumed - poll /status for updates' })
       }
 
       case 'cycle': {
