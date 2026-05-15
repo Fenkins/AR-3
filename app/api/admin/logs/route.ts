@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { authMiddleware } from '../../middleware'
+import { redactSecrets } from '../../../../lib/secret-redaction'
 import fs from 'fs'
 
 export async function GET(request: NextRequest) {
@@ -45,8 +46,8 @@ export async function GET(request: NextRequest) {
     }
 
     return NextResponse.json({
-      debugLogs,
-      startupLogs,
+      debugLogs: redactSecrets(debugLogs),
+      startupLogs: redactSecrets(startupLogs),
       systemInfo,
       timestamp: new Date().toISOString(),
     })

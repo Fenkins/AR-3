@@ -1,5 +1,6 @@
 import { prisma } from './prisma'
 import { buildCurlDownloadInvocation, buildSnapshotDownloadInvocation, isHuggingFaceRepoUrl, modelIdFromHuggingFaceRepoUrl } from './huggingface-utils'
+import { redactSecrets } from './secret-redaction'
 import fs from 'fs'
 import path from 'path'
 import crypto from 'crypto'
@@ -134,11 +135,12 @@ export async function addToCache(options: AddCacheOptions): Promise<CacheEntry> 
       status: 'COMPLETED' as const,
     }
   } catch (err) {
-    console.error(`[ModelCache] Download failed for ${downloadUrl}:`, err)
+    const redactedError = redactSecrets(err)
+    console.error(`[ModelCache] Download failed for ${downloadUrl}: ${redactedError}`)
     try {
       await prisma.modelCache.update({ where: { id: entry.id }, data: { status: 'FAILED' } })
     } catch {}
-    throw new Error(`Failed to download from ${downloadUrl}: ${err instanceof Error ? err.message : String(err)}`)
+    throw new Error(`Failed to download from ${downloadUrl}: ${redactedError}`)
   }
 }
 
@@ -207,4 +209,3 @@ export function formatBytes(bytes: number): string {
   const i = Math.floor(Math.log(bytes) / Math.log(k))
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`
 }
-
