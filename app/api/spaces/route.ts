@@ -3,6 +3,7 @@ import { authMiddleware } from '../middleware'
 import { prisma } from '@/lib/prisma'
 import { normalizeSpaceForClient } from '@/lib/space-api-shape'
 import { startSpace } from '@/lib/research-engine'
+import { getCacheEntrySizeBytes, getSpaceCacheDiskSize } from '@/lib/model-cache'
 
 export async function GET(request: NextRequest) {
   try {
@@ -48,16 +49,16 @@ export async function GET(request: NextRequest) {
 
     // Get cache sizes for all spaces
     const allCaches = await prisma.modelCache.findMany({
-      select: { spaceId: true, fileSize: true },
+      select: { spaceId: true, filePath: true, fileSize: true },
     })
     const cacheSizeMap: Record<string, number> = {}
     for (const cache of allCaches) {
-      cacheSizeMap[cache.spaceId] = (cacheSizeMap[cache.spaceId] || 0) + Number(cache.fileSize)
+      cacheSizeMap[cache.spaceId] = (cacheSizeMap[cache.spaceId] || 0) + getCacheEntrySizeBytes(cache)
     }
 
     const spacesWithCacheSize = spaces.map(space => normalizeSpaceForClient({
       ...space,
-      cacheSize: cacheSizeMap[space.id] || 0,
+      cacheSize: Math.max(cacheSizeMap[space.id] || 0, getSpaceCacheDiskSize(space.id)),
     }))
 
     return NextResponse.json({ spaces: spacesWithCacheSize })

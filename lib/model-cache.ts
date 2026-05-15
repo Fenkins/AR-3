@@ -6,6 +6,7 @@ import path from 'path'
 import crypto from 'crypto'
 
 const CACHE_BASE_DIR = '/opt/AR-3/model_cache'
+const PRISMA_INT_MAX = 2147483647
 
 export interface CacheEntry {
   id: string
@@ -32,6 +33,10 @@ function getSpaceCacheDir(spaceId: string): string {
   return path.join(CACHE_BASE_DIR, spaceId)
 }
 
+export function getSpaceCacheDiskSize(spaceId: string): number {
+  return getPathSizeBytes(getSpaceCacheDir(spaceId))
+}
+
 /** Get HuggingFace token from SystemConfig (returns empty string if not set) */
 export async function getHfToken(): Promise<string> {
   try {
@@ -49,6 +54,31 @@ function ensureSpaceDir(spaceId: string): void {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true })
   }
+}
+
+function getPathSizeBytes(filePath: string, seen = new Set<string>()): number {
+  try {
+    if (!fs.existsSync(filePath)) return 0
+    const realPath = fs.realpathSync(filePath)
+    if (seen.has(realPath)) return 0
+    seen.add(realPath)
+
+    const stats = fs.statSync(realPath)
+    if (!stats.isDirectory()) return stats.size
+
+    let total = 0
+    for (const entry of fs.readdirSync(realPath, { withFileTypes: true })) {
+      total += getPathSizeBytes(path.join(realPath, entry.name), seen)
+    }
+    return total
+  } catch {
+    return 0
+  }
+}
+
+export function getCacheEntrySizeBytes(entry: { filePath: string; fileSize: number | bigint }): number {
+  const diskSize = getPathSizeBytes(entry.filePath)
+  return diskSize > 0 ? diskSize : Number(entry.fileSize || 0)
 }
 
 export async function addToCache(options: AddCacheOptions): Promise<CacheEntry> {
@@ -96,7 +126,7 @@ export async function addToCache(options: AddCacheOptions): Promise<CacheEntry> 
         const cachedPath = output.split('\n').pop()?.trim()
         if (!cachedPath) throw new Error(`snapshot_download produced no path for ${modelId}`)
         filePath = cachedPath
-        fileSize = 1 // model repo; actual aggregate size is expensive to compute and not needed for loading
+        fileSize = getPathSizeBytes(cachedPath)
         console.log(`[ModelCache] Downloaded model ${modelId} to ${cachedPath}`)
       } else {
         const invocation = buildCurlDownloadInvocation(downloadUrl, filePath, hfToken)
@@ -124,7 +154,7 @@ export async function addToCache(options: AddCacheOptions): Promise<CacheEntry> 
 
     await prisma.modelCache.update({
       where: { id: entry.id },
-      data: { filePath, fileSize, checksum, status: 'COMPLETED' },
+      data: { filePath, fileSize: Math.min(fileSize, PRISMA_INT_MAX), checksum, status: 'COMPLETED' },
     })
 
     return {
@@ -158,11 +188,12 @@ export async function getSpaceCache(spaceId: string): Promise<CacheEntry[]> {
 }
 
 export async function getSpaceCacheSize(spaceId: string): Promise<number> {
-  const result = await prisma.modelCache.aggregate({
+  const entries = await prisma.modelCache.findMany({
     where: { spaceId },
-    _sum: { fileSize: true },
+    select: { filePath: true, fileSize: true },
   })
-  return Number(result._sum.fileSize || 0)
+  const trackedSize = entries.reduce((total, entry) => total + getCacheEntrySizeBytes(entry), 0)
+  return Math.max(trackedSize, getSpaceCacheDiskSize(spaceId))
 }
 
 export async function removeFromCache(id: string): Promise<void> {

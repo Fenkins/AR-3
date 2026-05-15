@@ -444,7 +444,7 @@ function SpacesView() {
               </div>
               <div className="flex justify-between">
                 <span className="text-dark-400">Model Cache:</span>
-                <span className="text-dark-200">{space._count?.modelCaches || 0} items{space.cacheSize ? ` (${formatBytes(space.cacheSize)})` : ''}</span>
+                <span className="text-dark-200">{space._count?.modelCaches || 0} items · {formatBytes(space.cacheSize || 0)}</span>
               </div>
             </div>
           </div>
