@@ -61,6 +61,27 @@ const repeatedCodeFailure = (id, error) => ({
   }],
 })
 
+const repeatedJsonCommandFailure = (id, dependencies = []) => ({
+  id,
+  stageId: 'stage_3',
+  name: 'Implementation ' + id,
+  status: 'FAILED',
+  failureMode: 'RUNTIME_' + id,
+  feedback: 'GPU worker rejected runtime output',
+  steps: [{
+    status: 'FAILED',
+    result: JSON.stringify({
+      action: 'run_python',
+      dependencies,
+      code: [
+        'import json',
+        'import torch',
+        'print(json.dumps({"cuda_available": torch.cuda.is_available(), "metric": 0.1}))',
+      ].join('\n'),
+    }),
+  }],
+})
+
 {
   const first = variantFailureSignature(repeatedFailure('a', 'retry 1'))
   const second = variantFailureSignature(repeatedFailure('b', 'retry 2'))
@@ -102,6 +123,28 @@ const repeatedCodeFailure = (id, error) => ({
   assert.equal(assessment.stuck, true)
   assert.equal(assessment.repeatedCount, 3)
   assert.match(assessment.reason, /same normalized executable code signature/)
+}
+
+{
+  const first = variantCodeSignature(repeatedJsonCommandFailure('a', ['torch==2.4.0', 'transformers==4.45.0']))
+  const second = variantCodeSignature(repeatedJsonCommandFailure('b', ['transformers==4.45.0', 'torch==2.4.0']))
+  assert.equal(first, second, 'dependency order should not create a new executable signature')
+}
+
+{
+  const first = variantCodeSignature(repeatedJsonCommandFailure('a', ['torch==2.4.0']))
+  const second = variantCodeSignature(repeatedJsonCommandFailure('b', ['torch==2.5.0']))
+  assert.notEqual(first, second, 'changed dependency pins should reset repeated executable signatures')
+}
+
+{
+  const assessment = assessDeadLoop([
+    repeatedJsonCommandFailure('a', ['torch==2.4.0']),
+    repeatedJsonCommandFailure('b', ['torch==2.5.0']),
+    repeatedJsonCommandFailure('c', ['torch==2.6.0']),
+  ], 'stage_3')
+  assert.equal(assessment.stuck, false)
+  assert.match(assessment.reason, /varied failure signatures|not enough failed variants/)
 }
 
 {

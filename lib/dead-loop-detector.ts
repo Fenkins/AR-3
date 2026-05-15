@@ -134,7 +134,17 @@ function normalizeCodeText(value: string): string {
     .slice(0, 20000)
 }
 
-function extractExecutableCodeText(value: string): string | null {
+function normalizeDependencies(value: unknown): string {
+  if (!Array.isArray(value)) return ''
+  const dependencies = value
+    .filter((dependency): dependency is string => typeof dependency === 'string')
+    .map(dependency => dependency.trim().toLowerCase())
+    .filter(Boolean)
+    .sort()
+  return dependencies.length ? JSON.stringify(dependencies) : ''
+}
+
+function extractExecutableSignatureText(value: string): string | null {
   const text = String(value || '')
   const codeBlock = text.match(/\[CODE\]\s*([\s\S]*?)\s*\[\/CODE\]/i)
   if (codeBlock?.[1]?.trim()) return codeBlock[1]
@@ -143,7 +153,11 @@ function extractExecutableCodeText(value: string): string | null {
     try {
       const parsed = JSON.parse(candidate)
       if (parsed?.action === 'run_python' && typeof parsed.code === 'string' && parsed.code.trim()) {
-        return parsed.code
+        const normalizedCode = normalizeCodeText(parsed.code)
+        const normalizedDependencies = normalizeDependencies(parsed.dependencies)
+        return [normalizedCode, normalizedDependencies ? `dependencies=${normalizedDependencies}` : '']
+          .filter(Boolean)
+          .join('\n---COMMAND-CONTEXT---\n')
       }
     } catch {}
   }
@@ -160,7 +174,7 @@ export function variantCodeSignature(variant: VariantLike): string | null {
   ]
 
   for (const value of texts) {
-    const code = extractExecutableCodeText(value)
+    const code = extractExecutableSignatureText(value)
     if (!code) continue
     const normalized = normalizeCodeText(code)
     if (normalized) return hashText(normalized)
