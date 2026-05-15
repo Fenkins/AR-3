@@ -186,6 +186,8 @@ export interface Variant {
   gradingWarning?: string
 }
 
+const VARIANT_AI_TIMEOUT_MS = 45000
+
 export interface Step {
   id: string
   variantId: string
@@ -342,9 +344,11 @@ Consider:
 
 Respond with just a number between 2-5.`
 
-      const response = await callAI(agentConfig, [
-        { role: 'user', content: prompt },
-      ])
+      const response = await withTimeout(
+        callAI(agentConfig, [{ role: 'user', content: prompt }]),
+        VARIANT_AI_TIMEOUT_MS,
+        `variant count for ${stageConfig.name}`
+      )
 
       const match = response.content.match(/\d+/)
       numVariants = match ? Math.min(Math.max(parseInt(match[0]), 2), 5) : 3
@@ -437,7 +441,7 @@ CRITICAL: You MUST generate AT LEAST ${numStepsTarget} steps. Replace ALL step p
       try {
         response = await withTimeout(
           callAI(agentConfig, [{ role: 'user', content: variantPrompt }]),
-          300000,
+          VARIANT_AI_TIMEOUT_MS,
           `variant ${i + 1} attempt ${attempt + 1}`
         )
       } catch (err: any) {
