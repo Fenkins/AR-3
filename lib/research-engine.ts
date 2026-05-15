@@ -3650,7 +3650,7 @@ export function runThinkingSetupBackground(spaceId: string): void {
 
       debugLog(`[runThinkingSetup] COMPLETED -- background loop started, variants will generate on-demand`)
       // Mark COMPLETED immediately -- variants generate lazily on first stage execution
-      await prisma.space.update({ where: { id: spaceId }, data: { setupStatus: 'COMPLETED', setupStep: null } })
+      await prisma.space.update({ where: { id: spaceId }, data: { setupStatus: 'COMPLETED', setupError: null, setupStep: null } })
 
     } catch (err: any) {
       debugLog(`[runThinkingSetupBackground] Unexpected error at step '${step}': ${err.message}`)
