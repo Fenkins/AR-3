@@ -550,7 +550,8 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
   const totalSteps = runningVariant?.steps.length || 0
 
   const stageVariantsCompleted = (stageId: string) => allVariants.filter(v => v.stageId === stageId && v.status === 'COMPLETED').length
-  const visibleHistoryVariants = allVariants.filter(v => v.stageId !== currentStage?.id)
+  const currentVariantIds = new Set(variants.map(v => v.id))
+  const visibleHistoryVariants = allVariants.filter(v => !currentVariantIds.has(v.id))
 
   const toggleHistoryExpand = (id: string) => {
     setExpandedHistoryIds(prev => {
