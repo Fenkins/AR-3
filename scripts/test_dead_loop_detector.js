@@ -43,6 +43,29 @@ const repeatedNonImprovingCompletion = (id, metric = '0.1000', grade = 0) => ({
   }],
 })
 
+const repeatedNoisyMetricCompletion = (id, accuracy = 0.42, grade = 0) => ({
+  id,
+  stageId: 'stage_3',
+  name: `Implementation ${id}`,
+  status: 'COMPLETED',
+  grade,
+  feedback: 'No measurable improvement over baseline.',
+  steps: [{
+    status: 'COMPLETED',
+    result: [
+      `started_at=2026-05-15T16:37:0${id}Z artifact=/tmp/ar3-workbenches/${id}/metrics.json`,
+      JSON.stringify({
+        metrics: {
+          accuracy,
+          cuda_available: true,
+          elapsed_ms: 1000 + id.charCodeAt(0),
+          artifact_path: `/tmp/ar3-workbenches/${id}/metrics.json`,
+        },
+      }),
+    ].join('\n'),
+  }],
+})
+
 const repeatedCodeFailure = (id, error) => ({
   id,
   stageId: 'stage_3',
@@ -250,6 +273,32 @@ const repeatedJsonCommandWithModels = (id, modelContext = {}) => ({
     repeatedNonImprovingCompletion('a', '0.1000'),
     repeatedNonImprovingCompletion('b', '0.2000'),
     repeatedNonImprovingCompletion('c', '0.3000'),
+  ], 'stage_3')
+  assert.equal(assessment.stuck, false)
+}
+
+{
+  const first = variantProgressSignature(repeatedNoisyMetricCompletion('a'))
+  const second = variantProgressSignature(repeatedNoisyMetricCompletion('b'))
+  assert.equal(first, second, 'same metrics should create the same progress signature despite noisy runtime fields')
+}
+
+{
+  const assessment = assessDeadLoop([
+    repeatedNoisyMetricCompletion('a'),
+    repeatedNoisyMetricCompletion('b'),
+    repeatedNoisyMetricCompletion('c'),
+  ], 'stage_3')
+  assert.equal(assessment.stuck, true)
+  assert.equal(assessment.repeatedCount, 3)
+  assert.match(assessment.reason, /no grade improvement/)
+}
+
+{
+  const assessment = assessDeadLoop([
+    repeatedNoisyMetricCompletion('a', 0.42),
+    repeatedNoisyMetricCompletion('b', 0.43),
+    repeatedNoisyMetricCompletion('c', 0.44),
   ], 'stage_3')
   assert.equal(assessment.stuck, false)
 }

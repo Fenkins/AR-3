@@ -50,6 +50,65 @@ function normalizeProgressText(value: string): string {
     .slice(0, 1600)
 }
 
+function metricObjectCandidates(text: string): Record<string, unknown>[] {
+  const candidates: Record<string, unknown>[] = []
+  for (const candidate of jsonObjectCandidates(text)) {
+    try {
+      const parsed = JSON.parse(candidate)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        candidates.push(parsed)
+        const metrics = (parsed as Record<string, unknown>).metrics
+        if (metrics && typeof metrics === 'object' && !Array.isArray(metrics)) {
+          candidates.push(metrics as Record<string, unknown>)
+        }
+      }
+    } catch {}
+  }
+
+  const inlineMetrics = text.match(/metrics\s*=\s*(\{[^\n\r]+\})/gi) || []
+  for (const match of inlineMetrics) {
+    const objectText = match.replace(/^metrics\s*=\s*/i, '')
+    try {
+      const parsed = JSON.parse(objectText)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        candidates.push(parsed)
+      }
+    } catch {}
+  }
+
+  return candidates
+}
+
+function normalizeMetricValue(value: unknown): string | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return Number(value.toPrecision(8)).toString()
+  if (typeof value === 'boolean') return String(value)
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (/^-?\d+(?:\.\d+)?(?:e[+-]?\d+)?$/i.test(trimmed)) return Number(trimmed).toPrecision(8).replace(/(?:\.0+|(?<=\d)0+)$/, '')
+    if (/^(true|false)$/i.test(trimmed)) return trimmed.toLowerCase()
+  }
+  return null
+}
+
+function isEphemeralMetricKey(key: string): boolean {
+  return /(?:^|_)(?:job|run|id|uuid|path|file|artifact|timestamp|created|updated|duration|elapsed|seconds|time_ms|latency_ms)(?:$|_)/i.test(key)
+}
+
+function extractMetricSignatureText(value: string): string | null {
+  const entries: string[] = []
+  for (const candidate of metricObjectCandidates(value)) {
+    for (const [key, rawValue] of Object.entries(candidate)) {
+      if (isEphemeralMetricKey(key)) continue
+      const normalizedValue = normalizeMetricValue(rawValue)
+      if (normalizedValue === null) continue
+      entries.push(`${key.trim().toLowerCase()}=${normalizedValue}`)
+    }
+  }
+
+  const uniqueEntries = Array.from(new Set(entries)).sort()
+  return uniqueEntries.length ? uniqueEntries.join('\n') : null
+}
+
 export function variantFailureSignature(variant: VariantLike): string | null {
   if (variant.status !== 'FAILED') return null
 
@@ -81,6 +140,13 @@ export function variantProgressSignature(variant: VariantLike): string | null {
     .map(step => [step.result, step.feedback].filter(Boolean).join(' '))
     .filter(Boolean)
     .join(' ')
+  const metricText = completedSteps
+    .map(step => [step.result, step.feedback].filter(Boolean).join('\n'))
+    .map(extractMetricSignatureText)
+    .filter((signature): signature is string => Boolean(signature))
+    .join('\n')
+  if (metricText) return hashText([variant.stageId || '', metricText].filter(Boolean).join('\n'))
+
   const raw = [
     variant.stageId || '',
     variant.failureMode || '',
