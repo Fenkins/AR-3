@@ -255,6 +255,27 @@ function testCpuOnlyJsonMetricsAreNotValidGpuEvidence() {
   assert.match(assessed.reason, /runtime GPU evidence/i)
 }
 
+function testFalseCudaAvailabilityIsNotRuntimeGpuEvidence() {
+  const assessed = contract.assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    fallbackUsed: false,
+    success: true,
+    output: JSON.stringify({ accuracy: 0.91, loss: 0.12, cuda_available: false, device: 'cpu' }),
+  })
+  assert.equal(assessed.valid, false)
+  assert.match(assessed.reason, /runtime GPU evidence/i)
+}
+
+function testGpuIdentityCanValidateRuntimeEvidenceWhenTorchCudaIsFalse() {
+  const assessed = contract.assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    fallbackUsed: false,
+    success: true,
+    output: JSON.stringify({ accuracy: 0.91, loss: 0.12, cuda_available: false, gpu_name: 'RTX 4090', gpu_memory_gb: 24 }),
+  })
+  assert.equal(assessed.valid, true, assessed.reason)
+}
+
 function testArtifactOnlyOutputIsNotValidGpuEvidence() {
   const assessed = contract.assessGpuExecutionEvidence({
     stageName: 'Implementation',
@@ -598,6 +619,8 @@ testPreparationProbeShapeIsInvalidForImplementationEvenIfFallbackFlagIsLost()
 testLongProseOutputIsNotValidGpuEvidence()
 testJsonMetricsOutputIsValidGpuEvidence()
 testCpuOnlyJsonMetricsAreNotValidGpuEvidence()
+testFalseCudaAvailabilityIsNotRuntimeGpuEvidence()
+testGpuIdentityCanValidateRuntimeEvidenceWhenTorchCudaIsFalse()
 testArtifactOnlyOutputIsNotValidGpuEvidence()
 testStrictGpuCommandRejectsCpuOnlyMetricsCode()
 testStrictGpuCommandAcceptsExecutableGpuProbeCode()
