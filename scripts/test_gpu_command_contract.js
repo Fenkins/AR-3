@@ -90,4 +90,72 @@ function testManifestExpectedArtifactsAcceptBasenameInArtifactPath() {
 
 testManifestExpectedArtifactsMustBeReported()
 testManifestExpectedArtifactsAcceptBasenameInArtifactPath()
+
+function testSnakeCaseManifestEvidenceAliasesAreEnforced() {
+  const result = assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    success: true,
+    output: JSON.stringify({
+      cuda_available: true,
+      gpu_name: 'Test GPU',
+      runtime_seconds: 0.02,
+      artifacts: ['/tmp/ar3-workbenches/alias-smoke/metrics.json'],
+    }),
+    preparationManifest: {
+      smoke_tests: [
+        {
+          name: 'alias-smoke',
+          expected_evidence: ['cuda_available', 'tensor_sum'],
+        },
+      ],
+      grading_criteria: [
+        'stdout contains JSON metrics with cuda_available and tensor_sum',
+      ],
+      workbench: {
+        reuse_key: 'alias-smoke',
+        expected_artifacts: ['metrics.json'],
+      },
+    },
+  })
+
+  assert.strictEqual(result.valid, false)
+  assert.match(result.reason, /expected evidence/)
+  assert.match(result.reason, /tensor_sum/)
+}
+
+function testSnakeCaseManifestArtifactAliasesAreEnforced() {
+  const result = assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    success: true,
+    output: JSON.stringify({
+      cuda_available: true,
+      gpu_name: 'Test GPU',
+      tensor_sum: 120,
+      runtime_seconds: 0.02,
+      artifacts: ['/tmp/ar3-workbenches/alias-smoke/metrics.json'],
+    }),
+    preparationManifest: {
+      smoke_tests: [
+        {
+          name: 'alias-smoke',
+          expected_evidence: ['cuda_available', 'tensor_sum'],
+        },
+      ],
+      grading_criteria: [
+        'stdout contains JSON metrics with cuda_available and tensor_sum',
+      ],
+      workbench: {
+        reuse_key: 'alias-smoke',
+        expected_artifacts: ['metrics.json', 'model-status.json'],
+      },
+    },
+  })
+
+  assert.strictEqual(result.valid, false)
+  assert.match(result.reason, /expected artifacts/)
+  assert.match(result.reason, /model-status\.json/)
+}
+
+testSnakeCaseManifestEvidenceAliasesAreEnforced()
+testSnakeCaseManifestArtifactAliasesAreEnforced()
 console.log('gpu-command-contract tests passed')

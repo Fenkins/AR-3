@@ -242,20 +242,22 @@ export function assessGpuExecutionEvidence(input: GpuEvidenceInput): GpuEvidence
 
 function manifestGradingCriteria(preparationManifest: unknown): string[] {
   if (!preparationManifest || typeof preparationManifest !== 'object' || Array.isArray(preparationManifest)) return []
-  const criteria = (preparationManifest as Record<string, unknown>).gradingCriteria
+  const source = preparationManifest as Record<string, unknown>
+  const criteria = source.gradingCriteria || source.grading_criteria
   return Array.isArray(criteria) ? criteria.map(String).filter(Boolean).slice(0, 20) : []
 }
 
 function manifestExpectedEvidence(preparationManifest: unknown): string[] {
   if (!preparationManifest || typeof preparationManifest !== 'object' || Array.isArray(preparationManifest)) return []
-  const smokeTests = (preparationManifest as Record<string, unknown>).smokeTests
+  const source = preparationManifest as Record<string, unknown>
+  const smokeTests = source.smokeTests || source.smoke_tests
   if (!Array.isArray(smokeTests)) return []
 
   const expected = new Set<string>()
   for (const smokeTest of smokeTests.slice(0, 20)) {
     if (!smokeTest || typeof smokeTest !== 'object' || Array.isArray(smokeTest)) continue
     const row = smokeTest as Record<string, unknown>
-    const evidence = row.expectedEvidence
+    const evidence = row.expectedEvidence || row.expected_evidence
     if (!Array.isArray(evidence)) continue
     for (const item of evidence.slice(0, 20)) {
       const normalized = String(item || '').trim()
@@ -269,7 +271,8 @@ function manifestExpectedArtifacts(preparationManifest: unknown): string[] {
   if (!preparationManifest || typeof preparationManifest !== 'object' || Array.isArray(preparationManifest)) return []
   const workbench = (preparationManifest as Record<string, unknown>).workbench
   if (!workbench || typeof workbench !== 'object' || Array.isArray(workbench)) return []
-  const artifacts = (workbench as Record<string, unknown>).expectedArtifacts
+  const source = workbench as Record<string, unknown>
+  const artifacts = source.expectedArtifacts || source.expected_artifacts
   if (!Array.isArray(artifacts)) return []
 
   return artifacts
