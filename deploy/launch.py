@@ -5,16 +5,18 @@ Uses direct VAST.ai API to launch RTX 3060 instance with cloudflared tunnel.
 """
 import subprocess, json, time, sys, os, re
 
-API_KEY = "900b73f6045d2c94cf38d0deac1dd5d5f1b5ac12c6a9c523c5f6d13772a2d0d1d"
 AR3_REPO = "https://github.com/Fenkins/AR-3.git"
 OUTPUT_FILE = "/tmp/AR-3/deploy/active_instance.json"
 
 BASE_URL = "https://console.vast.ai/api/v0"
 
 def api(method, path, data=None):
+    api_key = os.environ.get("VAST_API_KEY", "").strip()
+    if not api_key:
+        return {"error": "VAST_API_KEY environment variable is required"}
     cmd = [
         "curl", "-s", "-X", method,
-        "-H", f"Authorization: Bearer {API_KEY}",
+        "-H", f"Authorization: Bearer {api_key}",
         "-H", "Content-Type: application/json"
     ]
     url = f"{BASE_URL}{path}"

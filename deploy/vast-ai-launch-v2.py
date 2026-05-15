@@ -13,12 +13,15 @@ import subprocess
 import os
 from datetime import datetime
 
-API_KEY = "5d2d46bd85397a2196ae40d659cfa52a6efd1e871d1377dd8b0631359115ae1e"
 BASE_URL = "https://console.vast.ai"
 
 def get_headers():
+    api_key = os.environ.get("VAST_API_KEY", "").strip()
+    if not api_key:
+        print("ERROR: VAST_API_KEY environment variable is required")
+        sys.exit(1)
     return {
-        "Authorization": f"Bearer {API_KEY}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
         "Accept": "application/json",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36"
