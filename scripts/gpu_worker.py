@@ -613,6 +613,35 @@ print(json.dumps({
     return {'success': True, 'output': '\n'.join(output_parts), 'error': None}
 
 
+def _append_preparation_run_history(context: dict, manifest_path: Path, success: bool, output: str, error: str = None) -> str:
+    """Append a bounded preparation history entry in the persistent workbench."""
+    history_path = Path(context['workbench_dir']) / 'preparation_run_history.json'
+    entry = {
+        'timestamp': datetime.now().isoformat(),
+        'manifestPath': str(manifest_path),
+        'success': bool(success),
+        'error': error,
+        'outputTail': str(output or '')[-4000:],
+    }
+    try:
+        if history_path.exists():
+            with open(history_path, 'r') as f:
+                history = json.load(f)
+            if not isinstance(history, list):
+                history = []
+        else:
+            history = []
+    except Exception:
+        history = []
+    history.append(entry)
+    history = history[-20:]
+    tmp_path = history_path.with_suffix('.json.tmp')
+    with open(tmp_path, 'w') as f:
+        json.dump(history, f, indent=2, sort_keys=True)
+    os.replace(tmp_path, history_path)
+    return str(history_path)
+
+
 def prepare_manifest_environment(manifest: dict, context: dict, timeout: int = 900, job_id: str = '') -> dict:
     """Install manifest dependencies, resolve models, and run smoke tests before experiment code."""
     if not isinstance(manifest, dict):
@@ -624,14 +653,16 @@ def prepare_manifest_environment(manifest: dict, context: dict, timeout: int = 9
 
     dep_result = install_declared_dependencies(manifest.get('dependencies') or [], context, timeout=timeout, job_id=job_id)
     output_parts = [f'preparation_manifest={manifest_path}']
+
+    def finish(success: bool, error: str = None) -> dict:
+        history_path = _append_preparation_run_history(context, manifest_path, success, '\n'.join(output_parts), error)
+        output_with_history = '\n'.join(output_parts + [f'preparation_run_history={history_path}'])
+        return {'success': success, 'output': output_with_history, 'error': error}
+
     if dep_result.get('output'):
         output_parts.append('dependency_install:\n' + dep_result.get('output', ''))
     if not dep_result.get('success'):
-        return {
-            'success': False,
-            'output': '\n'.join(output_parts),
-            'error': 'Preparation dependency installation failed: ' + str(dep_result.get('error', 'unknown')),
-        }
+        return finish(False, 'Preparation dependency installation failed: ' + str(dep_result.get('error', 'unknown')))
 
     manifest_needs_torch = _code_or_deps_need_torch(
         '\n'.join(
@@ -645,26 +676,18 @@ def prepare_manifest_environment(manifest: dict, context: dict, timeout: int = 9
         if torch_result.get('output'):
             output_parts.append('torch_cuda_workbench:\n' + torch_result.get('output', ''))
         if not torch_result.get('success'):
-            return {
-                'success': False,
-                'output': '\n'.join(output_parts),
-                'error': 'Preparation torch CUDA workbench validation failed: ' + str(torch_result.get('error', 'unknown')),
-            }
+            return finish(False, 'Preparation torch CUDA workbench validation failed: ' + str(torch_result.get('error', 'unknown')))
         context['env'] = _without_cuda_toolkit_ld_path(context['env'])
 
     model_resolution = resolve_manifest_models(manifest, context, timeout=timeout)
     if model_resolution.get('output'):
         output_parts.append('model_resolution:\n' + model_resolution.get('output', ''))
     if not model_resolution.get('success'):
-        return {
-            'success': False,
-            'output': '\n'.join(output_parts),
-            'error': 'Preparation model resolution failed: ' + str(model_resolution.get('error', 'unknown')),
-        }
+        return finish(False, 'Preparation model resolution failed: ' + str(model_resolution.get('error', 'unknown')))
 
     for model in manifest.get('models') or []:
         if not isinstance(model, dict):
-            return {'success': False, 'output': '\n'.join(output_parts), 'error': 'Invalid model entry in preparation manifest'}
+            return finish(False, 'Invalid model entry in preparation manifest')
         if model.get('required') is not True:
             continue
         model_id = str(model.get('id') or 'required-model')
@@ -674,22 +697,22 @@ def prepare_manifest_environment(manifest: dict, context: dict, timeout: int = 9
             continue
         argv, err = _safe_smoke_command(smoke_command)
         if err:
-            return {'success': False, 'output': '\n'.join(output_parts), 'error': f'Required model smoke test {model_id!r} rejected: {err}'}
+            return finish(False, f'Required model smoke test {model_id!r} rejected: {err}')
         smoke_timeout = max(5, min(int(model.get('timeoutSeconds') or 300), timeout))
         result = subprocess.run(argv, capture_output=True, text=True, timeout=smoke_timeout, cwd=context['workbench_dir'], env=context['env'])
         stdout = result.stdout.strip()
         stderr = result.stderr.strip()
         output_parts.append(f'model_smoke {model_id} exit={result.returncode}\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}')
         if result.returncode != 0:
-            return {'success': False, 'output': '\n'.join(output_parts), 'error': f'Required model smoke test {model_id!r} failed'}
+            return finish(False, f'Required model smoke test {model_id!r} failed')
 
     for smoke in manifest.get('smokeTests') or []:
         if not isinstance(smoke, dict):
-            return {'success': False, 'output': '\n'.join(output_parts), 'error': 'Invalid smoke test entry in preparation manifest'}
+            return finish(False, 'Invalid smoke test entry in preparation manifest')
         name = str(smoke.get('name') or 'smoke-test')
         argv, err = _safe_smoke_command(smoke.get('command') or '')
         if err:
-            return {'success': False, 'output': '\n'.join(output_parts), 'error': f'Preparation smoke test {name!r} rejected: {err}'}
+            return finish(False, f'Preparation smoke test {name!r} rejected: {err}')
         smoke_timeout = int(smoke.get('timeoutSeconds') or min(timeout, 300))
         smoke_timeout = max(5, min(smoke_timeout, timeout))
         result = subprocess.run(argv, capture_output=True, text=True, timeout=smoke_timeout, cwd=context['workbench_dir'], env=context['env'])
@@ -697,17 +720,13 @@ def prepare_manifest_environment(manifest: dict, context: dict, timeout: int = 9
         stderr = result.stderr.strip()
         output_parts.append(f'smoke_test {name} exit={result.returncode}\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}')
         if result.returncode != 0:
-            return {'success': False, 'output': '\n'.join(output_parts), 'error': f'Preparation smoke test {name!r} failed'}
+            return finish(False, f'Preparation smoke test {name!r} failed')
         expected = [str(e) for e in smoke.get('expectedEvidence') or []]
         combined = stdout + '\n' + stderr
         missing = [e for e in expected if e and e not in combined]
         if missing:
-            return {
-                'success': False,
-                'output': '\n'.join(output_parts),
-                'error': f'Preparation smoke test {name!r} missing expected evidence: {missing}',
-            }
-    return {'success': True, 'output': '\n'.join(output_parts), 'error': None}
+            return finish(False, f'Preparation smoke test {name!r} missing expected evidence: {missing}')
+    return finish(True, None)
 
 
 def extract_gpu_command(prompt: str) -> dict:

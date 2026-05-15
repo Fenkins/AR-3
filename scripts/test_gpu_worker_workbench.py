@@ -91,6 +91,47 @@ def test_run_manifest_smoke_tests_executes_in_workbench_and_records_manifest_fil
         assert "SMOKE_OK" in result["output"]
         assert Path(context["workbench_dir"], "preparation_manifest.json").is_file()
         assert Path(context["artifacts_dir"], "smoke.txt").read_text() == "ok"
+        history_path = Path(context["workbench_dir"], "preparation_run_history.json")
+        assert history_path.is_file()
+        history = __import__("json").loads(history_path.read_text())
+        assert len(history) == 1
+        assert history[0]["success"] is True
+        assert "SMOKE_OK" in history[0]["outputTail"]
+        assert f"preparation_run_history={history_path}" in result["output"]
+    finally:
+        if old_root is None:
+            os.environ.pop("AR3_WORKBENCH_ROOT", None)
+        else:
+            os.environ["AR3_WORKBENCH_ROOT"] = old_root
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_manifest_preparation_history_records_validation_failures():
+    root = tempfile.mkdtemp(prefix="ar3-worker-manifest-history-fail-test-")
+    old_root = os.environ.get("AR3_WORKBENCH_ROOT")
+    os.environ["AR3_WORKBENCH_ROOT"] = root
+    try:
+        context = gpu_worker.prepare_workbench({"jobId": "gpu_space-manifest-fail_1", "spaceId": "space manifest fail"})
+        manifest = {
+            "dependencies": [],
+            "smokeTests": [
+                {
+                    "name": "missing-evidence",
+                    "command": "python -c 'print(\"ONLY_THIS\")'",
+                    "expectedEvidence": ["MISSING_EVIDENCE"],
+                    "timeoutSeconds": 10,
+                }
+            ],
+        }
+        result = gpu_worker.prepare_manifest_environment(manifest, context)
+        assert result["success"] is False, result
+        assert "missing expected evidence" in result["error"]
+        history_path = Path(context["workbench_dir"], "preparation_run_history.json")
+        history = __import__("json").loads(history_path.read_text())
+        assert len(history) == 1
+        assert history[0]["success"] is False
+        assert "MISSING_EVIDENCE" in history[0]["error"]
+        assert "ONLY_THIS" in history[0]["outputTail"]
     finally:
         if old_root is None:
             os.environ.pop("AR3_WORKBENCH_ROOT", None)
@@ -481,6 +522,7 @@ if __name__ == "__main__":
     test_strategy4_line_assembly_does_not_crash_on_markdown_headers()
     test_extract_preparation_manifest_from_context_and_prompt()
     test_run_manifest_smoke_tests_executes_in_workbench_and_records_manifest_file()
+    test_manifest_preparation_history_records_validation_failures()
     test_safe_smoke_command_uses_current_python_interpreter()
     test_safe_smoke_command_converts_python_heredoc_to_inline_code()
     test_manifest_torch_dependencies_are_smoked_and_repaired_before_manifest_smoke_tests()
