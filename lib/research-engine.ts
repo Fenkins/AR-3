@@ -2496,6 +2496,29 @@ export function startBackgroundLoop(spaceId: string): void {
         // No PENDING variants for current stage -- check if ALL variants for this stage are done
         // (all COMPLETED or non-existent). If so, advance to next stage and generate its variants.
         if (currentStageVariants.length > 0) {
+          const zeroStepFailures = currentStageVariants.filter(v =>
+            (v.steps || []).length === 0 && ['FAILED', 'PENDING_REVIEW'].includes(String(v.status || '').toUpperCase())
+          )
+          if (zeroStepFailures.length === currentStageVariants.length) {
+            debugLog(`[startBackgroundLoop] ${currentStage?.name} has only failed zero-step variants; pruning and regenerating current stage instead of advancing`)
+            const variantIds = currentStageVariants.map(v => v.id)
+            await prisma.variantStep.deleteMany({ where: { variantId: { in: variantIds } } })
+            await prisma.variant.deleteMany({ where: { id: { in: variantIds } } })
+            updateExecutionState(spaceId, {
+              variants: state.variants.filter(v => v.stageId !== currentStageId),
+            })
+            try {
+              const spaceForConfig = await prisma.space.findUnique({ where: { id: spaceId } })
+              const numVariants = (spaceForConfig as any)?.defaultNumVariants ?? currentStage?.numVariants ?? 3
+              const stepsPerVariant = (spaceForConfig as any)?.defaultStepsPerVariant ?? currentStage?.stepsPerVariant ?? 25
+              await generateStageVariants(spaceId, currentStageId, numVariants, stepsPerVariant)
+            } catch (err: any) {
+              debugLog(`[startBackgroundLoop] Failed to regenerate zero-step variants for ${currentStage?.name}: ${err.message}`)
+            }
+            scheduleNext()
+            return
+          }
+
           const allDone = currentStageVariants.every(v => v.status === 'COMPLETED' || v.status === 'FAILED')
           if (allDone) {
             const deadLoop = assessDeadLoop(state.variants, currentStageId)
