@@ -249,9 +249,53 @@ function validateGradingCriteriaEvidence(parsedOutput: any): GpuEvidenceResult {
     return { valid: false, reason: 'Deterministic GPU experiment echoed grading criteria but did not map them to concrete evidence fields.' }
   }
 
+  const explicitEvidenceTerms = (criterion: string): string[] => {
+    const stopwords = new Set([
+      'artifact',
+      'artifacts',
+      'contain',
+      'contains',
+      'dependency',
+      'dependencies',
+      'evidence',
+      'failure',
+      'failures',
+      'field',
+      'fields',
+      'include',
+      'includes',
+      'metric',
+      'metrics',
+      'model',
+      'models',
+      'print',
+      'prints',
+      'stdout',
+      'stderr',
+      'with',
+    ])
+    return Array.from(new Set(
+      criterion
+        .toLowerCase()
+        .match(/[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)?/g) || []
+    )).filter(term =>
+      term.includes('_') ||
+      term.includes('.') ||
+      (/^[a-z]+[0-9]+[a-z0-9_]*$/.test(term) && !stopwords.has(term))
+    )
+  }
+
   const missing = criteria.filter((criterion: string) => {
     const row = evidence[criterion]
-    return !row || typeof row !== 'object' || row.matched !== true || !Array.isArray(row.matched_keys) || row.matched_keys.length === 0
+    if (!row || typeof row !== 'object' || row.matched !== true || !Array.isArray(row.matched_keys) || row.matched_keys.length === 0) {
+      return true
+    }
+
+    const explicitTerms = explicitEvidenceTerms(criterion)
+    if (explicitTerms.length === 0) return false
+
+    const matchedHaystack = row.matched_keys.map(String).join(' ').toLowerCase()
+    return explicitTerms.some(term => !matchedHaystack.includes(term))
   })
 
   if (missing.length > 0) {

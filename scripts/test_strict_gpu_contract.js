@@ -506,6 +506,29 @@ function testDeterministicExperimentCriteriaEvidencePassesGate() {
   assert.equal(assessed.valid, true, assessed.reason)
 }
 
+function testDeterministicExperimentCriteriaEvidenceRejectsPartialExplicitMetrics() {
+  const assessed = contract.assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    fallbackUsed: false,
+    success: true,
+    output: JSON.stringify({
+      type: 'deterministic_gpu_experiment',
+      cuda_available: true,
+      gpu_name: 'RTX 3060',
+      tensor_sum: 123.0,
+      grading_criteria_checked: ['prints cuda_available and trajectory_cosine_similarity metrics'],
+      grading_criteria_evidence: {
+        'prints cuda_available and trajectory_cosine_similarity metrics': {
+          matched: true,
+          matched_keys: ['cuda_available'],
+        },
+      },
+    }),
+  })
+  assert.equal(assessed.valid, false)
+  assert.match(assessed.reason, /grading criteria/i)
+}
+
 function testPreparationStagesShortCircuitWeakModelContractFailures() {
   assert.equal(contract.shouldShortCircuitPreparationFallback('Investigation', 'response did not parse as the required JSON object'), true)
   assert.equal(contract.shouldShortCircuitPreparationFallback('Planning', 'JSON action must be "run_python"'), true)
@@ -543,5 +566,6 @@ testPreparationStageWithExistingManifestPromotesWrapperToDeterministicExperiment
 testDeterministicExperimentFallbackEmitsResearchSpecificMetrics()
 testDeterministicExperimentCriteriaEchoWithoutEvidenceIsRejected()
 testDeterministicExperimentCriteriaEvidencePassesGate()
+testDeterministicExperimentCriteriaEvidenceRejectsPartialExplicitMetrics()
 testPreparationStagesShortCircuitWeakModelContractFailures()
 console.log('strict gpu contract tests passed')
