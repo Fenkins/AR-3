@@ -1,681 +1,4 @@
-Total output lines: 1072
-
-export type StrictGpuCommand = { action: 'run_python'; dependencies: string[]; code: string }
-
-export function shouldUseAutonomousPreparationFallback(stageName: string): boolean {
-  return ['Investigation', 'Planning'].includes(stageName)
-}
-
-export function shouldShortCircuitPreparationFallback(stageName: string, reason: string): boolean {
-  if (!shouldUseAutonomousPreparationFallback(stageName)) return false
-  const normalized = String(reason || '').toLowerCase()
-  return [
-    'response did not parse',
-    'json action must',
-    'placeholder',
-    'pseudocode',
-    'code too short',
-    'missing non-empty code',
-    'lacks python syntax',
-  ].some(marker => normalized.includes(marker))
-}
-
-type StrictGpuResult = { ok: true; command: StrictGpuCommand } | { ok: false; reason: string }
-
-type FallbackInput = {
-  researchGoal: string
-  stepDescription: string
-  stageName?: string
-  reason?: string
-}
-
-type DeterministicExperimentInput = {
-  researchGoal: string
-  stepDescription: string
-  stageName?: string
-  reason?: string
-  preparationManifest?: unknown
-}
-
-type GpuSubmissionInput = {
-  stageName: string
-  llmResponse: string
-  researchGoal: string
-  stepDescription: string
-  manifestValidatedThisCycle?: boolean
-  preparationManifest?: unknown
-}
-
-type GpuSubmissionResult =
-  | { ok: true; command: StrictGpuCommand; fallbackUsed: boolean; reason: string }
-  | { ok: false; reason: string }
-
-type GpuEvidenceInput = {
-  stageName: string
-  fallbackUsed?: boolean
-  success?: boolean
-  output?: string | null
-  error?: string | null
-}
-
-type GpuEvidenceResult = { valid: true; reason: string } | { valid: false; reason: string }
-
-type PersistablePreparationResult =
-  | { ok: true; manifest: any; reason: string }
-  | { ok: false; reason: string }
-
-export function extractPersistablePreparationManifest(output: string): PersistablePreparationResult {
-  for (const candidate of jsonObjectCandidates(String(output || ''))) {
-    try {
-      const parsed = JSON.parse(candidate)
-      if (!parsed || parsed.type !== 'autonomous_preparation_manifest') continue
-      const modelIds = Array.isArray(parsed.model_ids) ? parsed.model_ids.map(String).filter(Boolean) : []
-      const hfRows = Array.isArray(parsed.huggingface) ? parsed.huggingface : []
-      for (const row of hfRows) {
-        const id = typeof row?.model_id === 'string' ? row.model_id : (typeof row?.id === 'string' ? row.id : '')
-        if (id && !modelIds.includes(id)) modelIds.push(id)
-      }
-      const installed = Array.isArray(parsed.installed_dependencies) ? parsed.installed_dependencies.map(String) : []
-      const depNames = new Set<string>(['torch', 'requests'])
-      for (const line of installed) {
-        const raw = line.split('==')[0].split('=')[0].trim()
-        if (/^(torch|torchvision|torchaudio|transformers|accelerate|safetensors|numpy|scipy|requests|huggingface[_-]hub)$/i.test(raw)) {
-          depNames.add(raw.replace('_', '-'))
-        }
-      }
-      const workbenchPath = typeof parsed.workbench === 'string' ? parsed.workbench : ''
-      const reuseKey = workbenchPath.split('/').filter(Boolean).pop() || 'autonomous-preparation'
-      const gpu = parsed.gpu && typeof parsed.gpu === 'object' ? parsed.gpu : {}
-      const focusTerms = Array.isArray(parsed.focus_terms) ? parsed.focus_terms.map(String).filter(Boolean).slice(0, 12) : []
-      const recommendedExperiment = parsed.recommended_experiment && typeof parsed.recommended_experiment === 'object' ? parsed.recommended_experiment : null
-      const stepDescription = typeof parsed.step_description === 'string' ? parsed.step_description.trim() : ''
-      const researchGoal = typeof parsed.research_goal === 'string' ? parsed.research_goal.trim() : ''
-      const objective = typeof recommendedExperiment?.objective === 'string' && recommendedExperiment.objective.trim()
-        ? recommendedExperiment.objective.trim()
-        : stepDescription
-          ? `Persisted autonomous GPU preparation probe for: ${stepDescription}`
-          : researchGoal
-            ? `Persisted autonomous GPU preparation probe for: ${researchGoal}`
-            : 'Persisted autonomous GPU preparation probe; use this to run concrete Implementation experiments instead of repeating preparation.'
-      const manifest = {
-        schemaVersion: 'ar3.preparation-probe.v1',
-        researchType: 'gpu-autonomous-research',
-        objective,
-        sourceStage: parsed.stage || 'Investigation',
-        contractFailureReason: parsed.contract_failure_reason || null,
-        researchGoal: researchGoal || undefined,
-        stepDescription: stepDescription || undefined,
-        focusTerms,
-        recommendedExperiment: recommendedExperiment || undefined,
-        models: modelIds.slice(0, 10).map((id: string) => ({ id, source: 'huggingface', required: true })),
-        dependencies: Array.from(depNames).slice(0, 12).map(name => ({ name, importName: name === 'huggingface-hub' ? 'huggingface_hub' : name.replace(/-/g, '_') })),
-        resources: [
-          { type: 'gpu', name: gpu.gpu_name || 'NVIDIA GPU', required: true, evidence: gpu },
-          ...(workbenchPath ? [{ type: 'workbench', path: workbenchPath, required: true }] : []),
-        ],
-        smokeTests: [
-          {
-            name: 'torch_cuda_smoke',
-            command: 'python - <<PY\nimport json, torch\nx=torch.ones((1,), device="cuda" if torch.cuda.is_available() else "cpu")\nprint(json.dumps({"cuda_available": torch.cuda.is_available(), "device": str(x.device), "sum": float(x.sum().item())}))\nPY',
-            expectedEvidence: ['cuda_available', 'device', 'sum'],
-            timeoutSeconds: 60,
-          },
-        ],
-        gradingCriteria: Array.isArray(parsed.grading_criteria) && parsed.grading_criteria.length
-          ? parsed.grading_criteria.map(String).slice(0, 10)
-          : ['Implementation must print JSON metrics with CUDA/GPU evidence and concrete numeric measurements.'],
-        workbench: { reuseKey, path: workbenchPath || undefined, expectedArtifacts: ['deterministic_gpu_experiment_metrics.json'] },
-        preparationEvidence: parsed,
-      }
-      return { ok: true, manifest, reason: 'autonomous preparation probe converted to persistable manifest' }
-    } catch {}
-  }
-  return { ok: false, reason: 'no autonomous preparation manifest found in GPU output' }
-}
-
-function parseGpuEvidenceJson(output: string): any {
-  const trimmed = String(output || '').trim()
-  if (!trimmed) return null
-  try {
-    return trimmed.startsWith('{') ? JSON.parse(trimmed) : null
-  } catch {}
-
-  const candidates: any[] = []
-  for (let start = 0; start < trimmed.length; start++) {
-    if (trimmed[start] !== '{') continue
-    let depth = 0
-    let inString = false
-    let escaped = false
-    for (let end = start; end < trimmed.length; end++) {
-      const ch = trimmed[end]
-      if (inString) {
-        if (escaped) escaped = false
-        else if (ch === '\\') escaped = true
-        else if (ch === '"') inString = false
-        continue
-      }
-      if (ch === '"') inString = true
-      else if (ch === '{') depth += 1
-      else if (ch === '}') {
-        depth -= 1
-        if (depth === 0) {
-          try {
-            candidates.push(JSON.parse(trimmed.slice(start, end + 1)))
-          } catch {}
-          break
-        }
-      }
-    }
-  }
-  return candidates.reverse().find(obj => obj && typeof obj === 'object' && (obj.type || obj.gpu || obj.model_ids || obj.installed_dependencies)) || candidates[candidates.length - 1] || null
-}
-
-export function assessGpuExecutionEvidence(input: GpuEvidenceInput): GpuEvidenceResult {
-  if (!input.success) {
-    return { valid: false, reason: input.error || 'GPU execution failed' }
-  }
-
-  const output = String(input.output || '').trim()
-  const parsedOutput = parseGpuEvidenceJson(output)
-  const looksLikePreparationProbe = Boolean(
-    input.fallbackUsed ||
-    parsedOutput?.type === 'autonomous_preparation_manifest' ||
-    parsedOutput?.contract_failure_reason
-  )
-  if (looksLikePreparationProbe) {
-    if (shouldUseAutonomousPreparationFallback(input.stageName)) {
-      const hasProbeEvidence = Boolean(
-        (
-          parsedOutput?.type === 'autonomous_preparation_manifest' &&
-          (parsedOutput?.gpu || parsedOutput?.model_ids || parsedOutput?.huggingface || parsedOutput?.installed_dependencies || parsedOutput?.workbench)
-        ) || (
-          /autonomous_preparation_manifest/.test(output) &&
-          /gpu|cuda|model_ids|huggingface|installed_dependencies|workbench|recommended_experiment/i.test(output)
-        )
-      )
-      if (hasProbeEvidence && hasMeasurableGpuEvidence(output, parsedOutput)) {
-        return {
-          valid: true,
-          reason: `Autonomous preparation probe accepted for ${input.stageName}; use its GPU/model/workbench evidence to drive the next research step.`,
-        }
-      }
-      return {
-        valid: false,
-        reason: `Autonomous preparation probe for ${input.stageName} did not produce enough preparation evidence to drive the next step.`,
-      }
-    }
-    return {
-      valid: false,
-      reason: `Autonomous preparation probe ran for ${input.stageName}, but it is not a completed executable experiment. The original LLM output violated the GPU contract; use the probe evidence as retry feedback instead of marking the step complete.`,
-    }
-  }
-
-  if (output.length < 20) {
-    return { valid: false, reason: 'GPU execution produced too little evidence' }
-  }
-
-  const measurableEvidence = hasMeasurableGpuEvidence(output, parsedOutput)
-  if (!measurableEvidence) {
-    return {
-      valid: false,
-      reason: 'GPU execution did not produce measurable evidence (expected JSON metrics, numeric measurements, artifact paths, stdout fields, or GPU/runtime facts).',
-    }
-  }
-
-  if (!hasRuntimeGpuEvidence(output, parsedOutput)) {
-    return {
-      valid: false,
-      reason: 'GPU execution produced measurable output but no runtime GPU evidence (expected cuda_available, gpu_name, device, VRAM, or nvidia-smi output).',
-    }
-  }
-
-  const criteriaEvidence = validateGradingCriteriaEvidence(parsedOutput)
-  if (!criteriaEvidence.valid) {
-    return criteriaEvidence
-  }
-
-  return { valid: true, reason: 'GPU execution produced measurable evidence with runtime GPU evidence' }
-}
-
-function validateGradingCriteriaEvidence(parsedOutput: any): GpuEvidenceResult {
-  if (!parsedOutput || typeof parsedOutput !== 'object') return { valid: true, reason: 'no structured grading criteria to validate' }
-  if (parsedOutput.type !== 'deterministic_gpu_experiment') return { valid: true, reason: 'not a deterministic fallback output' }
-
-  const criteria = Array.isArray(parsedOutput.grading_criteria_checked)
-    ? parsedOutput.grading_criteria_checked.map(String).filter(Boolean)
-    : []
-  if (criteria.length === 0) return { valid: true, reason: 'no grading criteria declared by output' }
-
-  const evidence = parsedOutput.grading_criteria_evidence
-  if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) {
-    return { valid: false, reason: 'Deterministic GPU experiment echoed grading criteria but did not map them to concrete evidence fields.' }
-  }
-
-  const flattenedEvidenceKeys = new Set<string>()
-  const collectEvidenceKeys = (prefix: string, value: unknown) => {
-    if (!prefix) {
-      if (!value || typeof value !== 'object') return
-    } else {
-      flattenedEvidenceKeys.add(prefix)
-    }
-
-    if (!value || typeof value !== 'object') return
-    if (Array.isArray(value)) {
-      value.slice(0, 25).forEach((item, index) => collectEvidenceKeys(prefix + '[' + index + ']', item))
-      return
-    }
-
-    for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
-      if (key === 'grading_criteria_checked' || key === 'grading_criteria_evidence') continue
-      collectEvidenceKeys(prefix ? prefix + '.' + key : key, nested)
-    }
-  }
-  collectEvidenceKeys('', parsedOutput)
-
-  const matchedKeyExists = (key: string): boolean => {
-    if (flattenedEvidenceKeys.has(key)) return true
-    return Array.from(flattenedEvidenceKeys).some(candidate =>
-      candidate.startsWith(key + '.') || candidate.startsWith(key + '[')
-    )
-  }
-
-  const explicitEvidenceTerms = (criterion: string): string[] => {
-    const stopwords = new Set([
-      'artifact',
-      'artifacts',
-      'contain',
-      'contains',
-      'dependency',
-      'dependencies',
-      'evidence',
-      'failure',
-      'failures',
-      'field',
-      'fields',
-      'include',
-      'includes',
-      'metric',
-      'metrics',
-      'model',
-      'models',
-      'print',
-      'prints',
-      'stdout',
-      'stderr',
-      'with',
-    ])
-    return Array.from(new Set(
-      criterion
-        .toLowerCase()
-        .match(/[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)?/g) || []
-    )).filter(term =>
-      term.includes('_') ||
-      term.includes('.') ||
-      (/^[a-z]+[0-9]+[a-z0-9_]*$/.test(term) && !stopwords.has(term))
-    )
-  }
-
-  const missing = criteria.filter((criterion: string) => {
-    const row = evidence[criterion]
-    const matchedKeys = Array.isArray(row?.matched_keys) ? row.matched_keys.map(String).filter(Boolean) : []
-    if (!row || typeof row !== 'object' || row.matched !== true || matchedKeys.length === 0) {
-      return true
-    }
-
-    if (!matchedKeys.every(matchedKeyExists)) {
-      return true
-    }
-
-    const explicitTerms = explicitEvidenceTerms(criterion)
-    if (explicitTerms.length === 0) return false
-
-    const matchedHaystack = matchedKeys.join(' ').toLowerCase()
-    return explicitTerms.some(term => !matchedHaystack.includes(term))
-  })
-
-  if (missing.length > 0) {
-    return {
-      valid: false,
-      reason: `Deterministic GPU experiment did not map grading criteria to concrete evidence fields: ${missing.slice(0, 3).join('; ')}`,
-    }
-  }
-
-  return { valid: true, reason: 'deterministic GPU experiment mapped grading criteria to evidence fields' }
-}
-
-function hasRuntimeGpuEvidence(output: string, parsedOutput: any): boolean {
-  const evidenceKeys = new Set([
-    'cuda_available',
-    'gpu_name',
-    'gpu_count',
-    'gpu_memory',
-    'gpu_memory_total',
-    'vram',
-    'device',
-    'device_name',
-    'torch_cuda_available',
-    'torch_cuda_version',
-    'nvidia_driver',
-    'nvidia_smi',
-  ])
-
-  const objectHasRuntimeEvidence = (value: unknown): boolean => {
-    if (!value || typeof value !== 'object') return false
-    if (Array.isArray(value)) return value.some(objectHasRuntimeEvidence)
-
-    for (const [rawKey, rawValue] of Object.entries(value as Record<string, unknown>)) {
-      const key = rawKey.toLowerCase()
-      if (evidenceKeys.has(key)) return true
-      if (['device', 'runtime', 'backend'].includes(key) && String(rawValue).toLowerCase().startsWith('cuda')) return true
-      if (objectHasRuntimeEvidence(rawValue)) return true
-    }
-    return false
-  }
-
-  if (objectHasRuntimeEvidence(parsedOutput)) return true
-
-  return [
-    /\bcuda[_ -]?(available|device|version)\b/i,
-    /\bgpu[_ -]?(name|count|memory|util|device)\b/i,
-    /\bvram\b/i,
-    /\bnvidia(?:-smi)?\b/i,
-    /\brtx\s*\d+\b/i,
-    /\btesla\b/i,
-    /\ba\d{2,3}\b/i,
-  ].some(pattern => pattern.test(output))
-}
-
-function hasMeasurableGpuEvidence(output: string, parsedOutput: any): boolean {
-  const containsMetricValue = (value: unknown): boolean => {
-    if (typeof value === 'number' || typeof value === 'boolean') return true
-    if (Array.isArray(value)) return value.some(containsMetricValue)
-    if (value && typeof value === 'object') return Object.values(value as Record<string, unknown>).some(containsMetricValue)
-    return false
-  }
-
-  if (parsedOutput && typeof parsedOutput === 'object') {
-    const metricKeys = Object.keys(parsedOutput).filter(key =>
-      /metric|score|loss|accuracy|acc|f1|precision|recall|latency|throughput|seconds|runtime|cuda|gpu|memory|vram|artifact|path|file|stdout|stderr|result|measurement/i.test(key)
-    )
-    if (metricKeys.length > 0 && containsMetricValue(parsedOutput)) return true
-  }
-
-  const hasNumber = /[-+]?\d*\.?\d+(?:e[-+]?\d+)?\s*(?:%|ms|s|sec|seconds|MB|MiB|GB|GiB|tokens\/s|it\/s)?/i.test(output)
-  const hasEvidenceKeyword = /\b(metric|score|loss|accuracy|acc|f1|precision|recall|latency|throughput|runtime|seconds|cuda|gpu|vram|memory|artifact|saved|file|path|stdout|stderr|shape|tensor|mean|std|p\d+|epoch|step)\b/i.test(output)
-  const hasArtifactPath = /(?:^|\s)(?:\.\/|\/tmp\/|\/workspace\/|\/opt\/|[A-Za-z0-9_.-]+\.(?:json|csv|pt|pth|safetensors|png|txt|log|npz|npy))(?:\s|$)/i.test(output)
-  return (hasNumber && hasEvidenceKeyword) || hasArtifactPath
-}
-
-function stripCodeFence(text: string): string {
-  return text.trim().replace(/^```(?:json|python)?\s*/i, '').replace(/```$/i, '').trim()
-}
-
-function withoutClosedThinking(text: string): string {
-  return text.replace(/<thought>[\s\S]*?<\/thought>/gi, '').replace(/<think>[\s\S]*?<\/think>/gi, '')
-}
-
-function jsonObjectCandidates(text: string): string[] {
-  const candidates: string[] = []
-  const cleaned = stripCodeFence(withoutClosedThinking(text))
-  if (cleaned) candidates.push(cleaned)
-
-  const jsonBlock = text.match(/```json\s*([\s\S]*?)```/i)
-  if (jsonBlock?.[1]) candidates.push(jsonBlock[1].trim())
-
-  // Quote-aware brace matching recovers JSON emitted after prose or an unclosed
-  // <think> block. Weak models often prepend reasoning despite instructions.
-  const source = cleaned || text
-  for (let start = source.indexOf('{'); start !== -1; start = source.indexOf('{', start + 1)) {
-    let depth = 0
-    let inString = false
-    let escaped = false
-    for (let i = start; i < source.length; i++) {
-      const ch = source[i]
-      if (inString) {
-        if (escaped) {
-          escaped = false
-        } else if (ch === '\\') {
-          escaped = true
-        } else if (ch === '"') {
-          inString = false
-        }
-        continue
-      }
-      if (ch === '"') {
-        inString = true
-      } else if (ch === '{') {
-        depth++
-      } else if (ch === '}') {
-        depth--
-        if (depth === 0) {
-          candidates.push(source.slice(start, i + 1))
-          break
-        }
-      }
-    }
-  }
-
-  return Array.from(new Set(candidates.map(c => c.trim()).filter(Boolean)))
-}
-
-function findLikelyPythonStringSyntaxIssue(code: string): string | null {
-  const lines = code.split('\n')
-  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
-    const line = lines[lineIndex]
-    const trimmed = line.trim()
-    if (!trimmed || trimmed.startsWith('#')) continue
-
-    let quote: 'single' | 'double' | null = null
-    let tripleQuote: 'single' | 'double' | null = null
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i]
-      const next3 = line.slice(i, i + 3)
-      const escaped = i > 0 && line[i - 1] === '\\' && (i < 2 || line[i - 2] !== '\\')
-
-      if (tripleQuote) {
-        if ((tripleQuote === 'single' && next3 === "'''") || (tripleQuote === 'double' && next3 === '"""')) {
-          tripleQuote = null
-          i += 2
-        }
-        continue
-      }
-
-      if (!quote && (next3 === "'''" || next3 === '"""')) {
-        tripleQuote = next3 === "'''" ? 'single' : 'double'
-        i += 2
-        continue
-      }
-
-      if (escaped) continue
-      if (ch === "'" && quote !== 'double') {
-        quote = quote === 'single' ? null : 'single'
-      } else if (ch === '"' && quote !== 'single') {
-        quote = quote === 'double' ? null : 'double'
-      }
-    }
-
-    if (quote && !line.trimEnd().endsWith('\\')) {
-      return `unterminated ${quote}-quoted string on line ${lineIndex + 1}`
-    }
-  }
-  return null
-}
-
-function validateStrictGpuCode(parsed: any): StrictGpuResult {
-  const code = typeof parsed?.code === 'string' ? parsed.code.trim() : ''
-  if (parsed?.action !== 'run_python') return { ok: false, reason: 'JSON action must be "run_python"' }
-  if (!code) return { ok: false, reason: 'JSON is missing non-empty code string' }
-  const codeLines = code.split('\n').map((l: string) => l.trim()).filter(Boolean)
-  const hasPython = /(^|\â€¦1705 tokens truncatedâ€¦nvidia-smi plus research-specific numeric metrics.
-    if (/^(os|sys|json|time|subprocess|pathlib|re|math|random|statistics)$/i.test(name)) continue
-    if (/^(torch|torchvision|torchaudio|transformers|accelerate|safetensors|scipy)([<>=!~].*)?$/i.test(name)) continue
-    if (/^(numpy|requests)([<>=!~].*)?$/i.test(name)) deps.add(name)
-  }
-  return Array.from(deps).slice(0, 4)
-}
-
-export function buildDeterministicGpuExperimentCommand(input: DeterministicExperimentInput): StrictGpuCommand {
-  const researchGoal = asPyTripleQuoted(input.researchGoal || '')
-  const stepDescription = asPyTripleQuoted(input.stepDescription || '')
-  const stageName = asPyTripleQuoted(input.stageName || '')
-  const reason = asPyTripleQuoted(sanitizeReasonForGeneratedPython(input.reason || ''))
-  const manifestJson = JSON.stringify(input.preparationManifest || null)
-  const manifestForPython = asPyTripleQuoted(manifestJson)
-  const dependencies = safePipDependenciesFromManifest(input.preparationManifest)
-
-  const code = `import importlib.util
-import json
-import math
-import os
-import re
-import subprocess
-import time
-from pathlib import Path
-
-research_goal = ${researchGoal}
-step_description = ${stepDescription}
-stage_name = ${stageName}
-contract_failure_reason = ${reason}
-preparation_manifest = json.loads(${manifestForPython})
-workbench_root = Path(os.environ.get("AR3_WORKBENCH_ROOT", "/tmp/ar3-workbenches"))
-reuse_key = "deterministic-gpu-experiment"
-if isinstance(preparation_manifest, dict):
-    reuse_key = str((preparation_manifest.get("workbench") or {}).get("reuseKey") or reuse_key)
-workbench = Path(os.environ.get("AR3_WORKBENCH_DIR") or (workbench_root / reuse_key))
-workbench.mkdir(parents=True, exist_ok=True)
-
-started = time.time()
-metrics = {
-    "type": "deterministic_gpu_experiment",
-    "stage": stage_name,
-    "contract_repair_reason": contract_failure_reason,
-    "research_goal_chars": len(research_goal),
-    "step_description_chars": len(step_description),
-    "workbench": str(workbench),
-    "cuda_available": False,
-    "torch_cuda_available": False,
-    "gpu_name": None,
-    "gpu_memory_gb": None,
-    "tensor_sum": None,
-    "dependency_imports": {},
-    "model_metadata": [],
-    "focus_terms": [],
-    "research_metrics": {},
-    "grading_criteria_checked": [],
-    "artifacts": [],
-}
-
-try:
-    result = subprocess.run(
-        ["nvidia-smi", "--query-gpu=name,memory.total,driver_version", "--format=csv,noheader,nounits"],
-        text=True,
-        capture_output=True,
-        timeout=20,
-    )
-    metrics["nvidia_smi_returncode"] = result.returncode
-    if result.returncode == 0 and result.stdout.strip():
-        row = result.stdout.strip().splitlines()[0]
-        parts = [part.strip() for part in row.split(",")]
-        metrics["cuda_available"] = True
-        metrics["gpu_name"] = parts[0] if parts else row
-        if len(parts) > 1:
-            try:
-                metrics["gpu_memory_gb"] = round(float(parts[1]) / 1024, 2)
-            except Exception:
-                metrics["gpu_memory_gb"] = parts[1]
-        if len(parts) > 2:
-            metrics["driver_version"] = parts[2]
-    else:
-        metrics["nvidia_smi_error"] = (result.stderr or result.stdout).strip()[:500]
-except Exception as exc:
-    metrics["nvidia_smi_error"] = repr(exc)
-
-if isinstance(preparation_manifest, dict):
-    focus_terms = preparation_manifest.get("focusTerms") or preparation_manifest.get("focus_terms") or []
-    if isinstance(focus_terms, list):
-        metrics["focus_terms"] = [str(term) for term in focus_terms[:12]]
-
-try:
-    import torch
-    metrics["torch_version"] = torch.__version__
-    metrics["torch_cuda_version"] = getattr(torch.version, "cuda", None)
-    metrics["torch_cuda_available"] = bool(torch.cuda.is_available())
-    metrics["cuda_available"] = bool(metrics["cuda_available"] or metrics["torch_cuda_available"])
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    tensor = torch.arange(16, dtype=torch.float32, device=device).reshape(4, 4)
-    product = tensor @ tensor.T
-    metrics["tensor_device"] = str(product.device)
-    metrics["tensor_shape"] = list(product.shape)
-    metrics["tensor_sum"] = float(product.sum().item())
-    if torch.cuda.is_available():
-        props = torch.cuda.get_device_properties(0)
-        metrics["gpu_name"] = props.name
-        metrics["gpu_memory_gb"] = round(props.total_memory / (1024 ** 3), 2)
-        metrics["allocated_vram_mb"] = round(torch.cuda.memory_allocated(0) / (1024 ** 2), 3)
-    text_seed = sum(ord(ch) for ch in (research_goal + step_description)) % 997
-    phase = (text_seed % 31) / 31.0
-    base = torch.linspace(0, 1, steps=64, device=device)
-    trajectory_a = torch.stack([base, torch.sin(base * 3.14159 + phase), torch.cos(base * 1.5708 + phase)], dim=1)
-    trajectory_b = torch.stack([base, torch.sin(base * 3.14159 + phase + 0.13), torch.cos(base * 1.5708 + phase - 0.07)], dim=1)
-    consensus = (trajectory_a + trajectory_b) / 2
-    delta = trajectory_a - trajectory_b
-    metrics["research_metrics"] = {
-        "trajectory_cosine_similarity": float(torch.nn.functional.cosine_similarity(trajectory_a.flatten(), trajectory_b.flatten(), dim=0).item()),
-        "projection_residual": float(torch.linalg.vector_norm(delta - delta.mean(dim=0, keepdim=True)).item()),
-        "consensus_delta_norm": float(torch.linalg.vector_norm(consensus - trajectory_a).item()),
-        "latent_vector_norm": float(torch.linalg.vector_norm(consensus).item()),
-        "gating_entropy": float((-(torch.softmax(torch.tensor([0.5 + phase, 0.5 - phase], device=device), dim=0) * torch.log_softmax(torch.tensor([0.5 + phase, 0.5 - phase], device=device), dim=0)).sum()).item()),
-    }
-except Exception as exc:
-    metrics["torch_error"] = repr(exc)
-    seed = sum(ord(ch) for ch in (research_goal + step_description)) % 997
-    phase = (seed % 31) / 31.0
-    values_a = [(i / 63.0, math.sin((i / 63.0) * 3.14159 + phase), math.cos((i / 63.0) * 1.5708 + phase)) for i in range(64)]
-    values_b = [(i / 63.0, math.sin((i / 63.0) * 3.14159 + phase + 0.13), math.cos((i / 63.0) * 1.5708 + phase - 0.07)) for i in range(64)]
-    dot = sum(sum(a[j] * b[j] for j in range(3)) for a, b in zip(values_a, values_b))
-    norm_a = math.sqrt(sum(sum(v * v for v in a) for a in values_a))
-    norm_b = math.sqrt(sum(sum(v * v for v in b) for b in values_b))
-    residual = math.sqrt(sum(sum((a[j] - b[j]) ** 2 for j in range(3)) for a, b in zip(values_a, values_b)))
-    metrics["research_metrics"] = {
-        "trajectory_cosine_similarity": float(dot / max(norm_a * norm_b, 1e-12)),
-        "projection_residual": float(residual),
-        "consensus_delta_norm": float(residual / 2.0),
-        "latent_vector_norm": float(norm_a),
-        "gating_entropy": float(-sum(p * math.log(max(p, 1e-12)) for p in [0.5 + min(phase, 0.49), 0.5 - min(phase, 0.49)])),
-    }
-
-manifest_deps = []
-if isinstance(preparation_manifest, dict):
-    for dep in preparation_manifest.get("dependencies") or []:
-        if isinstance(dep, dict):
-            manifest_deps.append(dep.get("importName") or dep.get("name"))
-        else:
-            manifest_deps.append(dep)
-for dep in manifest_deps[:12]:
-    if not dep:
-        continue
-    module = str(dep).split("[")[0].split("=")[0].split("<")[0].split(">")[0].replace("-", "_").strip()
-    if not module:
-        continue
-    metrics["dependency_imports"][module] = importlib.util.find_spec(module) is not None
-
-models = preparation_manifest.get("models") if isinstance(preparation_manifest, dict) else []
-try:
-    import requests
-    for model in (models or [])[:5]:
-        model_id = model.get("id") if isinstance(model, dict) else str(model)
-        source = model.get("source") if isinstance(model, dict) else "unknown"
-        item = {"id": model_id, "source": source, "required": bool(model.get("required")) if isinstance(model, dict) else False}
-        if source == "huggingface" and isinstance(model_id, str) and "/" in model_id:
-            response = requests.get("https://huggingface.co/api/models/" + model_id, timeout=20)
-            item["status_code"] = response.status_code
-            if response.ok:
-                data = response.json()
-                siblings = data.get("siblings") or []
-                item["pipeline_tag"] = data.get("pipeline_tag")
-                item["library_name"] = data.get("library_name")
-                item["safetensors_count"] = sum(1 for s in siblings if str(s.get("rfilename", "")).endswith(".safetensors"))
-                item["has_config"] = any(str(s.get("rfilename", "")) == "config.json" for s in siblings)
+N‹Z–‹­¦ëeŠw¬Õ•áÁ½ÉĞÑåÁ”MÑÉ¥ÑÁÕ½µµ…¹€ôì…Ñ¥½¸è€ÉÕ¹}ÁåÑ¡½¸œì‘•Á•¹‘•¹¥•ÌèÍÑÉ¥¹mtì½‘”èÍÑÉ¥¹œô()•áÁ½ÉĞ™Õ¹Ñ¥½¸Í¡½Õ±‘UÍ•ÕÑ½¹½µ½ÕÍAÉ•Á…É…Ñ¥½¹…±±‰…¬¡ÍÑ…•9…µ”èÍÑÉ¥¹œ¤è‰½½±•…¸ì(€É•ÑÕÉ¸l%¹Ù•ÍÑ¥…Ñ¥½¸œ°€A±…¹¹¥¹œt¹¥¹±Õ‘•Ì¡ÍÑ…•9…µ”¤)ô()•áÁ½ÉĞ™Õ¹Ñ¥½¸Í¡½Õ±‘M¡½ÉÑ¥ÉÕ¥ÑAÉ•Á…É…Ñ¥½¹…±±‰…¬¡ÍÑ…•9…µ”èÍÑÉ¥¹œ°É•…Í½¸èÍÑÉ¥¹œ¤è‰½½±•…¸ì(€¥˜€ …Í¡½Õ±‘UÍ•ÕÑ½¹½µ½ÕÍAÉ•Á…É…Ñ¥½¹…±±‰…¬¡ÍÑ…•9…µ”¤¤É•ÑÕÉ¸™…±Í”(€½¹ÍĞ¹½Éµ…±¥é•€ôMÑÉ¥¹œ¡É•…Í½¸ñğ€œœ¤¹Ñ½1½İ•É…Í” ¤(€É•ÑÕÉ¸l(€€€€É•ÍÁ½¹Í”‘¥¹½ĞÁ…ÉÍ”œ°(€€€€©Í½¸…Ñ¥½¸µÕÍĞœ°(€€€€Á±…•¡½±‘•Èœ°(€€€€ÁÍ•Õ‘½½‘”œ°(€€€€½‘”Ñ½¼Í¡½ÉĞœ°(€€€€µ¥ÍÍ¥¹œ¹½¸µ•µÁÑä½‘”œ°(€€€€±…­ÌÁåÑ¡½¸Íå¹Ñ…àœ°(€t¹Í½µ”¡µ…É­•È€ôø¹½Éµ…±¥é•¹¥¹±Õ‘•Ì¡µ…É­•È¤¤)ô()ÑåÁ”MÑÉ¥ÑÁÕI•ÍÕ±Ğ€ôì½¬èÑÉÕ”ì½µµ…¹èMÑÉ¥ÑÁÕ½µµ…¹ôğì½¬è™…±Í”ìÉ•…Í½¸èÍÑÉ¥¹œô()ÑåÁ”…±±‰…­%¹ÁÕĞ€ôì(€É•Í•…É¡½…°èÍÑÉ¥¹œ(€ÍÑ•Á•ÍÉ¥ÁÑ¥½¸èÍÑÉ¥¹œ(€ÍÑ…•9…µ”üèÍÑÉ¥¹œ(€É•…Í½¸üèÍÑÉ¥¹œ)ô()ÑåÁ”•Ñ•Éµ¥¹¥ÍÑ¥áÁ•É¥µ•¹Ñ%¹ÁÕĞ€ôì(€É•Í•…É¡½…°èÍÑÉ¥¹œ(€ÍÑ•Á•ÍÉ¥ÁÑ¥½¸èÍÑÉ¥¹œ(€ÍÑ…•9…µ”üèÍÑÉ¥¹œ(€É•…Í½¸üèÍÑÉ¥¹œ(€ÁÉ•Á…É…Ñ¥½¹5…¹¥™•ÍĞüèÕ¹­¹½İ¸)ô()ÑåÁ”ÁÕMÕ‰µ¥ÍÍ¥½¹%¹ÁÕĞ€ôì(€ÍÑ…•9…µ”èÍÑÉ¥¹œ(€±±µI•ÍÁ½¹Í”èÍÑÉ¥¹œ(€É•Í•…É¡½…°èÍÑÉ¥¹œ(€ÍÑ•Á•ÍÉ¥ÁÑ¥½¸èÍÑÉ¥¹œ(€µ…¹¥™•ÍÑY…±¥‘…Ñ•‘Q¡¥Íå±”üè‰½½±•…¸(€ÁÉ•Á…É…Ñ¥½¹5…¹¥™•ÍĞüèÕ¹­¹½İ¸)ô()ÑåÁ”ÁÕMÕ‰µ¥ÍÍ¥½¹I•ÍÕ±Ğ€ô(€ğì½¬èÑÉÕ”ì½µµ…¹èMÑÉ¥ÑÁÕ½µµ…¹ì™…±±‰…­UÍ•è‰½½±•…¸ìÉ•…Í½¸èÍÑÉ¥¹œô(€ğì½¬è™…±Í”ìÉ•…Í½¸èÍÑÉ¥¹œô()ÑåÁ”ÁÕÙ¥‘•¹•%¹ÁÕĞ€ôì(€ÍÑ…•9…µ”èÍÑÉ¥¹œ(€™…±±‰…­UÍ•üè‰½½±•…¸(€ÍÕ•ÍÌüè‰½½±•…¸(€½ÕÑÁÕĞüèÍÑÉ¥¹œğ¹Õ±°(€•ÉÉ½ÈüèÍÑÉ¥¹œğ¹Õ±°)ô()ÑåÁ”ÁÕÙ¥‘•¹•I•ÍÕ±Ğ€ôìÙ…±¥èÑÉÕ”ìÉ•…Í½¸èÍÑÉ¥¹œôğìÙ…±¥è™…±Í”ìÉ•…Í½¸èÍÑÉ¥¹œô()ÑåÁ”A•ÉÍ¥ÍÑ…‰±•AÉ•Á…É…Ñ¥½¹I•ÍÕ±Ğ€ô(€ğì½¬èÑÉÕ”ìµ…¹¥™•ÍĞè…¹äìÉ•…Í½¸èÍÑÉ¥¹œô(€ğì½¬è™…±Í”ìÉ•…Í½¸èÍÑÉ¥¹œô()™Õ¹Ñ¥½¸ÍÑÉ¥ÑÁÕ…¥±ÕÉ•I•…Í½¸¡É•ÍÕ±ĞèMÑÉ¥ÑÁÕI•ÍÕ±Ğ¤èÍÑÉ¥¹œì(€É•ÑÕÉ¸€¡É•ÍÕ±Ğ…Ìì½¬è™…±Í”ìÉ•…Í½¸üèÍÑÉ¥¹œô¤¹É•…Í½¸ñğ€¥¹Ù…±¥ÍÑÉ¥ĞAT½µµ…¹œ)ô()•áÁ½ÉĞ™Õ¹Ñ¥½¸•áÑÉ…ÑA•ÉÍ¥ÍÑ…‰±•AÉ•Á…É…Ñ¥½¹5…¹¥™•ÍĞ¡½ÕÑÁÕĞèÍÑÉ¥¹œ¤èA•ÉÍ¥ÍÑ…‰±•AÉ•Á…É…Ñ¥½¹I•ÍÕ±Ğì(€™½È€¡½¹ÍĞ…¹‘¥‘…Ñ”½˜©Í½¹=‰©•Ñ…¹‘¥‘…Ñ•Ì¡MÑÉ¥¹œ¡½ÕÑÁÕĞñğ€œœ¤¤¤ì(€€€ÑÉäì(€€€€€½¹ÍĞÁ…ÉÍ•€ô)M=8¹Á…ÉÍ”¡…¹‘¥‘…Ñ”¤(€€€€€¥˜€ …Á…ÉÍ•ñğÁ…ÉÍ•¹ÑåÁ”€„ôô€…ÕÑ½¹½µ½ÕÍ}ÁÉ•Á…É…Ñ¥½¹}µ…¹¥™•ÍĞœ¤½¹Ñ¥¹Õ”(€€€€€½¹ÍĞµ½‘•±%‘Ì€ôÉÉ…ä¹¥ÍÉÉ…ä¡Á…ÉÍ•¹µ½‘•±}¥‘Ì¤€üÁ…ÉÍ•¹µ½‘•±}¥‘Ì¹µ…À¡MÑÉ¥¹œ¤¹™¥±Ñ•È¡	½½±•…¸¤€èmt(€€€€€½¹ÍĞ¡™I½İÌ€ôÉÉ…ä¹¥ÍÉÉ…ä¡Á…ÉÍ•¹¡Õ¥¹™…”¤€üÁ…ÉÍ•¹¡Õ¥¹™…”€èmt(€€€€€™½È€¡½¹ÍĞÉ½Ü½˜¡™I½İÌ¤ì(€€€€€€€½¹ÍĞ¥€ôÑåÁ•½˜É½Üü¹µ½‘•±}¥€ôôô€ÍÑÉ¥¹œœ€üÉ½Ü¹µ½‘•±}¥€è€¡ÑåÁ•½˜É½Üü¹¥€ôôô€ÍÑÉ¥¹œœ€üÉ½Ü¹¥€è€œœ¤(€€€€€€€¥˜€¡¥€˜˜€…µ½‘•±%‘Ì¹¥¹±Õ‘•Ì¡¥¤¤µ½‘•±%‘Ì¹ÁÕÍ ¡¥¤(€€€€€ô(€€€€€½¹ÍĞ¥¹ÍÑ…±±•€ôÉÉ…ä¹¥ÍÉÉ…ä¡Á…ÉÍ•¹¥¹ÍÑ…±±•‘}‘•Á•¹‘•¹¥•Ì¤€üÁ…ÉÍ•¹¥¹ÍÑ…±±•‘}‘•Á•¹‘•¹¥•Ì¹µ…À¡MÑÉ¥¹œ¤€èmt(€€€€€½¹ÍĞ‘•Á9…µ•Ì€ô¹•ÜM•ĞñÍÑÉ¥¹œø¡lÑ½É œ°€É•ÅÕ•ÍÑÌt¤(€€€€€™½È€¡½¹ÍĞ±¥¹”½˜¥¹ÍÑ…±±•¤ì(€€€€€€€½¹ÍĞÉ…Ü€ô±¥¹”¹ÍÁ±¥Ğ œôôœ¥lÁt¹ÍÁ±¥Ğ œôœ¥lÁt¹ÑÉ¥´ ¤(€€€€€€€¥˜€ ½x¡Ñ½É¡ñÑ½É¡Ù¥Í¥½¹ñÑ½É¡…Õ‘¥½ñÑÉ…¹Í™½Éµ•ÉÍñ…•±•É…Ñ•ñÍ…™•Ñ•¹Í½ÉÍñ¹ÕµÁåñÍ¥ÁåñÉ•ÅÕ•ÍÑÍñ¡Õ¥¹™…•m|µu¡Õˆ¤½¤¹Ñ•ÍĞ¡É…Ü¤¤ì(€€€€€€€€€‘•Á9…µ•Ì¹…‘¡É…Ü¹É•Á±…” |œ°€œ´œ¤¤(€€€€€€€ô(€€€€€ô(€€€€€½¹ÍĞİ½É­‰•¹¡A…Ñ €ôÑåÁ•½˜Á…ÉÍ•¹İ½É­‰•¹ €ôôô€ÍÑÉ¥¹œœ€üÁ…ÉÍ•¹İ½É­‰•¹ €è€œœ(€€€€€½¹ÍĞÉ•ÕÍ•-•ä€ôİ½É­‰•¹¡A…Ñ ¹ÍÁ±¥Ğ œ¼œ¤¹™¥±Ñ•È¡	½½±•…¸¤¹Á½À ¤ñğ€…ÕÑ½¹½µ½ÕÌµÁÉ•Á…É…Ñ¥½¸œ(€€€€€½¹ÍĞÁÔ€ôÁ…ÉÍ•¹ÁÔ€˜˜ÑåÁ•½˜Á…ÉÍ•¹ÁÔ€ôôô€½‰©•Ğœ€üÁ…ÉÍ•¹ÁÔ€èíô(€€€€€½¹ÍĞ™½ÕÍQ•ÉµÌ€ôÉÉ…ä¹¥ÍÉÉ…ä¡Á…ÉÍ•¹™½ÕÍ}Ñ•ÉµÌ¤€üÁ…ÉÍ•¹™½ÕÍ}Ñ•ÉµÌ¹µ…À¡MÑÉ¥¹œ¤¹™¥±Ñ•È¡	½½±•…¸¤¹Í±¥” À°€ÄÈ¤€èmt(€€€€€½¹ÍĞÉ•½µµ•¹‘•‘áÁ•É¥µ•¹Ğ€ôÁ…ÉÍ•¹É•½µµ•¹‘•‘}•áÁ•É¥µ•¹Ğ€˜˜ÑåÁ•½˜Á…ÉÍ•¹É•½µµ•¹‘•‘}•áÁ•É¥µ•¹Ğ€ôôô€½‰©•Ğœ€üÁ…ÉÍ•¹É•½µµ•¹‘•‘}•áÁ•É¥µ•¹Ğ€è¹Õ±°(€€€€€½¹ÍĞÍÑ•Á•ÍÉ¥ÁÑ¥½¸€ôÑåÁ•½˜Á…ÉÍ•¹ÍÑ•Á}‘•ÍÉ¥ÁÑ¥½¸€ôôô€ÍÑÉ¥¹œœ€üÁ…ÉÍ•¹ÍÑ•Á}‘•ÍÉ¥ÁÑ¥½¸¹ÑÉ¥´ ¤€è€œœ(€€€€€½¹ÍĞÉ•Í•…É¡½…°€ôÑåÁ•½˜Á…ÉÍ•¹É•Í•…É¡}½…°€ôôô€ÍÑÉ¥¹œœ€üÁ…ÉÍ•¹É•Í•…É¡}½…°¹ÑÉ¥´ ¤€è€œœ(€€€€€½¹ÍĞ½‰©•Ñ¥Ù”€ôÑåÁ•½˜É•½µµ•¹‘•‘áÁ•É¥µ•¹Ğü¹½‰©•Ñ¥Ù”€ôôô€ÍÑÉ¥¹œœ€˜˜É•½µµ•¹‘•‘áÁ•É¥µ•¹Ğ¹½‰©•Ñ¥Ù”¹ÑÉ¥´ ¤(€€€€€€€€üÉ•½µµ•¹‘•‘áÁ•É¥µ•¹Ğ¹½‰©•Ñ¥Ù”¹ÑÉ¥´ ¤(€€€€€€€€èÍÑ•Á•ÍÉ¥ÁÑ¥½¸(€€€€€€€€€€üA•ÉÍ¥ÍÑ•…ÕÑ½¹½µ½ÕÌATÁÉ•Á…É…Ñ¥½¸ÁÉ½‰”™½Èè€‘íÍÑ•Á•ÍÉ¥ÁÑ¥½¹õ€(€€€€€€€€€€èÉ•Í•…É¡½…°(€€€€€€€€€€€€üA•ÉÍ¥ÍÑ•…ÕÑ½¹½µ½ÕÌATÁÉ•Á…É…Ñ¥½¸ÁÉ½‰”™½Èè€‘íÉ•Í•…É¡½…±õ€(€€€€€€€€€€€€è€A•ÉÍ¥ÍÑ•…ÕÑ½¹½µ½ÕÌATÁÉ•Á…É…Ñ¥½¸ÁÉ½‰”ìÕÍ”Ñ¡¥ÌÑ¼ÉÕ¸½¹É•Ñ”%µÁ±•µ•¹Ñ…Ñ¥½¸•áÁ•É¥µ•¹ÑÌ¥¹ÍÑ•…½˜É•Á•…Ñ¥¹œÁÉ•Á…É…Ñ¥½¸¸œ(€€€€€½¹ÍĞµ…¹¥™•ÍĞ€ôì(€€€€€€€Í¡•µ…Y•ÉÍ¥½¸è€…ÈÌ¹ÁÉ•Á…É…Ñ¥½¸µÁÉ½‰”¹ØÄœ°(€€€€€€€É•Í•…É¡QåÁ”è€ÁÔµ…ÕÑ½¹½µ½ÕÌµÉ•Í•…É œ°(€€€€€€€½‰©•Ñ¥Ù”°(€€€€€€€Í½ÕÉ•MÑ…”èÁ…ÉÍ•¹ÍÑ…”ñğ€%¹Ù•ÍÑ¥…Ñ¥½¸œ°(€€€€€€€½¹ÑÉ…Ñ…¥±ÕÉ•I•…Í½¸èÁ…ÉÍ•¹½¹ÑÉ…Ñ}™…¥±ÕÉ•}É•…Í½¸ñğ¹Õ±°°(€€€€€€€É•Í•…É¡½…°èÉ•Í•…É¡½…°ñğÕ¹‘•™¥¹•°(€€€€€€€ÍÑ•Á•ÍÉ¥ÁÑ¥½¸èÍÑ•Á•ÍÉ¥ÁÑ¥½¸ñğÕ¹‘•™¥¹•°(€€€€€€€™½ÕÍQ•ÉµÌ°(€€€€€€€É•½µµ•¹‘•‘áÁ•É¥µ•¹ĞèÉ•½µµ•¹‘•‘áÁ•É¥µ•¹ĞñğÕ¹‘•™¥¹•°(€€€€€€€µ½‘•±Ìèµ½‘•±%‘Ì¹Í±¥” À°€ÄÀ¤¹µ…À ¡¥èÍÑÉ¥¹œ¤€ôø€¡ì¥°Í½ÕÉ”è€¡Õ¥¹™…”œ°É•ÅÕ¥É•èÑÉÕ”ô¤¤°(€€€€€€€‘•Á•¹‘•¹¥•ÌèÉÉ…ä¹™É½´¡‘•Á9…µ•Ì¤¹Í±¥” À°€ÄÈ¤¹µ…À¡¹…µ”€ôø€¡ì¹…µ”°¥µÁ½ÉÑ9…µ”è¹…µ”€ôôô€¡Õ¥¹™…”µ¡Õˆœ€ü€¡Õ¥¹™…•}¡Õˆœ€è¹…µ”¹É•Á±…” ¼´½œ°€|œ¤ô¤¤°(€€€€€€€É•Í½ÕÉ•Ìèl(€€€€€€€€€ìÑåÁ”è€ÁÔœ°¹…µ”èÁÔ¹ÁÕ}¹…µ”ñğ€9Y%%ATœ°É•ÅÕ¥É•èÑÉÕ”°•Ù¥‘•¹”èÁÔô°(€€€€€€€€€€¸¸¸¡İ½É­‰•¹¡A…Ñ €ümìÑåÁ”è€İ½É­‰•¹ œ°Á…Ñ èİ½É­‰•¹¡A…Ñ °É•ÅÕ¥É•èÑÉÕ”õt€èmt¤°(€€€€€€€t°(€€€€€€€Íµ½­•Q•ÍÑÌèl(€€€€€€€€€ì(€€€€€€€€€€€¹…µ”è€Ñ½É¡}Õ‘…}Íµ½­”œ°(€€€€€€€€€€€½µµ…¹è€ÁåÑ¡½¸€´€ğñAeq¹¥µÁ½ÉĞ©Í½¸°Ñ½É¡q¹àõÑ½É ¹½¹•Ì  Ä°¤°‘•Ù¥”ô‰Õ‘„ˆ¥˜Ñ½É ¹Õ‘„¹¥Í}…Ù…¥±…‰±” ¤•±Í”€‰ÁÔˆ¥q¹ÁÉ¥¹Ğ¡©Í½¸¹‘ÕµÁÌ¡ì‰Õ‘…}…Ù…¥±…‰±”ˆèÑ½É ¹Õ‘„¹¥Í}…Ù…¥±…‰±” ¤°€‰‘•Ù¥”ˆèÍÑÈ¡à¹‘•Ù¥”¤°€‰ÍÕ´ˆè™±½…Ğ¡à¹ÍÕ´ ¤¹¥Ñ•´ ¤¥ô¤¥q¹Adœ°(€€€€€€€€€€€•áÁ•Ñ•‘Ù¥‘•¹”èlÕ‘…}…Ù…¥±…‰±”œ°€‘•Ù¥”œ°€ÍÕ´t°(€€€€€€€€€€€Ñ¥µ•½ÕÑM•½¹‘Ìè€ØÀ°(€€€€€€€€€ô°(€€€€€€€t°(€€€€€€€É…‘¥¹É¥Ñ•É¥„èÉÉ…ä¹¥ÍÉÉ…ä¡Á…ÉÍ•¹É…‘¥¹}É¥Ñ•É¥„¤€˜˜Á…ÉÍ•¹É…‘¥¹}É¥Ñ•É¥„¹±•¹Ñ (€€€€€€€€€€üÁ…ÉÍ•¹É…‘¥¹}É¥Ñ•É¥„¹µ…À¡MÑÉ¥¹œ¤¹Í±¥” À°€ÄÀ¤(€€€€€€€€€€èl%µÁ±•µ•¹Ñ…Ñ¥½¸µÕÍĞÁÉ¥¹Ğ)M=8µ•ÑÉ¥Ìİ¥Ñ U½AT•Ù¥‘•¹”…¹½¹É•Ñ”¹Õµ•É¥Œµ•…ÍÕÉ•µ•¹ÑÌ¸t°(€€€€€€€İ½É­‰•¹ èìÉ•ÕÍ•-•ä°Á…Ñ èİ½É­‰•¹¡A…Ñ ñğÕ¹‘•™¥¹•°•áÁ•Ñ•‘ÉÑ¥™…ÑÌèl‘•Ñ•Éµ¥¹¥ÍÑ¥}ÁÕ}•áÁ•É¥µ•¹Ñ}µ•ÑÉ¥Ì¹©Í½¸tô°(€€€€€€€ÁÉ•Á…É…Ñ¥½¹Ù¥‘•¹”èÁ…ÉÍ•°(€€€€€ô(€€€€€É•ÑÕÉ¸ì½¬èÑÉÕ”°µ…¹¥™•ÍĞ°É•…Í½¸è€…ÕÑ½¹½µ½ÕÌÁÉ•Á…É…Ñ¥½¸ÁÉ½‰”½¹Ù•ÉÑ•Ñ¼Á•ÉÍ¥ÍÑ…‰±”µ…¹¥™•ÍĞœô(€€€ô…Ñ íô(€ô(€É•ÑÕÉ¸ì½¬è™…±Í”°É•…Í½¸è€¹¼…ÕÑ½¹½µ½ÕÌÁÉ•Á…É…Ñ¥½¸µ…¹¥™•ÍĞ™½Õ¹¥¸AT½ÕÑÁÕĞœô)ô()™Õ¹Ñ¥½¸Á…ÉÍ•ÁÕÙ¥‘•¹•)Í½¸¡½ÕÑÁÕĞèÍÑÉ¥¹œ¤è…¹äì(€½¹ÍĞÑÉ¥µµ•€ôMÑÉ¥¹œ¡½ÕÑÁÕĞñğ€œœ¤¹ÑÉ¥´ ¤(€¥˜€ …ÑÉ¥µµ•¤É•ÑÕÉ¸¹Õ±°(€ÑÉäì(€€€É•ÑÕÉ¸ÑÉ¥µµ•¹ÍÑ…ÉÑÍ]¥Ñ  ìœ¤€ü)M=8¹Á…ÉÍ”¡ÑÉ¥µµ•¤€è¹Õ±°(€ô…Ñ íô((€½¹ÍĞ…¹‘¥‘…Ñ•Ìè…¹åmt€ômt(€™½È€¡±•ĞÍÑ…ÉĞ€ô€ÀìÍÑ…ÉĞ€ğÑÉ¥µµ•¹±•¹Ñ ìÍÑ…ÉĞ¬¬¤ì(€€€¥˜€¡ÑÉ¥µµ•‘mÍÑ…ÉÑt€„ôô€ìœ¤½¹Ñ¥¹Õ”(€€€±•Ğ‘•ÁÑ €ô€À(€€€±•Ğ¥¹MÑÉ¥¹œ€ô™…±Í”(€€€±•Ğ•Í…Á•€ô™…±Í”(€€€™½È€¡±•Ğ•¹€ôÍÑ…ÉĞì•¹€ğÑÉ¥µµ•¹±•¹Ñ ì•¹¬¬¤ì(€€€€€½¹ÍĞ €ôÑÉ¥µµ•‘m•¹‘t(€€€€€¥˜€¡¥¹MÑÉ¥¹œ¤ì(€€€€€€€¥˜€¡•Í…Á•¤•Í…Á•€ô™…±Í”(€€€€€€€•±Í”¥˜€¡ €ôôô€qpœ¤•Í…Á•€ôÑÉÕ”(€€€€€€€•±Í”¥˜€¡ €ôôô€œˆœ¤¥¹MÑÉ¥¹œ€ô™…±Í”(€€€€€€€½¹Ñ¥¹Õ”(€€€€€ô(€€€€€¥˜€¡ €ôôô€œˆœ¤¥¹MÑÉ¥¹œ€ôÑÉÕ”(€€€€€•±Í”¥˜€¡ €ôôô€ìœ¤‘•ÁÑ €¬ô€Ä(€€€€€•±Í”¥˜€¡ €ôôô€ôœ¤ì(€€€€€€€‘•ÁÑ €´ô€Ä(€€€€€€€¥˜€¡‘•ÁÑ €ôôô€À¤ì(€€€€€€€€€ÑÉäì(€€€€€€€€€€€…¹‘¥‘…Ñ•Ì¹ÁÕÍ ¡)M=8¹Á…ÉÍ”¡ÑÉ¥µµ•¹Í±¥”¡ÍÑ…ÉĞ°•¹€¬€Ä¤¤¤(€€€€€€€€€ô…Ñ íô(€€€€€€€€€‰É•…¬(€€€€€€€ô(€€€€€ô(€€€ô(€ô(€É•ÑÕÉ¸…¹‘¥‘…Ñ•Ì¹É•Ù•ÉÍ” ¤¹™¥¹¡½‰¨€ôø½‰¨€˜˜ÑåÁ•½˜½‰¨€ôôô€½‰©•Ğœ€˜˜€¡½‰¨¹ÑåÁ”ñğ½‰¨¹ÁÔñğ½‰¨¹µ½‘•±}¥‘Ìñğ½‰¨¹¥¹ÍÑ…±±•‘}‘•Á•¹‘•¹¥•Ì¤¤ñğ…¹‘¥‘…Ñ•Ím…¹‘¥‘…Ñ•Ì¹±•¹Ñ €´€Åtñğ¹Õ±°)ô()•áÁ½ÉĞ™Õ¹Ñ¥½¸…ÍÍ•ÍÍÁÕá•ÕÑ¥½¹Ù¥‘•¹”¡¥¹ÁÕĞèÁÕÙ¥‘•¹•%¹ÁÕĞ¤èÁÕÙ¥‘•¹•I•ÍÕ±Ğì(€¥˜€ …¥¹ÁÕĞ¹ÍÕ•ÍÌ¤ì(€€€É•ÑÕÉ¸ìÙ…±¥è™…±Í”°É•…Í½¸è¥¹ÁÕĞ¹•ÉÉ½Èñğ€AT•á•ÕÑ¥½¸™…¥±•œô(€ô((€½¹ÍĞ½ÕÑÁÕĞ€ôMÑÉ¥¹œ¡¥¹ÁÕĞ¹½ÕÑÁÕĞñğ€œœ¤¹ÑÉ¥´ ¤(€½¹ÍĞÁ…ÉÍ•‘=ÕÑÁÕĞ€ôÁ…ÉÍ•ÁÕÙ¥‘•¹•)Í½¸¡½ÕÑÁÕĞ¤(€½¹ÍĞ±½½­Í1¥­•AÉ•Á…É…Ñ¥½¹AÉ½‰”€ô	½½±•…¸ (€€€¥¹ÁÕĞ¹™…±±‰…­UÍ•ñğ(€€€Á…ÉÍ•‘=ÕÑÁÕĞü¹ÑåÁ”€ôôô€…ÕÑ½¹½µ½ÕÍ}ÁÉ•Á…É…Ñ¥½¹}µ…¹¥™•ÍĞœñğ(€€€Á…ÉÍ•‘=ÕÑÁÕĞü¹½¹ÑÉ…Ñ}™…¥±ÕÉ•}É•…Í½¸(€€¤(€¥˜€¡±½½­Í1¥­•AÉ•Á…É…Ñ¥½¹AÉ½‰”¤ì(€€€¥˜€¡Í¡½Õ±‘UÍ•ÕÑ½¹½µ½ÕÍAÉ•Á…É…Ñ¥½¹…±±‰…¬¡¥¹ÁÕĞ¹ÍÑ…•9…µ”¤¤ì(€€€€€½¹ÍĞ¡…ÍAÉ½‰•Ù¥‘•¹”€ô	½½±•…¸ (€€€€€€€€ (€€€€€€€€€Á…ÉÍ•‘=ÕÑÁÕĞü¹ÑåÁ”€ôôô€…ÕÑ½¹½µ½ÕÍ}ÁÉ•Á…É…Ñ¥½¹}µ…¹¥™•ÍĞœ€˜˜(€€€€€€€€€€¡Á…ÉÍ•‘=ÕÑÁÕĞü¹ÁÔñğÁ…ÉÍ•‘=ÕÑÁÕĞü¹µ½‘•±}¥‘ÌñğÁ…ÉÍ•‘=ÕÑÁÕĞü¹¡Õ¥¹™…”ñğÁ…ÉÍ•‘=ÕÑÁÕĞü¹¥¹ÍÑ…±±•‘}‘•Á•¹‘•¹¥•ÌñğÁ…ÉÍ•‘=ÕÑÁÕĞü¹İ½É­‰•¹ ¤(€€€€€€€€¤ñğ€ (€€€€€€€€€€½…ÕÑ½¹½µ½ÕÍ}ÁÉ•Á…É…Ñ¥½¹}µ…¹¥™•ÍĞ¼¹Ñ•ÍĞ¡½ÕÑÁÕĞ¤€˜˜(€€€€€€€€€€½ÁÕñÕ‘…ñµ½‘•±}¥‘Íñ¡Õ¥¹™…•ñ¥¹ÍÑ…±±•‘}‘•Á•¹‘•¹¥•Íñİ½É­‰•¹¡ñÉ•½µµ•¹‘•‘}•áÁ•É¥µ•¹Ğ½¤¹Ñ•ÍĞ¡½ÕÑÁÕĞ¤(€€€€€€€€¤(€€€€€€¤(€€€€€¥˜€¡¡…ÍAÉ½‰•Ù¥‘•¹”€˜˜¡…Í5•…ÍÕÉ…‰±•ÁÕÙ¥‘•¹”¡½ÕÑÁÕĞ°Á…ÉÍ•‘=ÕÑÁÕĞ¤¤ì(€€€€€€€É•ÑÕÉ¸ì(€€€€€€€€€Ù…±¥èÑÉÕ”°(€€€€€€€€€É•…Í½¸èÕÑ½¹½µ½ÕÌÁÉ•Á…É…Ñ¥½¸ÁÉ½‰”…•ÁÑ•™½È€‘í¥¹ÁÕĞ¹ÍÑ…•9…µ•ôìÕÍ”¥ÑÌAT½µ½‘•°½İ½É­‰•¹ •Ù¥‘•¹”Ñ¼‘É¥Ù”Ñ¡”¹•áĞÉ•Í•…É ÍÑ•À¹€°(€€€€€€€ô(€€€€€ô(€€€€€É•ÑÕÉ¸ì(€€€€€€€Ù…±¥è™…±Í”°(€€€€€€€É•…Í½¸èÕÑ½¹½µ½ÕÌÁÉ•Á…É…Ñ¥½¸ÁÉ½‰”™½È€‘í¥¹ÁÕĞ¹ÍÑ…•9…µ•ô‘¥¹½ĞÁÉ½‘Õ”•¹½Õ ÁÉ•Á…É…Ñ¥½¸•Ù¥‘•¹”Ñ¼‘É¥Ù”Ñ¡”¹•áĞÍÑ•À¹€°(€€€€€ô(€€€ô(€€€É•ÑÕÉ¸ì(€€€€€Ù…±¥è™…±Í”°(€€€€€É•…Í½¸èÕÑ½¹½µ½ÕÌÁÉ•Á…É…Ñ¥½¸ÁÉ½‰”É…¸™½È€‘í¥¹ÁÕĞ¹ÍÑ…•9…µ•ô°‰ÕĞ¥Ğ¥Ì¹½Ğ„½µÁ±•Ñ••á•ÕÑ…‰±”•áÁ•É¥µ•¹Ğ¸Q¡”½É¥¥¹…°114½ÕÑÁÕĞÙ¥½±…Ñ•Ñ¡”AT½¹ÑÉ…ĞìÕÍ”Ñ¡”ÁÉ½‰”•Ù¥‘•¹”…ÌÉ•ÑÉä™••‘‰…¬¥¹ÍÑ•…½˜µ…É­¥¹œÑ¡”ÍÑ•À½µÁ±•Ñ”¹€°(€€€ô(€ô((€¥˜€¡½ÕÑÁÕĞ¹±•¹Ñ €ğ€ÈÀ¤ì(€€€É•ÑÕÉ¸ìÙ…±¥è™…±Í”°É•…Í½¸è€AT•á•ÕÑ¥½¸ÁÉ½‘Õ•Ñ½¼±¥ÑÑ±”•Ù¥‘•¹”œô(€ô((€½¹ÍĞµ•…ÍÕÉ…‰±•Ù¥‘•¹”€ô¡…Í5•…ÍÕÉ…‰±•ÁÕÙ¥‘•¹”¡½ÕÑÁÕĞ°Á…ÉÍ•‘=ÕÑÁÕĞ¤(€¥˜€ …µ•…ÍÕÉ…‰±•Ù¥‘•¹”¤ì(€€€É•ÑÕÉ¸ì(€€€€€Ù…±¥è™…±Í”°(€€€€€É•…Í½¸è€AT•á•ÕÑ¥½¸‘¥¹½ĞÁÉ½‘Õ”µ•…ÍÕÉ…‰±”•Ù¥‘•¹”€¡•áÁ•Ñ•)M=8µ•ÑÉ¥Ì°¹Õµ•É¥Œµ•…ÍÕÉ•µ•¹ÑÌ°…ÉÑ¥™…ĞÁ…Ñ¡Ì°ÍÑ‘½ÕĞ™¥•±‘Ì°½ÈAT½ÉÕ¹Ñ¥µ”™…ÑÌ¤¸œ°(€€€ô(€ô((€¥˜€ …¡…ÍIÕ¹Ñ¥µ•ÁÕÙ¥‘•¹”¡½ÕÑÁÕĞ°Á…ÉÍ•‘=ÕÑÁÕĞ¤¤ì(€€€É•ÑÕÉ¸ì(€€€€€Ù…±¥è™…±Í”°(€€€€€É•…Í½¸è€AT•á•ÕÑ¥½¸ÁÉ½‘Õ•µ•…ÍÕÉ…‰±”½ÕÑÁÕĞ‰ÕĞ¹¼ÉÕ¹Ñ¥µ”AT•Ù¥‘•¹”€¡•áÁ•Ñ•Õ‘…}…Ù…¥±…‰±”°ÁÕ}¹…µ”°‘•Ù¥”°YI4°½È¹Ù¥‘¥„µÍµ¤½ÕÑÁÕĞ¤¸œ°(€€€ô(€ô((€½¹ÍĞÉ¥Ñ•É¥…Ù¥‘•¹”€ôÙ…±¥‘…Ñ•É…‘¥¹É¥Ñ•É¥…Ù¥‘•¹”¡Á…ÉÍ•‘=ÕÑÁÕĞ¤(€¥˜€ …É¥Ñ•É¥…Ù¥‘•¹”¹Ù…±¥¤ì(€€€É•ÑÕÉ¸É¥Ñ•É¥…Ù¥‘•¹”(€ô((€É•ÑÕÉ¸ìÙ…±¥èÑÉÕ”°É•…Í½¸è€AT•á•ÕÑ¥½¸ÁÉ½‘Õ•µ•…ÍÕÉ…‰±”•Ù¥‘•¹”İ¥Ñ ÉÕ¹Ñ¥µ”AT•Ù¥‘•¹”œô)ô()™Õ¹Ñ¥½¸Ù…±¥‘…Ñ•É…‘¥¹É¥Ñ•É¥…Ù¥‘•¹”¡Á…ÉÍ•‘=ÕÑÁÕĞè…¹ä¤èÁÕÙ¥‘•¹•I•ÍÕ±Ğì(€¥˜€ …Á…ÉÍ•‘=ÕÑÁÕĞñğÑåÁ•½˜Á…ÉÍ•‘=ÕÑÁÕĞ€„ôô€½‰©•Ğœ¤É•ÑÕÉ¸ìÙ…±¥èÑÉÕ”°É•…Í½¸è€¹¼ÍÑÉÕÑÕÉ•É…‘¥¹œÉ¥Ñ•É¥„Ñ¼Ù…±¥‘…Ñ”œô(€¥˜€¡Á…ÉÍ•‘=ÕÑÁÕĞ¹ÑåÁ”€„ôô€‘•Ñ•Éµ¥¹¥ÍÑ¥}ÁÕ}•áÁ•É¥µ•¹Ğœ¤É•ÑÕÉ¸ìÙ…±¥èÑÉÕ”°É•…Í½¸è€¹½Ğ„‘•Ñ•Éµ¥¹¥ÍÑ¥Œ™…±±‰…¬½ÕÑÁÕĞœô((€½¹ÍĞÉ¥Ñ•É¥„€ôÉÉ…ä¹¥ÍÉÉ…ä¡Á…ÉÍ•‘=ÕÑÁÕĞ¹É…‘¥¹}É¥Ñ•É¥…}¡•­•¤(€€€€üÁ…ÉÍ•‘=ÕÑÁÕĞ¹É…‘¥¹}É¥Ñ•É¥…}¡•­•¹µ…À¡MÑÉ¥¹œ¤¹™¥±Ñ•È¡	½½±•…¸¤(€€€€èmt(€¥˜€¡É¥Ñ•É¥„¹±•¹Ñ €ôôô€À¤É•ÑÕÉ¸ìÙ…±¥èÑÉÕ”°É•…Í½¸è€¹¼É…‘¥¹œÉ¥Ñ•É¥„‘•±…É•‰ä½ÕÑÁÕĞœô((€½¹ÍĞ•Ù¥‘•¹”€ôÁ…ÉÍ•‘=ÕÑÁÕĞ¹É…‘¥¹}É¥Ñ•É¥…}•Ù¥‘•¹”(€¥˜€ …•Ù¥‘•¹”ñğÑåÁ•½˜•Ù¥‘•¹”€„ôô€½‰©•ĞœñğÉÉ…ä¹¥ÍÉÉ…ä¡•Ù¥‘•¹”¤¤ì(€€€É•ÑÕÉ¸ìÙ…±¥è™…±Í”°É•…Í½¸è€•Ñ•Éµ¥¹¥ÍÑ¥ŒAT•áÁ•É¥µ•¹Ğ•¡½•É…‘¥¹œÉ¥Ñ•É¥„‰ÕĞ‘¥¹½Ğµ…ÀÑ¡•´Ñ¼½¹É•Ñ”•Ù¥‘•¹”™¥•±‘Ì¸œô(€ô((€½¹ÍĞ™±…ÑÑ•¹•‘Ù¥‘•¹•-•åÌ€ô¹•ÜM•ĞñÍÑÉ¥¹œø ¤(€½¹ÍĞ½±±•ÑÙ¥‘•¹•-•åÌ€ô€¡ÁÉ•™¥àèÍÑÉ¥¹œ°Ù…±Õ”èÕ¹­¹½İ¸¤€ôøì(€€€¥˜€ …ÁÉ•™¥à¤ì(€€€€€¥˜€ …Ù…±Õ”ñğÑåÁ•½˜Ù…±Õ”€„ôô€½‰©•Ğœ¤É•ÑÕÉ¸(€€€ô•±Í”ì(€€€€€™±…ÑÑ•¹•‘Ù¥‘•¹•-•åÌ¹…‘¡ÁÉ•™¥à¤(€€€ô((€€€¥˜€ …Ù…±Õ”ñğÑåÁ•½˜Ù…±Õ”€„ôô€½‰©•Ğœ¤É•ÑÕÉ¸(€€€¥˜€¡ÉÉ…ä¹¥ÍÉÉ…ä¡Ù…±Õ”¤¤ì(€€€€€Ù…±Õ”¹Í±¥” À°€ÈÔ¤¹™½É…  ¡¥Ñ•´°¥¹‘•à¤€ôø½±±•ÑÙ¥‘•¹•-•åÌ¡ÁÉ•™¥à€¬€lœ€¬¥¹‘•à€¬€tœ°¥Ñ•´¤¤(€€€€€É•ÑÕÉ¸(€€€ô((€€€™½È€¡½¹ÍĞm­•ä°¹•ÍÑ•‘t½˜=‰©•Ğ¹•¹ÑÉ¥•Ì¡Ù…±Õ”…ÌI•½ÉñÍÑÉ¥¹œ°Õ¹­¹½İ¸ø¤¤ì(€€€€€¥˜€¡­•ä€ôôô€É…‘¥¹}É¥Ñ•É¥…}¡•­•œñğ­•ä€ôôô€É…‘¥¹}É¥Ñ•É¥…}•Ù¥‘•¹”œ¤½¹Ñ¥¹Õ”(€€€€€½±±•ÑÙ¥‘•¹•-•åÌ¡ÁÉ•™¥à€üÁÉ•™¥à€¬€œ¸œ€¬­•ä€è­•ä°¹•ÍÑ•¤(€€€ô(€ô(€½±±•ÑÙ¥‘•¹•-•åÌ œœ°Á…ÉÍ•‘=ÕÑÁÕĞ¤((€½¹ÍĞµ…Ñ¡•‘-•åá¥ÍÑÌ€ô€¡­•äèÍÑÉ¥¹œ¤è‰½½±•…¸€ôøì(€€€¥˜€¡™±…ÑÑ•¹•‘Ù¥‘•¹•-•åÌ¹¡…Ì¡­•ä¤¤É•ÑÕÉ¸ÑÉÕ”(€€€É•ÑÕÉ¸ÉÉ…ä¹™É½´¡™±…ÑÑ•¹•‘Ù¥‘•¹•-•åÌ¤¹Í½µ”¡…¹‘¥‘…Ñ”€ôø(€€€€€…¹‘¥‘…Ñ”¹ÍÑ…ÉÑÍ]¥Ñ ¡­•ä€¬€œ¸œ¤ñğ…¹‘¥‘…Ñ”¹ÍÑ…ÉÑÍ]¥Ñ ¡­•ä€¬€lœ¤(€€€€¤(€ô((€½¹ÍĞÙ…±Õ•ÑA…Ñ €ô€¡Í½ÕÉ”èÕ¹­¹½İ¸°Á…Ñ èÍÑÉ¥¹œ¤èÕ¹­¹½İ¸€ôøì(€€€½¹ÍĞÁ…ÉÑÌ€ôÁ…Ñ ¹µ…Ñ  ½mx¹mqut­ñql¡q¬¥qt½œ¤ñğmt(€€€±•ĞÕÉÉ•¹Ğ€ôÍ½ÕÉ”(€€€™½È€¡½¹ÍĞÁ…ÉĞ½˜Á…ÉÑÌ¤ì(€€€€€¥˜€¡Á…ÉĞ¹ÍÑ…ÉÑÍ]¥Ñ  lœ¤¤ì(€€€€€€€½¹ÍĞ¥¹‘•à€ô9Õµ‰•È¡Á…ÉĞ¹Í±¥” Ä°€´Ä¤¤(€€€€€€€¥˜€ …ÉÉ…ä¹¥ÍÉÉ…ä¡ÕÉÉ•¹Ğ¤ñğ€…9Õµ‰•È¹¥Í%¹Ñ••È¡¥¹‘•à¤ñğ¥¹‘•à€ğ€Àñğ¥¹‘•à€øôÕÉÉ•¹Ğ¹±•¹Ñ ¤É•ÑÕÉ¸Õ¹‘•™¥¹•(€€€€€€€ÕÉÉ•¹Ğ€ôÕÉÉ•¹Ñm¥¹‘•át(€€€€€€€½¹Ñ¥¹Õ”(€€€€€ô(€€€€€¥˜€ …ÕÉÉ•¹ĞñğÑåÁ•½˜ÕÉÉ•¹Ğ€„ôô€½‰©•ĞœñğÉÉ…ä¹¥ÍÉÉ…ä¡ÕÉÉ•¹Ğ¤¤É•ÑÕÉ¸Õ¹‘•™¥¹•(€€€€€ÕÉÉ•¹Ğ€ô€¡ÕÉÉ•¹Ğ…ÌI•½ÉñÍÑÉ¥¹œ°Õ¹­¹½İ¸ø¥mÁ…ÉÑt(€€€ô(€€€É•ÑÕÉ¸ÕÉÉ•¹Ğ(€ô((€½¹ÍĞ¡…Í½¹É•Ñ•Ù¥‘•¹•Y…±Õ”€ô€¡Ù…±Õ”èÕ¹­¹½İ¸¤è‰½½±•…¸€ôøì(€€€¥˜€¡Ù…±Õ”€ôôô¹Õ±°ñğÙ…±Õ”€ôôôÕ¹‘•™¥¹•¤É•ÑÕÉ¸™…±Í”(€€€¥˜€¡ÑåÁ•½˜Ù…±Õ”€ôôô€¹Õµ‰•Èœ¤É•ÑÕÉ¸9Õµ‰•È¹¥Í¥¹¥Ñ”¡Ù…±Õ”¤(€€€¥˜€¡ÑåÁ•½˜Ù…±Õ”€ôôô€‰½½±•…¸œ¤É•ÑÕÉ¸ÑÉÕ”(€€€¥˜€¡ÑåÁ•½˜Ù…±Õ”€ôôô€ÍÑÉ¥¹œœ¤É•ÑÕÉ¸Ù…±Õ”¹ÑÉ¥´ ¤¹±•¹Ñ €ø€À(€€€¥˜€¡ÉÉ…ä¹¥ÍÉÉ…ä¡Ù…±Õ”¤¤É•ÑÕÉ¸Ù…±Õ”¹±•¹Ñ €ø€À€˜˜Ù…±Õ”¹Í½µ”¡¡…Í½¹É•Ñ•Ù¥‘•¹•Y…±Õ”¤(€€€¥˜€¡ÑåÁ•½˜Ù…±Õ”€ôôô€½‰©•Ğœ¤É•ÑÕÉ¸=‰©•Ğ¹Ù…±Õ•Ì¡Ù…±Õ”…ÌI•½ÉñÍÑÉ¥¹œ°Õ¹­¹½İ¸ø¤¹Í½µ”¡¡…Í½¹É•Ñ•Ù¥‘•¹•Y…±Õ”¤(€€€É•ÑÕÉ¸™…±Í”(€ô((€½¹ÍĞµ…Ñ¡•‘-•å!…Í½¹É•Ñ•Ù¥‘•¹”€ô€¡­•äèÍÑÉ¥¹œ¤è‰½½±•…¸€ôøì(€€€¥˜€¡¡…Í½¹É•Ñ•Ù¥‘•¹•Y…±Õ”¡Ù…±Õ•ÑA…Ñ ¡Á…ÉÍ•‘=ÕÑÁÕĞ°­•ä¤¤¤É•ÑÕÉ¸ÑÉÕ”(€€€É•ÑÕÉ¸ÉÉ…ä¹™É½´¡™±…ÑÑ•¹•‘Ù¥‘•¹•-•åÌ¤(€€€€€€¹™¥±Ñ•È¡…¹‘¥‘…Ñ”€ôø…¹‘¥‘…Ñ”¹ÍÑ…ÉÑÍ]¥Ñ ¡­•ä€¬€œ¸œ¤ñğ…¹‘¥‘…Ñ”¹ÍÑ…ÉÑÍ]¥Ñ ¡­•ä€¬€lœ¤¤(€€€€€€¹Í½µ”¡…¹‘¥‘…Ñ”€ôø¡…Í½¹É•Ñ•Ù¥‘•¹•Y…±Õ”¡Ù…±Õ•ÑA…Ñ ¡Á…ÉÍ•‘=ÕÑÁÕĞ°…¹‘¥‘…Ñ”¤¤¤(€ô((€½¹ÍĞ•áÁ±¥¥ÑÙ¥‘•¹•Q•ÉµÌ€ô€¡É¥Ñ•É¥½¸èÍÑÉ¥¹œ¤èÍÑÉ¥¹mt€ôøì(€€€½¹ÍĞÍÑ½Áİ½É‘Ì€ô¹•ÜM•Ğ¡l(€€€€€€…ÉÑ¥™…Ğœ°(€€€€€€…ÉÑ¥™…ÑÌœ°(€€€€€€½¹Ñ…¥¸œ°(€€€€€€½¹Ñ…¥¹Ìœ°(€€€€€€‘•Á•¹‘•¹äœ°(€€€€€€‘•Á•¹‘•¹¥•Ìœ°(€€€€€€•Ù¥‘•¹”œ°(€€€€€€™…¥±ÕÉ”œ°(€€€€€€™…¥±ÕÉ•Ìœ°(€€€€€€™¥•±œ°(€€€€€€™¥•±‘Ìœ°(€€€€€€¥¹±Õ‘”œ°(€€€€€€¥¹±Õ‘•Ìœ°(€€€€€€µ•ÑÉ¥Œœ°(€€€€€€µ•ÑÉ¥Ìœ°(€€€€€€µ½‘•°œ°(€€€€€€µ½‘•±Ìœ°(€€€€€€ÁÉ¥¹Ğœ°(€€€€€€ÁÉ¥¹ÑÌœ°(€€€€€€ÍÑ‘½ÕĞœ°(€€€€€€ÍÑ‘•ÉÈœ°(€€€€€€İ¥Ñ œ°(€€€t¤(€€€É•ÑÕÉ¸ÉÉ…ä¹™É½´¡¹•ÜM•Ğ (€€€€€É¥Ñ•É¥½¸(€€€€€€€€¹Ñ½1½İ•É…Í” ¤(€€€€€€€€¹µ…Ñ  ½m„µéum„µèÀ´å}t¨ üép¹m„µéum„µèÀ´å}t¨¤ü½œ¤ñğmt(€€€€¤¤¹™¥±Ñ•È¡Ñ•É´€ôø(€€€€€Ñ•É´¹¥¹±Õ‘•Ì |œ¤ñğ(€€€€€Ñ•É´¹¥¹±Õ‘•Ì œ¸œ¤ñğ(€€€€€€ ½ym„µét­lÀ´åt­m„µèÀ´å}t¨¼¹Ñ•ÍĞ¡Ñ•É´¤€˜˜€…ÍÑ½Áİ½É‘Ì¹¡…Ì¡Ñ•É´¤¤(€€€€¤(€ô((€½¹ÍĞµ¥ÍÍ¥¹œ€ôÉ¥Ñ•É¥„¹™¥±Ñ•È ¡É¥Ñ•É¥½¸èÍÑÉ¥¹œ¤€ôøì(€€€½¹ÍĞÉ½Ü€ô•Ù¥‘•¹•mÉ¥Ñ•É¥½¹t(€€€½¹ÍĞµ…Ñ¡•‘-•åÌ€ôÉÉ…ä¹¥ÍÉÉ…ä¡É½Üü¹µ…Ñ¡•‘}­•åÌ¤€üÉ½Ü¹µ…Ñ¡•‘}­•åÌ¹µ…À¡MÑÉ¥¹œ¤¹™¥±Ñ•È¡	½½±•…¸¤€èmt(€€€¥˜€ …É½ÜñğÑåÁ•½˜É½Ü€„ôô€½‰©•ĞœñğÉ½Ü¹µ…Ñ¡•€„ôôÑÉÕ”ñğµ…Ñ¡•‘-•åÌ¹±•¹Ñ €ôôô€À¤ì(€€€€€É•ÑÕÉ¸ÑÉÕ”(€€€ô((€€€¥˜€ …µ…Ñ¡•‘-•åÌ¹•ÛŸxÖÚ$z{-®éÜj×config.json" for s in siblings)
             else:
                 item["error"] = response.text[:300]
         metrics["model_metadata"].append(item)
@@ -919,4 +242,93 @@ print(json.dumps(manifest, indent=2, sort_keys=True))`
     dependencies: ['requests'],
     code,
   }
+}
+
+function looksLikePreparationManifestWrapper(command: StrictGpuCommand): boolean {
+  return /preparation[_-]?manifest|schemaVersion|smokeTests|gradingCriteria/i.test(command.code)
+}
+
+function pythonFenceCandidate(text: string): string | null {
+  const match = String(text || '').match(/\`\`\`python\s*([\s\S]*?)\`\`\`/i)
+  return match?.[1]?.trim() || null
+}
+
+export function extractStrictGpuCommand(response: string): StrictGpuResult {
+  const fencedPython = pythonFenceCandidate(response)
+  if (fencedPython) {
+    return validateStrictGpuCode({
+      action: 'run_python',
+      dependencies: inferDependenciesFromCode(fencedPython),
+      code: fencedPython,
+    })
+  }
+
+  let lastReason = 'response did not parse as the required JSON object'
+  for (const candidate of jsonObjectCandidates(String(response || ''))) {
+    try {
+      const parsed = JSON.parse(candidate)
+      if (!parsed || parsed.action !== 'run_python') {
+        lastReason = 'JSON action must be "run_python"'
+        continue
+      }
+      const validated = validateStrictGpuCode(parsed)
+      if (validated.ok) return validated
+      lastReason = strictGpuFailureReason(validated)
+    } catch {
+      if (lastReason === 'response did not parse as the required JSON object') {
+        lastReason = 'response did not parse as the required JSON object'
+      }
+    }
+  }
+
+  return { ok: false, reason: lastReason }
+}
+
+export function selectGpuSubmissionCommand(input: GpuSubmissionInput): GpuSubmissionResult {
+  const existingManifest = input.preparationManifest
+  const extracted = extractStrictGpuCommand(input.llmResponse)
+  const extractedFailureReason = strictGpuFailureReason(extracted)
+
+  if (existingManifest) {
+    if (!extracted.ok || (extracted.ok && looksLikePreparationManifestWrapper(extracted.command))) {
+      return {
+        ok: true,
+        command: buildDeterministicGpuExperimentCommand({
+          researchGoal: input.researchGoal,
+          stepDescription: input.stepDescription,
+          stageName: input.stageName,
+          reason: extracted.ok ? 'preparation manifest wrapper emitted instead of executable experiment' : extractedFailureReason,
+          preparationManifest: existingManifest,
+        }),
+        fallbackUsed: false,
+        reason: 'selected deterministic GPU experiment from preparation manifest because the model output was not an executable experiment',
+      }
+    }
+  }
+
+  if (extracted.ok && !looksLikePreparationManifestWrapper(extracted.command)) {
+    return { ok: true, command: extracted.command, fallbackUsed: false, reason: 'selected strict GPU command from model output' }
+  }
+
+  if (shouldUseAutonomousPreparationFallback(input.stageName)) {
+    return {
+      ok: true,
+      command: buildAutonomousPreparationCommand({
+        researchGoal: input.researchGoal,
+        stepDescription: input.stepDescription,
+        stageName: input.stageName,
+        reason: extracted.ok ? 'preparation manifest wrapper emitted instead of executable GPU experiment' : extractedFailureReason,
+      }),
+      fallbackUsed: true,
+      reason: input.manifestValidatedThisCycle
+        ? 'validated preparation manifest is recorded; submitting autonomous preparation fallback instead of raw manifest JSON'
+        : 'preparation manifest wrapper or invalid GPU output was replaced with autonomous preparation fallback',
+    }
+  }
+
+  if (extracted.ok) {
+    return { ok: true, command: extracted.command, fallbackUsed: false, reason: 'selected strict GPU command from model output' }
+  }
+
+  return { ok: false, reason: extractedFailureReason }
 }
