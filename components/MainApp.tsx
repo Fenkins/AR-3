@@ -149,6 +149,7 @@ function AuthForm() {
 
 // Dashboard Component
 function DashboardView() {
+  const { logout } = useAuth()
   const [stats, setStats] = useState<any>(null)
   const [loading, setLoading] = useState(true)
 
@@ -158,9 +159,26 @@ function DashboardView() {
     const response = await fetch('/api/dashboard', {
       headers: { Authorization: `Bearer ${token}` },
     })
+    if (response.status === 401) {
+      logout()
+      setLoading(false)
+      return
+    }
     if (!response.ok) { setLoading(false); return; }
     const data = await response.json()
-    setStats(data)
+    setStats({
+      stats: {
+        totalSpaces: data?.stats?.totalSpaces ?? 0,
+        totalExperiments: data?.stats?.totalExperiments ?? 0,
+        totalBreakthroughs: data?.stats?.totalBreakthroughs ?? 0,
+        verifiedBreakthroughs: data?.stats?.verifiedBreakthroughs ?? 0,
+        totalTokens: data?.stats?.totalTokens ?? 0,
+      },
+      experimentsByPhase: data?.experimentsByPhase ?? {},
+      breakthroughsByCategory: data?.breakthroughsByCategory ?? {},
+      recentBreakthroughs: Array.isArray(data?.recentBreakthroughs) ? data.recentBreakthroughs : [],
+      spaceStats: Array.isArray(data?.spaceStats) ? data.spaceStats : [],
+    })
     setLoading(false)
   }
 
@@ -307,6 +325,7 @@ function DashboardView() {
 
 // Spaces Component
 function SpacesView() {
+  const { logout } = useAuth()
   const [spaces, setSpaces] = useState<any[]>([])
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [selectedSpace, setSelectedSpace] = useState<any>(null)
@@ -315,11 +334,27 @@ function SpacesView() {
   const token = typeof window !== 'undefined' ? localStorage.getItem('research_token') : null
 
   const fetchSpaces = async () => {
+    if (!token) {
+      setSpaces([])
+      setLoading(false)
+      return
+    }
     const response = await fetch('/api/spaces', {
       headers: { Authorization: `Bearer ${token}` },
     })
+    if (response.status === 401) {
+      logout()
+      setSpaces([])
+      setLoading(false)
+      return
+    }
+    if (!response.ok) {
+      setSpaces([])
+      setLoading(false)
+      return
+    }
     const data = await response.json()
-    setSpaces(data.spaces)
+    setSpaces(Array.isArray(data.spaces) ? data.spaces : [])
     setLoading(false)
   }
 
