@@ -244,6 +244,28 @@ function testJsonMetricsOutputIsValidGpuEvidence() {
   assert.equal(assessed.valid, true, assessed.reason)
 }
 
+function testCpuOnlyJsonMetricsAreNotValidGpuEvidence() {
+  const assessed = contract.assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    fallbackUsed: false,
+    success: true,
+    output: JSON.stringify({ accuracy: 0.91, loss: 0.12, runtime_seconds: 3.4 }),
+  })
+  assert.equal(assessed.valid, false)
+  assert.match(assessed.reason, /runtime GPU evidence/i)
+}
+
+function testArtifactOnlyOutputIsNotValidGpuEvidence() {
+  const assessed = contract.assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    fallbackUsed: false,
+    success: true,
+    output: 'saved metrics to /tmp/ar3-workbenches/run-1/metrics.json',
+  })
+  assert.equal(assessed.valid, false)
+  assert.match(assessed.reason, /runtime GPU evidence/i)
+}
+
 function testStrictGpuCommandRejectsCpuOnlyMetricsCode() {
   const extracted = contract.extractStrictGpuCommand(JSON.stringify({
     action: 'run_python',
@@ -461,6 +483,8 @@ testDeterministicGpuExperimentFallbackUsesManifestAndPassesEvidenceGate()
 testPreparationProbeShapeIsInvalidForImplementationEvenIfFallbackFlagIsLost()
 testLongProseOutputIsNotValidGpuEvidence()
 testJsonMetricsOutputIsValidGpuEvidence()
+testCpuOnlyJsonMetricsAreNotValidGpuEvidence()
+testArtifactOnlyOutputIsNotValidGpuEvidence()
 testStrictGpuCommandRejectsCpuOnlyMetricsCode()
 testStrictGpuCommandAcceptsExecutableGpuProbeCode()
 testStrictGpuCommandSkipsNonCommandJsonAndAcceptsLaterCommand()

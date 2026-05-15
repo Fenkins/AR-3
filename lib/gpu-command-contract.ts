@@ -220,7 +220,56 @@ export function assessGpuExecutionEvidence(input: GpuEvidenceInput): GpuEvidence
     }
   }
 
-  return { valid: true, reason: 'GPU execution produced measurable evidence' }
+  if (!hasRuntimeGpuEvidence(output, parsedOutput)) {
+    return {
+      valid: false,
+      reason: 'GPU execution produced measurable output but no runtime GPU evidence (expected cuda_available, gpu_name, device, VRAM, or nvidia-smi output).',
+    }
+  }
+
+  return { valid: true, reason: 'GPU execution produced measurable evidence with runtime GPU evidence' }
+}
+
+function hasRuntimeGpuEvidence(output: string, parsedOutput: any): boolean {
+  const evidenceKeys = new Set([
+    'cuda_available',
+    'gpu_name',
+    'gpu_count',
+    'gpu_memory',
+    'gpu_memory_total',
+    'vram',
+    'device',
+    'device_name',
+    'torch_cuda_available',
+    'torch_cuda_version',
+    'nvidia_driver',
+    'nvidia_smi',
+  ])
+
+  const objectHasRuntimeEvidence = (value: unknown): boolean => {
+    if (!value || typeof value !== 'object') return false
+    if (Array.isArray(value)) return value.some(objectHasRuntimeEvidence)
+
+    for (const [rawKey, rawValue] of Object.entries(value as Record<string, unknown>)) {
+      const key = rawKey.toLowerCase()
+      if (evidenceKeys.has(key)) return true
+      if (['device', 'runtime', 'backend'].includes(key) && String(rawValue).toLowerCase().startsWith('cuda')) return true
+      if (objectHasRuntimeEvidence(rawValue)) return true
+    }
+    return false
+  }
+
+  if (objectHasRuntimeEvidence(parsedOutput)) return true
+
+  return [
+    /\bcuda[_ -]?(available|device|version)\b/i,
+    /\bgpu[_ -]?(name|count|memory|util|device)\b/i,
+    /\bvram\b/i,
+    /\bnvidia(?:-smi)?\b/i,
+    /\brtx\s*\d+\b/i,
+    /\btesla\b/i,
+    /\ba\d{2,3}\b/i,
+  ].some(pattern => pattern.test(output))
 }
 
 function hasMeasurableGpuEvidence(output: string, parsedOutput: any): boolean {
