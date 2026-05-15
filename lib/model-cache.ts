@@ -59,16 +59,19 @@ function ensureSpaceDir(spaceId: string): void {
 function getPathSizeBytes(filePath: string, seen = new Set<string>()): number {
   try {
     if (!fs.existsSync(filePath)) return 0
-    const realPath = fs.realpathSync(filePath)
-    if (seen.has(realPath)) return 0
-    seen.add(realPath)
+    const stats = fs.lstatSync(filePath)
+    const inodeKey = `${stats.dev}:${stats.ino}`
+    if (seen.has(inodeKey)) return 0
+    seen.add(inodeKey)
 
-    const stats = fs.statSync(realPath)
-    if (!stats.isDirectory()) return stats.size
+    // Use allocated blocks instead of logical file size. HuggingFace caches use
+    // symlinks and deduplicated blobs, so summing stat.size can report more
+    // bytes than the disk actually has.
+    if (!stats.isDirectory()) return (stats.blocks || 0) * 512
 
     let total = 0
-    for (const entry of fs.readdirSync(realPath, { withFileTypes: true })) {
-      total += getPathSizeBytes(path.join(realPath, entry.name), seen)
+    for (const entry of fs.readdirSync(filePath, { withFileTypes: true })) {
+      total += getPathSizeBytes(path.join(filePath, entry.name), seen)
     }
     return total
   } catch {
