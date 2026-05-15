@@ -1,3 +1,5 @@
+Total output lines: 889
+
 export type StrictGpuCommand = { action: 'run_python'; dependencies: string[]; code: string }
 
 export function shouldUseAutonomousPreparationFallback(stageName: string): boolean {
@@ -339,29 +341,52 @@ function findLikelyPythonStringSyntaxIssue(code: string): string | null {
   return null
 }
 
+function validateStrictGpuCode(parsed: any): StrictGpuResult {
+  const code = typeof parsed?.code === 'string' ? parsed.code.trim() : ''
+  if (parsed?.action !== 'run_python') return { ok: false, reason: 'JSON action must be "run_python"' }
+  if (!code) return { ok: false, reason: 'JSON is missing non-empty code string' }
+  const codeLines = code.split('\n').map((l: string) => l.trim()).filter(Boolean)
+  const hasPython = /(^|\n)\s*(import |from |def |class |for |while |try:|with |print\(|[A-Za-z_][A-Za-z0-9_]*\s*=)/m.test(code)
+  const hasMeasurableOutput = /print\(|json\.dump|json\.dumps|logging\./.test(code)
+  const hasGpuProbe = /\b(torch|cuda|cupy|triton|tensorflow|jax|nvidia-smi|nvml|device\s*=|cuda_available|gpu_name|gpu_memory|vram)\b|\.cuda\(|\.to\(\s*['"]cuda|torch\.cuda|subprocess\.[\s\S]*?nvidia-smi/i.test(code)
+  const hasPlaceholder = /TODO|pass\s*(#|$)|pseudocode|your code here|placeholder|\.\.\./i.test(code)
+  if (codeLines.length < 5) return { ok: false, reason: `code too short (${codeLines.length} non-empty lines)` }
+  if (!hasPython) return { ok: false, reason: 'code lacks Python syntax indicators' }
+  const syntaxIssue = findLikelyPythonStringSyntaxIssue(code)
+  if (syntaxIssue) return { ok: false, reason: `python syntax appears invalid: ${syntaxIssue}` }
+  if (!hasMeasurableOutput) return { ok: false, reason: 'code must print/log measurable outputs' }
+  if (!hasGpuProbe) return { ok: false, reason: 'code must include an executable GPU/CUDA probe or GPU runtime evidence path' }
+  if (hasPlaceholder) return { ok: false, reason: 'code contains placeholder/pseudocode markers' }
+  return { ok: true, command: { action: 'run_python', dependencies: Array.isArray(parsed.dependencies) ? parsed.dependencies.map(String).slice(0, 20) : [], code } }
+}
+
+function pythonCodeFenceCandidates(text: string): string[] {
+  const candidates: string[] = []
+  const re = /```(?:python|py)\s*([\s\S]*?)```/gi
+  for (const match of Array.from(String(text || '').matchAll(re))) {
+    if (match[1]?.trim()) candidates.push(match[1].trim())
+  }
+  return candidates
+}
+
 export function extractStrictGpuCommand(text: string): StrictGpuResult {
+  let lastReason = 'response did not parse as the required JSON object'
   for (const candidate of jsonObjectCandidates(text)) {
     try {
       const parsed = JSON.parse(candidate)
-      const code = typeof parsed?.code === 'string' ? parsed.code.trim() : ''
-      if (parsed?.action !== 'run_python') return { ok: false, reason: 'JSON action must be "run_python"' }
-      if (!code) return { ok: false, reason: 'JSON is missing non-empty code string' }
-      const codeLines = code.split('\n').map((l: string) => l.trim()).filter(Boolean)
-      const hasPython = /(^|\n)\s*(import |from |def |class |for |while |try:|with |print\(|[A-Za-z_][A-Za-z0-9_]*\s*=)/m.test(code)
-      const hasMeasurableOutput = /print\(|json\.dump|json\.dumps|logging\./.test(code)
-      const hasGpuProbe = /\b(torch|cuda|cupy|triton|tensorflow|jax|nvidia-smi|nvml|device\s*=|cuda_available|gpu_name|gpu_memory|vram)\b|\.cuda\(|\.to\(\s*['"]cuda|torch\.cuda|subprocess\.[\s\S]*?nvidia-smi/i.test(code)
-      const hasPlaceholder = /TODO|pass\s*(#|$)|pseudocode|your code here|placeholder|\.\.\./i.test(code)
-      if (codeLines.length < 5) return { ok: false, reason: `code too short (${codeLines.length} non-empty lines)` }
-      if (!hasPython) return { ok: false, reason: 'code lacks Python syntax indicators' }
-      const syntaxIssue = findLikelyPythonStringSyntaxIssue(code)
-      if (syntaxIssue) return { ok: false, reason: `python syntax appears invalid: ${syntaxIssue}` }
-      if (!hasMeasurableOutput) return { ok: false, reason: 'code must print/log measurable outputs' }
-      if (!hasGpuProbe) return { ok: false, reason: 'code must include an executable GPU/CUDA probe or GPU runtime evidence path' }
-      if (hasPlaceholder) return { ok: false, reason: 'code contains placeholder/pseudocode markers' }
-      return { ok: true, command: { action: 'run_python', dependencies: Array.isArray(parsed.dependencies) ? parsed.dependencies.map(String).slice(0, 20) : [], code } }
+      const validated = validateStrictGpuCode(parsed)
+      if (validated.ok) return validated
+      lastReason = (validated as { ok: false; reason: string }).reason
     } catch {}
   }
-  return { ok: false, reason: 'response did not parse as the required JSON object' }
+
+  for (const code of pythonCodeFenceCandidates(text)) {
+    const validated = validateStrictGpuCode({ action: 'run_python', dependencies: [], code })
+    if (validated.ok) return validated
+    lastReason = (validated as { ok: false; reason: string }).reason
+  }
+
+  return { ok: false, reason: lastReason }
 }
 
 function asPyTripleQuoted(value: string): string {
@@ -435,12 +460,7 @@ export function selectGpuSubmissionCommand(input: GpuSubmissionInput): GpuSubmis
     const reason = (strict as { ok: false; reason: string }).reason
     if (shouldShortCircuitPreparationFallback(input.stageName, reason)) {
       if (input.preparationManifest) {
-        const fallbackReason = `weak preparation-stage GPU command (${reason}) after preparation evidence already exists; running deterministic GPU experiment instead`
-        return {
-          ok: true,
-          fallbackUsed: false,
-          reason: fallbackReason,
-          command: buildDeterministicGpuExperimentCommand({
+        const fallbackReason = `weak preparation-stage GPU command (${reason}) …50 tokens truncated…  command: buildDeterministicGpuExperimentCommand({
             researchGoal: input.researchGoal,
             stepDescription: input.stepDescription,
             stageName: input.stageName,

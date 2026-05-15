@@ -263,6 +263,25 @@ function testStrictGpuCommandAcceptsExecutableGpuProbeCode() {
   assert.equal(extracted.ok, true, extracted.reason)
 }
 
+function testStrictGpuCommandSkipsNonCommandJsonAndAcceptsLaterCommand() {
+  const response = JSON.stringify({ schemaVersion: 'ar3.preparation-manifest.v1', models: [] }) + '\n' + JSON.stringify({
+    action: 'run_python',
+    dependencies: ['torch'],
+    code: 'import json\nimport torch\ndevice = "cuda" if torch.cuda.is_available() else "cpu"\nx = torch.ones((2, 2), device=device)\nprint(json.dumps({"cuda_available": torch.cuda.is_available(), "device": str(x.device), "sum": float(x.sum().item())}))',
+  })
+  const extracted = contract.extractStrictGpuCommand(response)
+  assert.equal(extracted.ok, true, extracted.reason)
+  assert.match(extracted.command.code, /torch\.ones/)
+}
+
+function testStrictGpuCommandAcceptsPythonFenceForWeakModels() {
+  const response = 'Here is the experiment:\n```python\nimport json\nimport torch\ndevice = "cuda" if torch.cuda.is_available() else "cpu"\nx = torch.arange(4, device=device)\nprint(json.dumps({"cuda_available": torch.cuda.is_available(), "device": str(x.device), "sum": float(x.sum().item())}))\n```'
+  const extracted = contract.extractStrictGpuCommand(response)
+  assert.equal(extracted.ok, true, extracted.reason)
+  assert.equal(extracted.command.action, 'run_python')
+  assert.match(extracted.command.code, /torch\.arange/)
+}
+
 function testFallbackPreparationCommandSanitizesContractReasonMarkers() {
   const fallback = contract.buildAutonomousPreparationCommand({
     researchGoal: 'Any arbitrary model research goal',
@@ -444,6 +463,8 @@ testLongProseOutputIsNotValidGpuEvidence()
 testJsonMetricsOutputIsValidGpuEvidence()
 testStrictGpuCommandRejectsCpuOnlyMetricsCode()
 testStrictGpuCommandAcceptsExecutableGpuProbeCode()
+testStrictGpuCommandSkipsNonCommandJsonAndAcceptsLaterCommand()
+testStrictGpuCommandAcceptsPythonFenceForWeakModels()
 testFallbackPreparationCommandSanitizesContractReasonMarkers()
 testAutonomousPreparationFallbackEmitsStepSpecificResearchPlan()
 testPersistedPreparationManifestKeepsResearchSpecificObjective()
