@@ -403,7 +403,21 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
 
   // Generate variants for this stage if none exist yet (integrated into main pipeline)
   if (state) {
-    const stageVariants = state.variants.filter(v => v.stageId === currentStage.id)
+    let stageVariants = state.variants.filter(v => v.stageId === currentStage.id)
+    const nonExecutableVariants = stageVariants.filter(v => (v.steps || []).length === 0)
+    const shouldRegenerateStageVariants = stageVariants.length > 0
+      && nonExecutableVariants.length === stageVariants.length
+      && stageVariants.every(v => ['FAILED', 'PENDING_REVIEW'].includes(String(v.status || '').toUpperCase()))
+
+    if (shouldRegenerateStageVariants) {
+      debugLog(`[executeResearchCycle] Stage ${currentStage.name} only has failed zero-step variants; pruning and regenerating`)
+      const variantIds = stageVariants.map(v => v.id)
+      await prisma.variantStep.deleteMany({ where: { variantId: { in: variantIds } } })
+      await prisma.variant.deleteMany({ where: { id: { in: variantIds } } })
+      state.variants = state.variants.filter(v => v.stageId !== currentStage.id)
+      stageVariants = []
+    }
+
     if (stageVariants.length === 0) {
       debugLog(`[executeResearchCycle] No variants for stage ${currentStage.name}, generating...`)
       try {
