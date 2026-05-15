@@ -9,6 +9,7 @@ import fs from 'fs'
 import { getInternalGpuApiBase } from './internal-api-base'
 import { removeSpaceWorkbenchDirs } from './space-cleanup'
 import { buildFallbackThinkingSetupResponse } from './thinking-setup'
+import { assessDeadLoop } from './dead-loop-detector'
 
 const logFile = '/tmp/ar1_debug.log'
 function debugLog(...args: any[]) {
@@ -2483,6 +2484,19 @@ export function startBackgroundLoop(spaceId: string): void {
         if (currentStageVariants.length > 0) {
           const allDone = currentStageVariants.every(v => v.status === 'COMPLETED' || v.status === 'FAILED')
           if (allDone) {
+            const deadLoop = assessDeadLoop(state.variants, currentStageId)
+            if (deadLoop.stuck) {
+              updateExecutionState(spaceId, {
+                lastError: deadLoop.reason,
+                lastErrorTime: new Date(),
+                lastErrorType: 'OTHER',
+              })
+              debugLog(`[startBackgroundLoop] ${deadLoop.reason}`)
+              await pauseSpace(spaceId)
+              activeLoops.delete(spaceId)
+              return
+            }
+
             debugLog(`[startBackgroundLoop] All variants for ${currentStage?.name} complete -- advancing to next stage`)
             const nextStageId = getNextStageId(stages, currentStageId)
             const nextStage = stages.find(s => s.id === nextStageId)
