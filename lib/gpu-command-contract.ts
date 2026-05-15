@@ -269,7 +269,26 @@ function manifestGradingCriteria(preparationManifest: unknown): string[] {
   if (!preparationManifest || typeof preparationManifest !== 'object' || Array.isArray(preparationManifest)) return []
   const source = preparationManifest as Record<string, unknown>
   const criteria = source.gradingCriteria || source.grading_criteria
-  return Array.isArray(criteria) ? criteria.map(String).filter(Boolean).slice(0, 20) : []
+  return Array.isArray(criteria) ? criteria.flatMap(gradingCriterionTexts).filter(Boolean).slice(0, 20) : []
+}
+
+function gradingCriterionTexts(value: unknown): string[] {
+  if (typeof value === 'string') return [value.trim()].filter(Boolean)
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return []
+
+  const row = value as Record<string, unknown>
+  const texts: string[] = []
+  for (const key of ['criterion', 'criteria', 'description', 'evidence', 'expectedEvidence', 'expected_evidence', 'field', 'fields', 'metric', 'metrics']) {
+    const raw = row[key]
+    if (typeof raw === 'string' && raw.trim()) {
+      texts.push(raw.trim())
+      continue
+    }
+    if (Array.isArray(raw)) {
+      texts.push(...raw.map(item => typeof item === 'string' ? item.trim() : '').filter(Boolean))
+    }
+  }
+  return texts
 }
 
 function manifestExpectedEvidence(preparationManifest: unknown): string[] {

@@ -181,4 +181,59 @@ function testEvidenceParserPrefersMetricsJsonLineOverTrailingStatus() {
 }
 
 testEvidenceParserPrefersMetricsJsonLineOverTrailingStatus()
+
+function testObjectShapedGradingCriteriaAreEnforced() {
+  const result = assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    success: true,
+    output: JSON.stringify({
+      cuda_available: true,
+      gpu_name: 'Test GPU',
+      runtime_seconds: 0.02,
+      tensor_sum: 120,
+      artifacts: ['/tmp/ar3-workbenches/object-criteria/metrics.json'],
+    }),
+    preparationManifest: {
+      gradingCriteria: [
+        {
+          criterion: 'stdout metrics must include metrics.latent_vector_norm',
+          evidence: ['metrics.latent_vector_norm'],
+        },
+      ],
+    },
+  })
+
+  assert.strictEqual(result.valid, false)
+  assert.match(result.reason, /grading criteria/)
+  assert.match(result.reason, /latent_vector_norm/)
+}
+
+function testObjectShapedGradingCriteriaAcceptConcreteNestedEvidence() {
+  const result = assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    success: true,
+    output: JSON.stringify({
+      cuda_available: true,
+      gpu_name: 'Test GPU',
+      runtime_seconds: 0.02,
+      metrics: {
+        latent_vector_norm: 3.14,
+      },
+      artifacts: ['/tmp/ar3-workbenches/object-criteria/metrics.json'],
+    }),
+    preparationManifest: {
+      grading_criteria: [
+        {
+          criterion: 'stdout metrics must include metrics.latent_vector_norm',
+          expected_evidence: ['metrics.latent_vector_norm'],
+        },
+      ],
+    },
+  })
+
+  assert.strictEqual(result.valid, true, result.reason)
+}
+
+testObjectShapedGradingCriteriaAreEnforced()
+testObjectShapedGradingCriteriaAcceptConcreteNestedEvidence()
 console.log('gpu-command-contract tests passed')
