@@ -1,3 +1,13 @@
+export function normalizeCountForClient(count: any): any {
+  if (!count || typeof count !== 'object') return count
+  return {
+    ...count,
+    experiments: count.experiments ?? count.Experiment ?? 0,
+    breakthroughs: count.breakthroughs ?? count.Breakthrough ?? 0,
+    modelCaches: count.modelCaches ?? count.ModelCache ?? 0,
+  }
+}
+
 export function normalizeVariantForClient(variant: any): any {
   if (!variant || typeof variant !== 'object') return variant
 
@@ -34,6 +44,7 @@ export function normalizeSpaceForClient(space: any): any {
 
   return {
     ...space,
+    _count: normalizeCountForClient(space._count),
     experiments,
     breakthroughs,
     variants: variants.map(normalizeVariantForClient),

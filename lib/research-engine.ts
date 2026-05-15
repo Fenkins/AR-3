@@ -7,6 +7,7 @@ import { assessGpuExecutionEvidence, buildAutonomousPreparationCommand, buildDet
 import { buildPreparationManifestInstructions, buildPreparationRetryMessage, extractPreparationManifestCandidate, validatePreparationManifest } from './preparation-manifest'
 import fs from 'fs'
 import { getInternalGpuApiBase } from './internal-api-base'
+import { removeSpaceWorkbenchDirs } from './space-cleanup'
 
 const logFile = '/tmp/ar1_debug.log'
 function debugLog(...args: any[]) {
@@ -2709,6 +2710,16 @@ export async function stopSpace(spaceId: string, userId?: string) {
     debugLog(`[stopSpace] Removed model cache directory: ${cacheDir}`)
   } catch (err) {
     debugLog(`[stopSpace] Warning: could not remove model cache dir: ${(err as Error).message}`)
+  }
+
+  // Clean up persistent GPU/research workbenches for this space.
+  try {
+    const cleanup = removeSpaceWorkbenchDirs(spaceId)
+    debugLog(`[stopSpace] Removed ${cleanup.removed.length} workbench dirs for ${spaceId}`)
+    for (const removed of cleanup.removed) debugLog(`[stopSpace] Removed workbench directory: ${removed}`)
+    for (const error of cleanup.errors) debugLog(`[stopSpace] Warning: could not remove workbench dir ${error.path}: ${error.error}`)
+  } catch (err) {
+    debugLog(`[stopSpace] Warning: workbench cleanup failed: ${(err as Error).message}`)
   }
 
   // Clean up stale GPU results for this space from shared GPU result file

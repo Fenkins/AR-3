@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { authMiddleware } from '../middleware'
 import { prisma } from '@/lib/prisma'
+import { normalizeSpaceForClient } from '@/lib/space-api-shape'
 import { startSpace } from '@/lib/research-engine'
 
 export async function GET(request: NextRequest) {
@@ -54,7 +55,7 @@ export async function GET(request: NextRequest) {
       cacheSizeMap[cache.spaceId] = (cacheSizeMap[cache.spaceId] || 0) + Number(cache.fileSize)
     }
 
-    const spacesWithCacheSize = spaces.map(space => ({
+    const spacesWithCacheSize = spaces.map(space => normalizeSpaceForClient({
       ...space,
       cacheSize: cacheSizeMap[space.id] || 0,
     }))
