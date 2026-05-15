@@ -28,6 +28,7 @@ if [ ! -d "$AR3_DIR/searxng" ]; then
 fi
 cd "$AR3_DIR/searxng"
 pip install -q -r requirements.txt 2>/dev/null
+pip install -q 'huggingface_hub>=0.20' 2>/dev/null
 
 # SearXNG settings with limiter disabled + duckduckgo + huggingface
 mkdir -p /etc/searxng

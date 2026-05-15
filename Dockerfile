@@ -8,8 +8,8 @@ RUN apt-get update && apt-get install -y \
     python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
-# Install FAISS
-RUN pip3 install faiss-cpu numpy
+# Install Python runtime helpers used by model cache and GPU orchestration
+RUN pip3 install faiss-cpu numpy 'huggingface_hub>=0.20'
 
 # Copy package files
 COPY package*.json ./
