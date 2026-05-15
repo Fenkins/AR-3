@@ -71,6 +71,14 @@ def test_auto_fix_repairs_malformed_dict_value_format_spec():
     compile(fixed, '<fixed>', 'exec')
 
 
+def test_repairs_optional_gpu_info_boolean_lookup():
+    code = "gpu_info = {'gpu_memory_total_mb': 12288}\nvalue = gpu_info['can_load_2x_8b_model_fp16']\n"
+    fixed = gpu_worker.repair_common_gpu_info_key_assumptions(code)
+    assert "gpu_info.get('can_load_2x_8b_model_fp16', False)" in fixed
+    namespace = {}
+    exec(fixed, namespace)
+
+
 def test_injects_missing_defaultdict_import():
     code = "groups = defaultdict(list)\ngroups['a'].append(1)\nprint(dict(groups))\n"
     fixed = gpu_worker.inject_missing_common_stdlib_imports(code)
@@ -87,5 +95,6 @@ if __name__ == '__main__':
     test_repairs_torch_cuda_device_total_mem_alias()
     test_auto_fix_applies_torch_cuda_device_total_mem_alias()
     test_auto_fix_repairs_malformed_dict_value_format_spec()
+    test_repairs_optional_gpu_info_boolean_lookup()
     test_injects_missing_defaultdict_import()
     print('gpu worker syntax repair tests passed')

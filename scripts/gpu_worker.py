@@ -1058,6 +1058,19 @@ def repair_common_torch_api_mistakes(code: str) -> str:
     return re_module.sub(r'(?<![A-Za-z0-9_])total_mem(?![A-Za-z0-9_])', 'total_memory', code)
 
 
+def repair_common_gpu_info_key_assumptions(code: str) -> str:
+    """Repair observed generated-code assumptions about optional GPU info keys."""
+    optional_bool_keys = ('can_load_2x_8b_model_fp16',)
+    fixed = code
+    for key in optional_bool_keys:
+        fixed = re_module.sub(
+            rf"(\b[A-Za-z_][A-Za-z0-9_]*\b)\[['\"]{re_module.escape(key)}['\"]\]",
+            rf"\1.get('{key}', False)",
+            fixed,
+        )
+    return fixed
+
+
 def repair_malformed_dict_value_format_specs(code: str) -> str:
     """Repair LLM-emitted dict values that use f-string format specs outside f-strings.
 
@@ -1420,6 +1433,7 @@ def execute_python_code(code: str, timeout: int = DEFAULT_JOB_TIMEOUT, context: 
 
     fixed_code = repair_embedded_newline_string_literals(fixed_code)
     fixed_code = repair_common_torch_api_mistakes(fixed_code)
+    fixed_code = repair_common_gpu_info_key_assumptions(fixed_code)
     fixed_code = repair_malformed_dict_value_format_specs(fixed_code)
     fixed_code = inject_missing_common_stdlib_imports(fixed_code)
 
