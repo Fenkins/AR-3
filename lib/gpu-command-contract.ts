@@ -1,3 +1,5 @@
+Total output lines: 1072
+
 export type StrictGpuCommand = { action: 'run_python'; dependencies: string[]; code: string }
 
 export function shouldUseAutonomousPreparationFallback(stageName: string): boolean {
@@ -249,6 +251,34 @@ function validateGradingCriteriaEvidence(parsedOutput: any): GpuEvidenceResult {
     return { valid: false, reason: 'Deterministic GPU experiment echoed grading criteria but did not map them to concrete evidence fields.' }
   }
 
+  const flattenedEvidenceKeys = new Set<string>()
+  const collectEvidenceKeys = (prefix: string, value: unknown) => {
+    if (!prefix) {
+      if (!value || typeof value !== 'object') return
+    } else {
+      flattenedEvidenceKeys.add(prefix)
+    }
+
+    if (!value || typeof value !== 'object') return
+    if (Array.isArray(value)) {
+      value.slice(0, 25).forEach((item, index) => collectEvidenceKeys(prefix + '[' + index + ']', item))
+      return
+    }
+
+    for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+      if (key === 'grading_criteria_checked' || key === 'grading_criteria_evidence') continue
+      collectEvidenceKeys(prefix ? prefix + '.' + key : key, nested)
+    }
+  }
+  collectEvidenceKeys('', parsedOutput)
+
+  const matchedKeyExists = (key: string): boolean => {
+    if (flattenedEvidenceKeys.has(key)) return true
+    return Array.from(flattenedEvidenceKeys).some(candidate =>
+      candidate.startsWith(key + '.') || candidate.startsWith(key + '[')
+    )
+  }
+
   const explicitEvidenceTerms = (criterion: string): string[] => {
     const stopwords = new Set([
       'artifact',
@@ -287,14 +317,19 @@ function validateGradingCriteriaEvidence(parsedOutput: any): GpuEvidenceResult {
 
   const missing = criteria.filter((criterion: string) => {
     const row = evidence[criterion]
-    if (!row || typeof row !== 'object' || row.matched !== true || !Array.isArray(row.matched_keys) || row.matched_keys.length === 0) {
+    const matchedKeys = Array.isArray(row?.matched_keys) ? row.matched_keys.map(String).filter(Boolean) : []
+    if (!row || typeof row !== 'object' || row.matched !== true || matchedKeys.length === 0) {
+      return true
+    }
+
+    if (!matchedKeys.every(matchedKeyExists)) {
       return true
     }
 
     const explicitTerms = explicitEvidenceTerms(criterion)
     if (explicitTerms.length === 0) return false
 
-    const matchedHaystack = row.matched_keys.map(String).join(' ').toLowerCase()
+    const matchedHaystack = matchedKeys.join(' ').toLowerCase()
     return explicitTerms.some(term => !matchedHaystack.includes(term))
   })
 
@@ -471,159 +506,7 @@ function validateStrictGpuCode(parsed: any): StrictGpuResult {
   if (parsed?.action !== 'run_python') return { ok: false, reason: 'JSON action must be "run_python"' }
   if (!code) return { ok: false, reason: 'JSON is missing non-empty code string' }
   const codeLines = code.split('\n').map((l: string) => l.trim()).filter(Boolean)
-  const hasPython = /(^|\n)\s*(import |from |def |class |for |while |try:|with |print\(|[A-Za-z_][A-Za-z0-9_]*\s*=)/m.test(code)
-  const hasMeasurableOutput = /print\(|json\.dump|json\.dumps|logging\./.test(code)
-  const hasGpuProbe = /\b(torch|cuda|cupy|triton|tensorflow|jax|nvidia-smi|nvml|device\s*=|cuda_available|gpu_name|gpu_memory|vram)\b|\.cuda\(|\.to\(\s*['"]cuda|torch\.cuda|subprocess\.[\s\S]*?nvidia-smi/i.test(code)
-  const hasPlaceholder = /TODO|pass\s*(#|$)|pseudocode|your code here|placeholder|\.\.\./i.test(code)
-  if (codeLines.length < 5) return { ok: false, reason: `code too short (${codeLines.length} non-empty lines)` }
-  if (!hasPython) return { ok: false, reason: 'code lacks Python syntax indicators' }
-  const syntaxIssue = findLikelyPythonStringSyntaxIssue(code)
-  if (syntaxIssue) return { ok: false, reason: `python syntax appears invalid: ${syntaxIssue}` }
-  if (!hasMeasurableOutput) return { ok: false, reason: 'code must print/log measurable outputs' }
-  if (!hasGpuProbe) return { ok: false, reason: 'code must include an executable GPU/CUDA probe or GPU runtime evidence path' }
-  if (hasPlaceholder) return { ok: false, reason: 'code contains placeholder/pseudocode markers' }
-  return { ok: true, command: { action: 'run_python', dependencies: Array.isArray(parsed.dependencies) ? parsed.dependencies.map(String).slice(0, 20) : [], code } }
-}
-
-function pythonCodeFenceCandidates(text: string): string[] {
-  const candidates: string[] = []
-  const re = /```(?:python|py)\s*([\s\S]*?)```/gi
-  for (const match of Array.from(String(text || '').matchAll(re))) {
-    if (match[1]?.trim()) candidates.push(match[1].trim())
-  }
-  return candidates
-}
-
-export function extractStrictGpuCommand(text: string): StrictGpuResult {
-  let lastReason = 'response did not parse as the required JSON object'
-  for (const candidate of jsonObjectCandidates(text)) {
-    try {
-      const parsed = JSON.parse(candidate)
-      const validated = validateStrictGpuCode(parsed)
-      if (validated.ok) return validated
-      lastReason = (validated as { ok: false; reason: string }).reason
-    } catch {}
-  }
-
-  for (const code of pythonCodeFenceCandidates(text)) {
-    const validated = validateStrictGpuCode({ action: 'run_python', dependencies: [], code })
-    if (validated.ok) return validated
-    lastReason = (validated as { ok: false; reason: string }).reason
-  }
-
-  return { ok: false, reason: lastReason }
-}
-
-function asPyTripleQuoted(value: string): string {
-  return JSON.stringify(value).replace(/\\n/g, '\\n')
-}
-
-function sanitizeReasonForGeneratedPython(value: string): string {
-  return String(value || '')
-    .replace(/placeholder/gi, 'invalid-content')
-    .replace(/pseudocode/gi, 'non-executable-content')
-    .replace(/TODO/gi, 'incomplete-marker')
-    .replace(/pass\s*(#|$)/gi, 'empty-body$1')
-}
-
-function looksLikePreparationManifestWrapper(command: StrictGpuCommand): boolean {
-  const code = String(command.code || '')
-  return /ar3\.preparation-manifest\.v1|preparation_manifest|"smokeTests"|"smokeTest"|research_findings/i.test(code)
-}
-
-export function selectGpuSubmissionCommand(input: GpuSubmissionInput): GpuSubmissionResult {
-  const preparationStage = shouldUseAutonomousPreparationFallback(input.stageName)
-  if (preparationStage && input.manifestValidatedThisCycle) {
-    const reason = 'preparation manifest validated; running autonomous preparation probe instead of submitting raw manifest JSON'
-    return {
-      ok: true,
-      fallbackUsed: true,
-      reason,
-      command: buildAutonomousPreparationCommand({
-        researchGoal: input.researchGoal,
-        stepDescription: input.stepDescription,
-        stageName: input.stageName,
-        reason,
-      }),
-    }
-  }
-
-  const strict = extractStrictGpuCommand(input.llmResponse)
-  if (strict.ok) {
-    if (preparationStage && looksLikePreparationManifestWrapper(strict.command)) {
-      if (input.preparationManifest) {
-        const reason = 'LLM returned a preparation manifest wrapper after preparation evidence already exists; running deterministic GPU experiment instead'
-        return {
-          ok: true,
-          fallbackUsed: false,
-          reason,
-          command: buildDeterministicGpuExperimentCommand({
-            researchGoal: input.researchGoal,
-            stepDescription: input.stepDescription,
-            stageName: input.stageName,
-            reason,
-            preparationManifest: input.preparationManifest,
-          }),
-        }
-      }
-      const reason = 'LLM returned a preparation manifest wrapper instead of executable research evidence; running autonomous preparation fallback'
-      return {
-        ok: true,
-        fallbackUsed: true,
-        reason,
-        command: buildAutonomousPreparationCommand({
-          researchGoal: input.researchGoal,
-          stepDescription: input.stepDescription,
-          stageName: input.stageName,
-          reason,
-        }),
-      }
-    }
-    return { ok: true, command: strict.command, fallbackUsed: false, reason: 'strict GPU command validated' }
-  }
-  if (preparationStage) {
-    const reason = (strict as { ok: false; reason: string }).reason
-    if (shouldShortCircuitPreparationFallback(input.stageName, reason)) {
-      if (input.preparationManifest) {
-        const fallbackReason = `weak preparation-stage GPU command (${reason}) after preparation evidence already exists; running deterministic GPU experiment instead`
-        return {
-          ok: true,
-          fallbackUsed: false,
-          reason: fallbackReason,
-          command: buildDeterministicGpuExperimentCommand({
-            researchGoal: input.researchGoal,
-            stepDescription: input.stepDescription,
-            stageName: input.stageName,
-            reason,
-            preparationManifest: input.preparationManifest,
-          }),
-        }
-      }
-      return {
-        ok: true,
-        fallbackUsed: true,
-        reason: `weak preparation-stage GPU command (${reason}); running autonomous preparation fallback`,
-        command: buildAutonomousPreparationCommand({
-          researchGoal: input.researchGoal,
-          stepDescription: input.stepDescription,
-          stageName: input.stageName,
-          reason,
-        }),
-      }
-    }
-  }
-  return { ok: false, reason: (strict as { ok: false; reason: string }).reason }
-}
-
-function safePipDependenciesFromManifest(manifest: any): string[] {
-  const deps = new Set<string>(['requests'])
-  for (const dep of Array.isArray(manifest?.dependencies) ? manifest.dependencies : []) {
-    const raw = typeof dep === 'string' ? dep : dep?.name
-    if (typeof raw !== 'string') continue
-    const name = raw.trim()
-    // Deterministic rescue code must not trigger repeated heavyweight CUDA/PyTorch installs.
-    // It probes torch opportunistically if already present and otherwise still emits
-    // nvidia-smi plus research-specific numeric metrics.
+  const hasPython = /(^|\…1705 tokens truncated…nvidia-smi plus research-specific numeric metrics.
     if (/^(os|sys|json|time|subprocess|pathlib|re|math|random|statistics)$/i.test(name)) continue
     if (/^(torch|torchvision|torchaudio|transformers|accelerate|safetensors|scipy)([<>=!~].*)?$/i.test(name)) continue
     if (/^(numpy|requests)([<>=!~].*)?$/i.test(name)) deps.add(name)
