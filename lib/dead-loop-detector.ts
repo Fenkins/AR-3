@@ -105,8 +105,25 @@ function extractMetricSignatureText(value: string): string | null {
     }
   }
 
+  for (const entry of looseMetricEntries(value)) {
+    entries.push(entry)
+  }
+
   const uniqueEntries = Array.from(new Set(entries)).sort()
   return uniqueEntries.length ? uniqueEntries.join('\n') : null
+}
+
+function looseMetricEntries(text: string): string[] {
+  const entries: string[] = []
+  const metricPattern = /(?:^|[\s,;])([a-zA-Z][a-zA-Z0-9_.-]{1,80})\s*[:=]\s*(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?|true|false)\b/gi
+  for (const match of String(text || '').matchAll(metricPattern)) {
+    const key = match[1].trim().toLowerCase()
+    if (isEphemeralMetricKey(key)) continue
+    const normalizedValue = normalizeMetricValue(match[2])
+    if (normalizedValue === null) continue
+    entries.push(`${key}=${normalizedValue}`)
+  }
+  return entries
 }
 
 export function variantFailureSignature(variant: VariantLike): string | null {
