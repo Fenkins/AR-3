@@ -74,6 +74,7 @@ function validManifest(overrides = {}) {
   assert.match(retry, /Original goal/)
   assert.match(retry, /models\[0\]\.id/)
   assert.match(retry, /Return ONLY JSON/)
+  assert.match(retry, /measurable evidence/)
   assert.doesNotMatch(retry, /```/)
 }
 
@@ -90,7 +91,7 @@ function validManifest(overrides = {}) {
   aliasManifest.dependencies = [{ package: 'torch>=2.0.0', purpose: 'tensor execution' }]
   aliasManifest.resources = [{ resourceType: 'gpu-memory', specification: '12GB VRAM', purpose: 'load model' }]
   aliasManifest.smokeTests = [{ test: 'python -c "print(1)"', expectedEvidence: 'prints 1' }]
-  aliasManifest.gradingCriteria = [{ criterion: 'Code runs', evidence: 'stdout exists' }]
+  aliasManifest.gradingCriteria = [{ criterion: 'Code runs', evidence: 'stdout contains cuda_available' }]
   delete aliasManifest.workbench
   const result = validatePreparationManifest(aliasManifest)
   assert.equal(result.ok, true)
@@ -119,6 +120,27 @@ function validManifest(overrides = {}) {
     code: 'import json\nimport torch\nprint(json.dumps({"cuda_available": torch.cuda.is_available()}))',
   }
   assert.deepStrictEqual(extractPreparationManifestCandidate(JSON.stringify(command)), nested)
+}
+
+{
+  const bad = validManifest({
+    gradingCriteria: ['works', 'better results', 'interesting'],
+  })
+  const result = validatePreparationManifest(bad)
+  assert.equal(result.ok, false)
+  assert(result.errors.some((e) => e.includes('gradingCriteria[0]')), result.errors.join('\n'))
+  assert(result.errors.some((e) => e.includes('concrete evidence')), result.errors.join('\n'))
+}
+
+{
+  const result = validatePreparationManifest(validManifest({
+    gradingCriteria: [
+      'stdout contains JSON metrics with cuda_available and tensor_sum',
+      'model_metadata includes HuggingFace status_code or a precise failure error',
+      'artifacts include deterministic_gpu_experiment_metrics.json path',
+    ],
+  }))
+  assert.equal(result.ok, true, result.errors.join('\n'))
 }
 
 console.log('preparation manifest tests passed')

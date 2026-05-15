@@ -51,6 +51,19 @@ export type PreparationManifestValidation = ValidationOk | ValidationErr
 
 const VAGUE_DEPENDENCIES = new Set(['stuff', 'things', 'dependencies', 'packages', 'libs', 'libraries', 'requirements', 'misc'])
 const VAGUE_PURPOSES = new Set(['stuff', 'things', 'misc', 'needed', 'required', 'useful'])
+const VAGUE_GRADING_CRITERIA = new Set([
+  'works',
+  'it works',
+  'good results',
+  'better results',
+  'improve performance',
+  'performance improves',
+  'successful',
+  'success',
+  'quality',
+  'useful',
+  'interesting',
+])
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -73,6 +86,14 @@ function validPackageSpec(name: string): boolean {
   const trimmed = name.trim()
   if (VAGUE_DEPENDENCIES.has(trimmed.toLowerCase())) return false
   return /^[A-Za-z0-9][A-Za-z0-9_.-]*(\[[A-Za-z0-9_,.-]+\])?([<>=!~]=?.+)?$/.test(trimmed)
+}
+
+function validGradingCriterion(value: string): boolean {
+  const normalized = value.trim().toLowerCase().replace(/\s+/g, ' ')
+  if (normalized.length < 12) return false
+  if (VAGUE_GRADING_CRITERIA.has(normalized)) return false
+
+  return /\b(json|metric|metrics|score|loss|accuracy|acc|f1|precision|recall|latency|throughput|runtime|seconds|cuda|gpu|vram|memory|artifact|artifacts|stdout|stderr|file|path|model|dependency|dependencies|smoke|failure|error|exception|evidence|measurement|tensor|shape|count|version)\b|[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*/i.test(value)
 }
 
 function pushStringError(errors: string[], path: string, value: unknown) {
@@ -234,6 +255,12 @@ export function validatePreparationManifest(value: unknown): PreparationManifest
 
   if (!Array.isArray(value.gradingCriteria) || value.gradingCriteria.length === 0 || !value.gradingCriteria.every(nonEmptyString)) {
     errors.push('gradingCriteria must contain at least one concrete criterion')
+  } else {
+    value.gradingCriteria.forEach((criterion, i) => {
+      if (!validGradingCriterion(String(criterion))) {
+        errors.push(`gradingCriteria[${i}] must name concrete evidence, metrics, artifacts, model/dependency checks, GPU/runtime facts, or failure modes`)
+      }
+    })
   }
 
   if (!isPlainObject(value.workbench)) {
@@ -311,9 +338,9 @@ export function extractPreparationManifestCandidate(text: string): unknown {
 }
 
 export function buildPreparationRetryMessage(originalGoal: string, errors: string[]): string {
-  return `Your preparation manifest was rejected by AR-3's validator.\n\nOriginal goal:\n${originalGoal}\n\nValidation errors:\n${errors.map((e) => `- ${e}`).join('\n')}\n\nReturn ONLY JSON matching schemaVersion ${PREPARATION_MANIFEST_SCHEMA_VERSION}. No markdown, no prose, no code fences. Include concrete model IDs, pip package specs, executable smokeTests, evidence fields, gradingCriteria, and a reusable workbench key.`
+  return `Your preparation manifest was rejected by AR-3's validator.\n\nOriginal goal:\n${originalGoal}\n\nValidation errors:\n${errors.map((e) => `- ${e}`).join('\n')}\n\nReturn ONLY JSON matching schemaVersion ${PREPARATION_MANIFEST_SCHEMA_VERSION}. No markdown, no prose, no code fences. Include concrete model IDs, pip package specs, executable smokeTests, evidence fields, gradingCriteria tied to measurable evidence, and a reusable workbench key.`
 }
 
 export function buildPreparationManifestInstructions(researchGoal: string): string {
-  return `Prepare this research goal for executable GPU work:\n${researchGoal}\n\nReturn ONLY JSON with schemaVersion ${PREPARATION_MANIFEST_SCHEMA_VERSION}. Required top-level fields: researchType, objective, models, dependencies, resources, smokeTests, gradingCriteria, workbench. Every required HuggingFace model must have an owner/model id and a smokeTest. Every dependency must be a concrete pip package spec with purpose. Every smokeTest must be an executable command and list expectedEvidence.`
+  return `Prepare this research goal for executable GPU work:\n${researchGoal}\n\nReturn ONLY JSON with schemaVersion ${PREPARATION_MANIFEST_SCHEMA_VERSION}. Required top-level fields: researchType, objective, models, dependencies, resources, smokeTests, gradingCriteria, workbench. Every required HuggingFace model must have an owner/model id and a smokeTest. Every dependency must be a concrete pip package spec with purpose. Every smokeTest must be an executable command and list expectedEvidence. Every grading criterion must name concrete evidence, metrics, artifacts, model/dependency checks, GPU/runtime facts, or failure modes.`
 }
