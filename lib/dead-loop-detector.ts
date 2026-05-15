@@ -37,6 +37,19 @@ function normalizeFailureText(value: string): string {
     .slice(0, 1200)
 }
 
+function normalizeProgressText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/\b[a-f0-9]{8,}\b/g, '<hash>')
+    .replace(/\b\d{4}-\d{2}-\d{2}t\d{2}:\d{2}:\d{2}(?:\.\d+)?z?\b/g, '<timestamp>')
+    .replace(/\/tmp\/[^\s'\"]+/g, '<tmp-path>')
+    .replace(/gpu_[a-z0-9_.-]+/g, '<gpu-job>')
+    .replace(/job[-_][a-z0-9_.-]+/g, '<job-id>')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 1600)
+}
+
 export function variantFailureSignature(variant: VariantLike): string | null {
   if (variant.status !== 'FAILED') return null
 
@@ -58,6 +71,28 @@ export function variantFailureSignature(variant: VariantLike): string | null {
   return hashText(normalized)
 }
 
+export function variantProgressSignature(variant: VariantLike): string | null {
+  if (variant.status !== 'COMPLETED') return null
+
+  const completedSteps = Array.isArray(variant.steps)
+    ? variant.steps.filter(step => step.status === 'COMPLETED')
+    : []
+  const stepText = completedSteps
+    .map(step => [step.result, step.feedback].filter(Boolean).join(' '))
+    .filter(Boolean)
+    .join(' ')
+  const raw = [
+    variant.stageId || '',
+    variant.failureMode || '',
+    variant.feedback || '',
+    stepText,
+  ].filter(Boolean).join(' | ')
+
+  if (!raw.trim()) return null
+  const normalized = normalizeProgressText(raw)
+  return normalized ? hashText(normalized) : null
+}
+
 export function assessDeadLoop(
   variants: VariantLike[],
   stageId: string,
@@ -72,6 +107,25 @@ export function assessDeadLoop(
     const bestGrade = grades.length ? Math.max(...grades) : null
     if (bestGrade === null || bestGrade > 0) {
       return { stuck: false, reason: 'stage has completed variants with progress evidence' }
+    }
+
+    const progressSignatures = completed
+      .map(variant => variantProgressSignature(variant))
+      .filter((signature): signature is string => Boolean(signature))
+    if (progressSignatures.length >= repeatThreshold) {
+      const progressCounts = new Map<string, number>()
+      for (const signature of progressSignatures) {
+        progressCounts.set(signature, (progressCounts.get(signature) || 0) + 1)
+      }
+      const repeatedProgress = Array.from(progressCounts.entries()).sort((a, b) => b[1] - a[1])[0]
+      if (repeatedProgress && repeatedProgress[1] >= repeatThreshold) {
+        return {
+          stuck: true,
+          repeatedSignature: repeatedProgress[0],
+          repeatedCount: repeatedProgress[1],
+          reason: `Dead-loop detector found ${repeatedProgress[1]} completed ${stageId} variants with the same normalized output signature ${repeatedProgress[0]} and no positive grade improvement. Pausing so the next retry changes the experiment, grading evidence, or preparation manifest instead of repeating the same non-improving result.`,
+        }
+      }
     }
   }
 
