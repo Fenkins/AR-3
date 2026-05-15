@@ -17,7 +17,7 @@ function loadTsModule(relativePath) {
   return module.exports
 }
 
-const { buildAutonomousPreparationCommand } = loadTsModule('lib/gpu-command-contract.ts')
+const { assessGpuExecutionEvidence, buildAutonomousPreparationCommand } = loadTsModule('lib/gpu-command-contract.ts')
 
 function testAutonomousPreparationUsesNvidiaSmiFallback() {
   const command = buildAutonomousPreparationCommand({
@@ -34,4 +34,60 @@ function testAutonomousPreparationUsesNvidiaSmiFallback() {
 }
 
 testAutonomousPreparationUsesNvidiaSmiFallback()
+
+function manifestWithExpectedArtifacts(artifacts) {
+  return {
+    smokeTests: [
+      {
+        name: 'deterministic-smoke',
+        expectedEvidence: ['cuda_available', 'tensor_sum'],
+      },
+    ],
+    gradingCriteria: [
+      'stdout contains JSON metrics with cuda_available and tensor_sum',
+    ],
+    workbench: {
+      reuseKey: 'deterministic-smoke',
+      expectedArtifacts: artifacts,
+    },
+  }
+}
+
+function gpuEvidence(overrides = {}) {
+  return JSON.stringify({
+    cuda_available: true,
+    gpu_name: 'Test GPU',
+    tensor_sum: 120,
+    runtime_seconds: 0.02,
+    artifacts: ['/tmp/ar3-workbenches/deterministic-smoke/metrics.json'],
+    ...overrides,
+  })
+}
+
+function testManifestExpectedArtifactsMustBeReported() {
+  const result = assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    success: true,
+    output: gpuEvidence(),
+    preparationManifest: manifestWithExpectedArtifacts(['metrics.json', 'model-card.txt']),
+  })
+
+  assert.strictEqual(result.valid, false)
+  assert.match(result.reason, /expected artifacts/)
+  assert.match(result.reason, /model-card\.txt/)
+}
+
+function testManifestExpectedArtifactsAcceptBasenameInArtifactPath() {
+  const result = assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    success: true,
+    output: gpuEvidence(),
+    preparationManifest: manifestWithExpectedArtifacts(['metrics.json']),
+  })
+
+  assert.strictEqual(result.valid, true, result.reason)
+}
+
+testManifestExpectedArtifactsMustBeReported()
+testManifestExpectedArtifactsAcceptBasenameInArtifactPath()
 console.log('gpu-command-contract tests passed')

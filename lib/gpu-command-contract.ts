@@ -265,6 +265,20 @@ function manifestExpectedEvidence(preparationManifest: unknown): string[] {
   return Array.from(expected).slice(0, 30)
 }
 
+function manifestExpectedArtifacts(preparationManifest: unknown): string[] {
+  if (!preparationManifest || typeof preparationManifest !== 'object' || Array.isArray(preparationManifest)) return []
+  const workbench = (preparationManifest as Record<string, unknown>).workbench
+  if (!workbench || typeof workbench !== 'object' || Array.isArray(workbench)) return []
+  const artifacts = (workbench as Record<string, unknown>).expectedArtifacts
+  if (!Array.isArray(artifacts)) return []
+
+  return artifacts
+    .map(value => String(value || '').trim())
+    .filter(Boolean)
+    .filter(value => !['stdout', 'stderr', 'logs', 'log'].includes(value.toLowerCase()))
+    .slice(0, 30)
+}
+
 function validateGradingCriteriaEvidence(parsedOutput: any, preparationManifest?: unknown): GpuEvidenceResult {
   if (!parsedOutput || typeof parsedOutput !== 'object') return { valid: true, reason: 'no structured grading criteria to validate' }
   const deterministicCriteria = Array.isArray(parsedOutput.grading_criteria_checked)
@@ -356,6 +370,26 @@ function validateGradingCriteriaEvidence(parsedOutput: any, preparationManifest?
     )
   }
 
+  const flattenedEvidenceValues = Array.from(flattenedEvidenceKeys)
+    .map(key => valueAtPath(parsedOutput, key))
+    .filter(hasConcreteEvidenceValue)
+    .map(value => String(value).toLowerCase().replace(/\\/g, '/'))
+
+  const outputHasArtifact = (artifact: string): boolean => {
+    const normalized = artifact.toLowerCase().replace(/\\/g, '/')
+    const basename = normalized.split('/').filter(Boolean).pop() || normalized
+    return flattenedEvidenceValues.some(value => {
+      const normalizedValue = value.replace(/\\/g, '/')
+      return normalizedValue === normalized ||
+        normalizedValue.endsWith('/' + basename) ||
+        normalizedValue.includes('/' + basename + ' ') ||
+        normalizedValue.includes('/' + basename + ',') ||
+        normalizedValue.includes('/' + basename + ']') ||
+        normalizedValue.includes('/' + basename + '}') ||
+        normalizedValue.includes(basename)
+    })
+  }
+
   const explicitEvidenceTerms = (criterion: string): string[] => {
     const stopwords = new Set([
       'artifact',
@@ -437,6 +471,16 @@ function validateGradingCriteriaEvidence(parsedOutput: any, preparationManifest?
     return {
       valid: false,
       reason: `GPU execution did not satisfy preparation manifest smoke-test expected evidence with concrete output fields: ${missingExpectedEvidence.slice(0, 3).join('; ')}`,
+    }
+  }
+
+  const missingExpectedArtifacts = manifestExpectedArtifacts(preparationManifest)
+    .filter(artifact => !outputHasArtifact(artifact))
+
+  if (missingExpectedArtifacts.length > 0) {
+    return {
+      valid: false,
+      reason: `GPU execution did not report preparation manifest expected artifacts: ${missingExpectedArtifacts.slice(0, 3).join('; ')}`,
     }
   }
 
