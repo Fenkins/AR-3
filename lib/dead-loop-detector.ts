@@ -144,6 +144,66 @@ function normalizeDependencies(value: unknown): string {
   return dependencies.length ? JSON.stringify(dependencies) : ''
 }
 
+function normalizeStringList(values: unknown[]): string {
+  const normalized = Array.from(new Set(values
+    .filter((value): value is string => typeof value === 'string')
+    .map(value => value.trim().toLowerCase())
+    .filter(Boolean)))
+    .sort()
+  return normalized.length ? JSON.stringify(normalized) : ''
+}
+
+function collectModelContext(value: unknown): string[] {
+  if (!value || typeof value !== 'object') return []
+  const source = value as Record<string, any>
+  const values: string[] = []
+  for (const key of ['model', 'model_id', 'modelId', 'repo', 'repo_id', 'repoId', 'checkpoint', 'checkpoint_path', 'checkpointPath']) {
+    if (typeof source[key] === 'string') values.push(source[key])
+  }
+  for (const key of ['model_ids', 'modelIds', 'model_paths', 'modelPaths', 'checkpoints']) {
+    if (Array.isArray(source[key])) values.push(...source[key].filter((item: unknown): item is string => typeof item === 'string'))
+  }
+  if (Array.isArray(source.models)) {
+    for (const model of source.models) {
+      if (typeof model === 'string') {
+        values.push(model)
+      } else if (model && typeof model === 'object') {
+        const row = model as Record<string, any>
+        for (const key of ['id', 'model_id', 'modelId', 'repo', 'repo_id', 'repoId', 'path', 'localPath']) {
+          if (typeof row[key] === 'string') values.push(row[key])
+        }
+      }
+    }
+  }
+  return values
+}
+
+function normalizeWorkbenchContext(value: unknown): string {
+  if (!value || typeof value !== 'object') return ''
+  const source = value as Record<string, any>
+  const workbench = source.workbench
+  if (workbench && typeof workbench === 'object' && typeof workbench.reuseKey === 'string') {
+    return workbench.reuseKey.trim().toLowerCase()
+  }
+  if (typeof source.workbenchReuseKey === 'string') return source.workbenchReuseKey.trim().toLowerCase()
+  return ''
+}
+
+function normalizeCommandContext(parsed: Record<string, any>): string {
+  const nestedManifest = parsed.preparation_manifest || parsed.preparationManifest || parsed.manifest
+  const normalizedDependencies = normalizeDependencies(parsed.dependencies)
+  const normalizedModels = normalizeStringList([
+    ...collectModelContext(parsed),
+    ...collectModelContext(nestedManifest),
+  ])
+  const workbenchContext = normalizeWorkbenchContext(nestedManifest) || normalizeWorkbenchContext(parsed)
+  return [
+    normalizedDependencies ? `dependencies=${normalizedDependencies}` : '',
+    normalizedModels ? `models=${normalizedModels}` : '',
+    workbenchContext ? `workbench=${workbenchContext}` : '',
+  ].filter(Boolean).join('\n')
+}
+
 function extractExecutableSignatureText(value: string): string | null {
   const text = String(value || '')
   const codeBlock = text.match(/\[CODE\]\s*([\s\S]*?)\s*\[\/CODE\]/i)
@@ -154,8 +214,8 @@ function extractExecutableSignatureText(value: string): string | null {
       const parsed = JSON.parse(candidate)
       if (parsed?.action === 'run_python' && typeof parsed.code === 'string' && parsed.code.trim()) {
         const normalizedCode = normalizeCodeText(parsed.code)
-        const normalizedDependencies = normalizeDependencies(parsed.dependencies)
-        return [normalizedCode, normalizedDependencies ? `dependencies=${normalizedDependencies}` : '']
+        const normalizedContext = normalizeCommandContext(parsed)
+        return [normalizedCode, normalizedContext]
           .filter(Boolean)
           .join('\n---COMMAND-CONTEXT---\n')
       }

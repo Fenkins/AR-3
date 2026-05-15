@@ -82,6 +82,28 @@ const repeatedJsonCommandFailure = (id, dependencies = []) => ({
   }],
 })
 
+const repeatedJsonCommandWithModels = (id, modelContext = {}) => ({
+  id,
+  stageId: 'stage_3',
+  name: 'Implementation ' + id,
+  status: 'FAILED',
+  failureMode: 'RUNTIME_' + id,
+  feedback: 'GPU worker rejected runtime output',
+  steps: [{
+    status: 'FAILED',
+    result: JSON.stringify({
+      action: 'run_python',
+      dependencies: ['torch==2.4.0'],
+      code: [
+        'import json',
+        'import torch',
+        'print(json.dumps({"cuda_available": torch.cuda.is_available(), "metric": 0.1}))',
+      ].join('\n'),
+      ...modelContext,
+    }),
+  }],
+})
+
 {
   const first = variantFailureSignature(repeatedFailure('a', 'retry 1'))
   const second = variantFailureSignature(repeatedFailure('b', 'retry 2'))
@@ -135,6 +157,34 @@ const repeatedJsonCommandFailure = (id, dependencies = []) => ({
   const first = variantCodeSignature(repeatedJsonCommandFailure('a', ['torch==2.4.0']))
   const second = variantCodeSignature(repeatedJsonCommandFailure('b', ['torch==2.5.0']))
   assert.notEqual(first, second, 'changed dependency pins should reset repeated executable signatures')
+}
+
+{
+  const first = variantCodeSignature(repeatedJsonCommandWithModels('a', { model_ids: ['GSAI-ML/LLaDA-8B-Base'] }))
+  const second = variantCodeSignature(repeatedJsonCommandWithModels('b', { model_ids: ['GSAI-ML/LLaDA-8B-Base'] }))
+  assert.equal(first, second, 'same explicit model ids should create the same executable signature')
+}
+
+{
+  const first = variantCodeSignature(repeatedJsonCommandWithModels('a', { model_ids: ['GSAI-ML/LLaDA-8B-Base'] }))
+  const second = variantCodeSignature(repeatedJsonCommandWithModels('b', { model_ids: ['Dream-org/Dream-v0-Base'] }))
+  assert.notEqual(first, second, 'changed model ids should reset repeated executable signatures')
+}
+
+{
+  const first = variantCodeSignature(repeatedJsonCommandWithModels('a', {
+    preparation_manifest: {
+      models: [{ id: 'GSAI-ML/LLaDA-8B-Base', source: 'huggingface' }],
+      workbench: { reuseKey: 'llada-base' },
+    },
+  }))
+  const second = variantCodeSignature(repeatedJsonCommandWithModels('b', {
+    preparation_manifest: {
+      models: [{ id: 'Dream-org/Dream-v0-Base', source: 'huggingface' }],
+      workbench: { reuseKey: 'dream-base' },
+    },
+  }))
+  assert.notEqual(first, second, 'changed nested manifest model/workbench context should reset repeated executable signatures')
 }
 
 {
