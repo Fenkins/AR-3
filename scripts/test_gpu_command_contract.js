@@ -91,6 +91,47 @@ function testManifestExpectedArtifactsAcceptBasenameInArtifactPath() {
 testManifestExpectedArtifactsMustBeReported()
 testManifestExpectedArtifactsAcceptBasenameInArtifactPath()
 
+function testManifestExpectedArtifactsRejectProseOnlyMentions() {
+  const result = assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    success: true,
+    output: JSON.stringify({
+      cuda_available: true,
+      gpu_name: 'Test GPU',
+      tensor_sum: 120,
+      runtime_seconds: 0.02,
+      stdout: 'completed run and will save metrics.json after validation',
+    }),
+    preparationManifest: manifestWithExpectedArtifacts(['metrics.json']),
+  })
+
+  assert.strictEqual(result.valid, false)
+  assert.match(result.reason, /expected artifacts/)
+  assert.match(result.reason, /metrics\.json/)
+}
+
+function testManifestExpectedArtifactsAcceptStructuredArtifactObject() {
+  const result = assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    success: true,
+    output: JSON.stringify({
+      cuda_available: true,
+      gpu_name: 'Test GPU',
+      tensor_sum: 120,
+      runtime_seconds: 0.02,
+      artifact_manifest: {
+        metrics: { path: '/tmp/ar3-workbenches/structured/metrics.json' },
+      },
+    }),
+    preparationManifest: manifestWithExpectedArtifacts(['metrics.json']),
+  })
+
+  assert.strictEqual(result.valid, true, result.reason)
+}
+
+testManifestExpectedArtifactsRejectProseOnlyMentions()
+testManifestExpectedArtifactsAcceptStructuredArtifactObject()
+
 function testSnakeCaseManifestEvidenceAliasesAreEnforced() {
   const result = assessGpuExecutionEvidence({
     stageName: 'Implementation',

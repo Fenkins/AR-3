@@ -417,15 +417,20 @@ function validateGradingCriteriaEvidence(parsedOutput: any, preparationManifest?
     )
   }
 
-  const flattenedEvidenceValues = Array.from(flattenedEvidenceKeys)
-    .map(key => valueAtPath(parsedOutput, key))
-    .filter(hasConcreteEvidenceValue)
-    .map(value => String(value).toLowerCase().replace(/\\/g, '/'))
+  const flattenedEvidenceEntries = Array.from(flattenedEvidenceKeys)
+    .map(key => ({ key, value: valueAtPath(parsedOutput, key) }))
+    .filter(entry => hasConcreteEvidenceValue(entry.value))
+    .map(entry => ({
+      key: entry.key.toLowerCase().replace(/-/g, '_'),
+      value: String(entry.value).toLowerCase().replace(/\\/g, '/'),
+    }))
 
   const outputHasArtifact = (artifact: string): boolean => {
     const normalized = artifact.toLowerCase().replace(/\\/g, '/')
     const basename = normalized.split('/').filter(Boolean).pop() || normalized
-    return flattenedEvidenceValues.some(value => {
+    const artifactKey = /(^|[.[_])(artifact|artifacts|artifact_path|artifact_paths|path|paths|file|files|filename|filenames|workbench)(]|\.|_|$)/
+    return flattenedEvidenceEntries.some(({ key, value }) => {
+      if (!artifactKey.test(key)) return false
       const normalizedValue = value.replace(/\\/g, '/')
       return normalizedValue === normalized ||
         normalizedValue.endsWith('/' + basename) ||
