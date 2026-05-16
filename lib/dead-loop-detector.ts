@@ -322,6 +322,14 @@ function collectDependencyContext(value: unknown): string[] {
     .filter(Boolean)
 }
 
+function collectInstalledDependencyContext(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((dependency): dependency is string => typeof dependency === 'string')
+    .map(dependency => dependency.trim().toLowerCase())
+    .filter(Boolean)
+}
+
 function firstString(...values: unknown[]): string | null {
   for (const value of values) {
     if (typeof value === 'string' && value.trim()) return value.trim()
@@ -376,6 +384,15 @@ function collectModelContext(value: unknown): string[] {
       }
     }
   }
+  if (Array.isArray(source.huggingface)) {
+    for (const model of source.huggingface) {
+      if (!model || typeof model !== 'object') continue
+      const row = model as Record<string, any>
+      for (const key of ['id', 'model_id', 'modelId', 'repo', 'repo_id', 'repoId']) {
+        if (typeof row[key] === 'string') values.push(row[key])
+      }
+    }
+  }
   return values
 }
 
@@ -420,7 +437,11 @@ function normalizeCommandContext(parsed: Record<string, any>): string {
   const nestedManifest = parsed.preparation_manifest || parsed.preparationManifest || parsed.manifest
   const normalizedDependencies = normalizeStringList([
     ...collectDependencyContext(parsed.dependencies),
+    ...collectInstalledDependencyContext(parsed.installed_dependencies),
+    ...collectInstalledDependencyContext(parsed.installedDependencies),
     ...collectDependencyContext(nestedManifest?.dependencies),
+    ...collectInstalledDependencyContext(nestedManifest?.installed_dependencies),
+    ...collectInstalledDependencyContext(nestedManifest?.installedDependencies),
   ])
   const normalizedModels = normalizeStringList([
     ...collectModelContext(parsed),

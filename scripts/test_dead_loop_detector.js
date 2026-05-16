@@ -359,6 +359,48 @@ const repeatedJsonCommandWithModels = (id, modelContext = {}) => ({
 
 {
   const first = variantCodeSignature(repeatedJsonCommandWithModels('a', {
+    preparation_manifest: {
+      huggingface: [
+        { model_id: 'GSAI-ML/LLaDA-8B-Base', revision: 'main' },
+        { id: 'Dream-org/Dream-v0-Base' },
+      ],
+      installed_dependencies: ['Transformers==4.45.0', 'torch==2.4.0'],
+      workbench: { reuseKey: 'shared-workbench' },
+    },
+  }))
+  const second = variantCodeSignature(repeatedJsonCommandWithModels('b', {
+    preparation_manifest: {
+      installed_dependencies: ['torch==2.4.0', 'transformers==4.45.0'],
+      huggingface: [
+        { id: 'dream-org/dream-v0-base' },
+        { model_id: 'gsai-ml/llada-8b-base', revision: 'refs/heads/main' },
+      ],
+      workbench: { reuseKey: 'shared-workbench' },
+    },
+  }))
+  assert.equal(first, second, 'huggingface and installed dependency order/case should not create a new executable signature')
+}
+
+{
+  const first = variantCodeSignature(repeatedJsonCommandWithModels('a', {
+    preparation_manifest: {
+      huggingface: [{ model_id: 'GSAI-ML/LLaDA-8B-Base' }],
+      installed_dependencies: ['torch==2.4.0'],
+      workbench: { reuseKey: 'shared-workbench' },
+    },
+  }))
+  const second = variantCodeSignature(repeatedJsonCommandWithModels('b', {
+    preparation_manifest: {
+      huggingface: [{ model_id: 'Dream-org/Dream-v0-Base' }],
+      installed_dependencies: ['torch==2.4.0'],
+      workbench: { reuseKey: 'shared-workbench' },
+    },
+  }))
+  assert.notEqual(first, second, 'changed huggingface model rows should reset repeated executable signatures')
+}
+
+{
+  const first = variantCodeSignature(repeatedJsonCommandWithModels('a', {
     dependencies: [],
     preparation_manifest: {
       dependencies: [
