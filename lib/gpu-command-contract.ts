@@ -341,6 +341,58 @@ function manifestExpectedArtifacts(preparationManifest: unknown): string[] {
     .slice(0, 30)
 }
 
+function manifestThresholdCriteria(preparationManifest: unknown): Array<{ label: string; metric: string; threshold: string }> {
+  if (!preparationManifest || typeof preparationManifest !== 'object' || Array.isArray(preparationManifest)) return []
+  const source = preparationManifest as Record<string, unknown>
+  const successCriteria = source.successCriteria || source.success_criteria
+  if (!Array.isArray(successCriteria)) return []
+
+  return successCriteria
+    .slice(0, 20)
+    .flatMap((criterion, index) => {
+      if (!criterion || typeof criterion !== 'object' || Array.isArray(criterion)) return []
+      const row = criterion as Record<string, unknown>
+      const rawMetric = typeof row.metric === 'string' ? row.metric.trim() : ''
+      const rawThreshold = typeof row.threshold === 'string' || typeof row.threshold === 'number'
+        ? String(row.threshold).trim()
+        : ''
+      if (!rawMetric || !rawThreshold) return []
+      const label = typeof row.name === 'string' && row.name.trim()
+        ? row.name.trim()
+        : `success criterion ${index + 1}`
+      return [{ label, metric: rawMetric, threshold: rawThreshold }]
+    })
+}
+
+function parseNumericThreshold(threshold: string): { operator: '>=' | '>' | '<=' | '<' | '='; value: number } | null {
+  const normalized = threshold.trim().toLowerCase()
+  const symbolic = normalized.match(/^(>=|>|<=|<|=|==)\s*(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)/i)
+  if (symbolic) {
+    const operator = symbolic[1] === '==' ? '=' : symbolic[1] as '>=' | '>' | '<=' | '<' | '='
+    return { operator, value: Number(symbolic[2]) }
+  }
+
+  const phrase = normalized.match(/\b(at least|minimum|min|greater than|more than|above|at most|maximum|max|less than|below|under|no more than|equals?|equal to)\b\s*(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)/i)
+  if (!phrase) return null
+  const [, rawOperator, rawValue] = phrase
+  const operator =
+    /^(at least|minimum|min)$/.test(rawOperator) ? '>=' :
+    /^(greater than|more than|above)$/.test(rawOperator) ? '>' :
+    /^(at most|maximum|max|no more than)$/.test(rawOperator) ? '<=' :
+    /^(less than|below|under)$/.test(rawOperator) ? '<' :
+    '='
+  return { operator, value: Number(rawValue) }
+}
+
+function thresholdSatisfied(actual: number, threshold: { operator: '>=' | '>' | '<=' | '<' | '='; value: number }): boolean {
+  if (!Number.isFinite(actual) || !Number.isFinite(threshold.value)) return false
+  if (threshold.operator === '>=') return actual >= threshold.value
+  if (threshold.operator === '>') return actual > threshold.value
+  if (threshold.operator === '<=') return actual <= threshold.value
+  if (threshold.operator === '<') return actual < threshold.value
+  return actual === threshold.value
+}
+
 function validateGradingCriteriaEvidence(parsedOutput: any, preparationManifest?: unknown): GpuEvidenceResult {
   if (!parsedOutput || typeof parsedOutput !== 'object') return { valid: true, reason: 'no structured grading criteria to validate' }
   const deterministicCriteria = Array.isArray(parsedOutput.grading_criteria_checked)
@@ -461,6 +513,20 @@ function validateGradingCriteriaEvidence(parsedOutput: any, preparationManifest?
     })
   }
 
+  const numericEvidenceValuesForTerm = (term: string): number[] => {
+    return Array.from(flattenedEvidenceKeys)
+      .filter(candidate => keyMatchesTerm(candidate, term))
+      .map(candidate => valueAtPath(parsedOutput, candidate))
+      .flatMap(value => {
+        if (typeof value === 'number' && Number.isFinite(value)) return [value]
+        if (typeof value === 'string') {
+          const match = value.trim().match(/^-?\d+(?:\.\d+)?(?:e[+-]?\d+)?/i)
+          if (match) return [Number(match[0])]
+        }
+        return []
+      })
+  }
+
   const explicitEvidenceTerms = (criterion: string): string[] => {
     const stopwords = new Set([
       'artifact',
@@ -552,6 +618,23 @@ function validateGradingCriteriaEvidence(parsedOutput: any, preparationManifest?
     return {
       valid: false,
       reason: `GPU execution did not report preparation manifest expected artifacts: ${missingExpectedArtifacts.slice(0, 3).join('; ')}`,
+    }
+  }
+
+  const failedThresholdCriteria = manifestThresholdCriteria(preparationManifest)
+    .filter(({ metric, threshold }) => {
+      const parsedThreshold = parseNumericThreshold(threshold)
+      if (!parsedThreshold) return false
+      const explicitTerms = explicitEvidenceTerms(metric)
+      const terms = explicitTerms.length > 0 ? explicitTerms : [metric.toLowerCase().replace(/-/g, '_')]
+      const values = terms.flatMap(numericEvidenceValuesForTerm)
+      return values.length === 0 || !values.some(value => thresholdSatisfied(value, parsedThreshold))
+    })
+
+  if (failedThresholdCriteria.length > 0) {
+    return {
+      valid: false,
+      reason: `GPU execution did not satisfy preparation manifest success-criteria thresholds with concrete output fields: ${failedThresholdCriteria.slice(0, 3).map(item => `${item.metric} ${item.threshold}`).join('; ')}`,
     }
   }
 
