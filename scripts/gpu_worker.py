@@ -1,5 +1,3 @@
-Total output lines: 2115
-
 #!/usr/bin/env python3
 """
 GPU Worker for AR-3 Research Platform
@@ -492,7 +490,1149 @@ def install_declared_dependencies(dependencies, context: dict, timeout: int = 90
 
     cmd = [sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', '--no-cache-dir', '--upgrade', *normalized['pip_args'], '--target', context['packages_dir'], *deps]
     update_job_queue_status(job_id, 'installing_dependencies')
-    log('Installing declared dependencies into workbench: ' + ' '.join(shlex.quo…12824 tokens truncated…              output = (torch_prep_output + '\n' + output).strip()
+    log('Installing declared dependencies into workbench: ' + ' '.join(shlex.quote(d) for d in deps),
+        thread_id=threading.current_thread().name)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=context['env'])
+    if result.returncode != 0:
+        error = result.stderr.strip() or f'pip exited {result.returncode}'
+        write_dependency_record(False, error)
+        return {
+            'success': False,
+            'output': result.stdout.strip(),
+            'error': error,
+        }
+    write_dependency_record(True)
+    output = result.stdout.strip()
+    if record_path is not None:
+        output = (output + '\n' if output else '') + f'installed_dependencies={record_path}'
+    return {'success': True, 'output': output, 'error': None}
+
+
+def strip_markdown_headers(code: str) -> str:
+    """Remove markdown/table/header lines accidentally captured around code."""
+    kept = []
+    for line in code.split('\n'):
+        stripped = line.strip()
+        if not stripped:
+            kept.append(line)
+            continue
+        if re_module.match(r'^(#{1,6}\s|[-*]\s+|\|.*\|$|```)', stripped):
+            continue
+        kept.append(line)
+    return '\n'.join(kept).strip()
+
+
+def _extract_first_json_object(text: str):
+    """Return the first valid JSON object embedded in text, using quote-aware braces."""
+    in_str = False
+    escape_next = False
+    brace_depth = 0
+    json_start = -1
+    for i, ch in enumerate(str(text or '')):
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == '\\' and in_str:
+            escape_next = True
+            continue
+        if ch == '"' and not escape_next:
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if ch == '{':
+            if brace_depth == 0:
+                json_start = i
+            brace_depth += 1
+        elif ch == '}':
+            brace_depth -= 1
+            if brace_depth == 0 and json_start >= 0:
+                try:
+                    parsed = json.loads(text[json_start:i + 1])
+                    if isinstance(parsed, dict):
+                        return parsed
+                except Exception:
+                    pass
+                json_start = -1
+    return None
+
+
+def extract_preparation_manifest(job: dict):
+    """Extract a validated preparation manifest from job context or prompt markers.
+
+    The Next.js side persists a PreparationManifest in Space.setupStep and passes it
+    through job context. Older jobs may only contain the appended
+    [PREPARATION_MANIFEST_VALIDATED] marker in the prompt, so support both.
+    """
+    context = job.get('context') or ''
+    if isinstance(context, dict):
+        candidate = context.get('preparationManifest') or context.get('manifest')
+        if isinstance(candidate, dict):
+            return candidate
+    if isinstance(context, str) and context.strip():
+        try:
+            parsed = json.loads(context)
+            if isinstance(parsed, dict):
+                candidate = parsed.get('preparationManifest') or parsed.get('manifest')
+                if isinstance(candidate, dict):
+                    return candidate
+        except Exception:
+            marker_obj = _extract_first_json_object(context)
+            if isinstance(marker_obj, dict) and marker_obj.get('schemaVersion') == 'ar3.preparation-manifest.v1':
+                return marker_obj
+
+    prompt = job.get('prompt') or ''
+    marker = '[PREPARATION_MANIFEST_VALIDATED]:'
+    if marker in prompt:
+        after_marker = prompt.split(marker, 1)[1]
+        candidate = _extract_first_json_object(after_marker)
+        if isinstance(candidate, dict):
+            return candidate
+    return None
+
+
+def _safe_smoke_command(command: str):
+    command = str(command or '').strip()
+    if not command:
+        return None, 'empty smoke test command'
+
+    heredoc_match = re_module.match(
+        r"^(python(?:3)?|/[^\s]+/python(?:3)?)\s+-\s+<<['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?\s*\n(.*?)\n\2\s*$",
+        command,
+        flags=re_module.DOTALL,
+    )
+    if heredoc_match:
+        code = heredoc_match.group(3).strip('\n')
+        if not code.strip():
+            return None, 'empty python heredoc smoke test command'
+        return [sys.executable or heredoc_match.group(1), '-c', code], None
+
+    try:
+        argv = shlex.split(command)
+    except Exception as exc:
+        return None, f'invalid smoke test command: {exc}'
+    if not argv:
+        return None, 'empty smoke test command'
+    allowed = {'python', 'python3', 'pytest', 'node', 'bash', 'sh', 'nvidia-smi'}
+    executable = Path(argv[0]).name
+    if executable not in allowed:
+        return None, f'unsupported smoke test executable {argv[0]!r}'
+    if executable in {'python', 'python3'}:
+        argv[0] = sys.executable or argv[0]
+    return argv, None
+
+
+def _manifest_model_allow_patterns(model: dict) -> list:
+    """Return safe HuggingFace snapshot allow patterns requested by manifest."""
+    for key in ('files', 'downloadFiles', 'allowPatterns', 'allow_patterns'):
+        value = model.get(key)
+        if isinstance(value, str) and value.strip():
+            return [value.strip()]
+        if isinstance(value, list):
+            patterns = [str(v).strip() for v in value if str(v).strip()]
+            if patterns:
+                return patterns[:50]
+    if model.get('downloadFull') is True and os.environ.get('AR3_ALLOW_FULL_MODEL_DOWNLOAD') == '1':
+        return []
+    return ['config.json', 'tokenizer.json', 'tokenizer_config.json', 'generation_config.json', '*.md', '*.txt']
+
+
+def resolve_manifest_models(manifest: dict, context: dict, timeout: int = 900) -> dict:
+    """Resolve/download manifest HuggingFace models into the persistent workbench."""
+    models = manifest.get('models') or [] if isinstance(manifest, dict) else []
+    if not models:
+        return {'success': True, 'output': 'no manifest models declared', 'error': None}
+
+    model_cache_root = Path(context['workbench_dir']) / 'models'
+    model_cache_root.mkdir(parents=True, exist_ok=True)
+    resolution = []
+    output_parts = []
+    resolver_code = r'''
+import json
+import os
+from pathlib import Path
+
+repo_id = os.environ['AR3_MODEL_ID']
+local_dir = Path(os.environ['AR3_MODEL_LOCAL_DIR'])
+allow_patterns = json.loads(os.environ.get('AR3_MODEL_ALLOW_PATTERNS') or '[]')
+try:
+    from huggingface_hub import HfApi, snapshot_download
+except ModuleNotFoundError as exc:
+    raise SystemExit('huggingface_hub unavailable after dependency install: ' + repr(exc))
+
+api = HfApi()
+info = api.model_info(repo_id)
+local_dir.mkdir(parents=True, exist_ok=True)
+kwargs = {
+    'repo_id': repo_id,
+    'local_dir': str(local_dir),
+    'local_dir_use_symlinks': False,
+    'resume_download': True,
+}
+if allow_patterns:
+    kwargs['allow_patterns'] = allow_patterns
+snapshot_path = snapshot_download(**kwargs)
+downloaded = []
+for path in Path(snapshot_path).rglob('*'):
+    if path.is_file():
+        downloaded.append(str(path.relative_to(snapshot_path)))
+print(json.dumps({
+    'ok': True,
+    'repo_id': repo_id,
+    'sha': getattr(info, 'sha', None),
+    'pipeline_tag': getattr(info, 'pipeline_tag', None),
+    'local_dir': snapshot_path,
+    'allow_patterns': allow_patterns,
+    'downloaded_files': sorted(downloaded)[:200],
+}, sort_keys=True))
+'''
+
+    for i, model in enumerate(models):
+        if not isinstance(model, dict):
+            return {'success': False, 'output': '\n'.join(output_parts), 'error': f'Invalid model entry at index {i}'}
+        if model.get('source') != 'huggingface':
+            continue
+        model_id = str(model.get('id') or '').strip()
+        required = model.get('required') is True
+        if not model_id:
+            if required:
+                return {'success': False, 'output': '\n'.join(output_parts), 'error': f'Required HuggingFace model at index {i} is missing id'}
+            continue
+        local_dir = model_cache_root / _safe_slug(model_id.replace('/', '-'), 'model')
+        allow_patterns = _manifest_model_allow_patterns(model)
+        install = subprocess.run(
+            [sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', '--no-cache-dir', '--target', context['packages_dir'], 'huggingface_hub>=0.20'],
+            capture_output=True, text=True, timeout=min(timeout, 300), env=context['env']
+        )
+        if install.returncode != 0:
+            err = install.stderr.strip() or f'pip exited {install.returncode}'
+            if required:
+                return {'success': False, 'output': '\n'.join(output_parts), 'error': f'HuggingFace resolver dependency install failed for {model_id}: {err}'}
+            output_parts.append(f'model_resolve {model_id} skipped resolver install failed: {err}')
+            continue
+        env = {
+            **context['env'],
+            'AR3_MODEL_ID': model_id,
+            'AR3_MODEL_LOCAL_DIR': str(local_dir),
+            'AR3_MODEL_ALLOW_PATTERNS': json.dumps(allow_patterns),
+        }
+        result = subprocess.run([sys.executable, '-c', resolver_code], capture_output=True, text=True, timeout=timeout, cwd=context['workbench_dir'], env=env)
+        stdout = result.stdout.strip()
+        stderr = result.stderr.strip()
+        output_parts.append(f'model_resolve {model_id} exit={result.returncode}\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}')
+        if result.returncode != 0:
+            if required:
+                return {'success': False, 'output': '\n'.join(output_parts), 'error': f'Required HuggingFace model {model_id!r} failed to resolve/download'}
+            continue
+        try:
+            item = json.loads(stdout) if stdout.startswith('{') else {'repo_id': model_id, 'raw': stdout}
+        except Exception:
+            item = {'repo_id': model_id, 'raw': stdout}
+        item['manifest_index'] = i
+        item['local_dir'] = item.get('local_dir') or str(local_dir)
+        resolution.append(item)
+
+    resolution_file = Path(context['workbench_dir']) / 'model_resolution.json'
+    with open(resolution_file, 'w') as f:
+        json.dump({'models': resolution}, f, indent=2, sort_keys=True)
+    context['env']['AR3_MODEL_RESOLUTION_FILE'] = str(resolution_file)
+    context['env']['AR3_MODEL_CACHE_DIR'] = str(model_cache_root)
+    output_parts.append(f'model_resolution_file={resolution_file}')
+    return {'success': True, 'output': '\n'.join(output_parts), 'error': None}
+
+
+def _append_preparation_run_history(context: dict, manifest_path: Path, success: bool, output: str, error: str = None) -> str:
+    """Append a bounded preparation history entry in the persistent workbench."""
+    history_path = Path(context['workbench_dir']) / 'preparation_run_history.json'
+    entry = {
+        'timestamp': datetime.now().isoformat(),
+        'manifestPath': str(manifest_path),
+        'success': bool(success),
+        'error': error,
+        'outputTail': str(output or '')[-4000:],
+    }
+    try:
+        if history_path.exists():
+            with open(history_path, 'r') as f:
+                history = json.load(f)
+            if not isinstance(history, list):
+                history = []
+        else:
+            history = []
+    except Exception:
+        history = []
+    history.append(entry)
+    history = history[-20:]
+    tmp_path = history_path.with_suffix('.json.tmp')
+    with open(tmp_path, 'w') as f:
+        json.dump(history, f, indent=2, sort_keys=True)
+    os.replace(tmp_path, history_path)
+    return str(history_path)
+
+
+def prepare_manifest_environment(manifest: dict, context: dict, timeout: int = 900, job_id: str = '') -> dict:
+    """Install manifest dependencies, resolve models, and run smoke tests before experiment code."""
+    if not isinstance(manifest, dict):
+        return {'success': True, 'output': 'no preparation manifest supplied', 'error': None}
+
+    manifest_path = Path(context['workbench_dir']) / 'preparation_manifest.json'
+    with open(manifest_path, 'w') as f:
+        json.dump(manifest, f, indent=2, sort_keys=True)
+
+    dep_result = install_declared_dependencies(manifest.get('dependencies') or [], context, timeout=timeout, job_id=job_id)
+    output_parts = [f'preparation_manifest={manifest_path}']
+
+    def finish(success: bool, error: str = None) -> dict:
+        history_path = _append_preparation_run_history(context, manifest_path, success, '\n'.join(output_parts), error)
+        output_with_history = '\n'.join(output_parts + [f'preparation_run_history={history_path}'])
+        return {'success': success, 'output': output_with_history, 'error': error}
+
+    if dep_result.get('output'):
+        output_parts.append('dependency_install:\n' + dep_result.get('output', ''))
+    if not dep_result.get('success'):
+        return finish(False, 'Preparation dependency installation failed: ' + str(dep_result.get('error', 'unknown')))
+
+    manifest_needs_torch = _code_or_deps_need_torch(
+        '\n'.join(
+            [str(smoke.get('command') or '') for smoke in manifest.get('smokeTests') or [] if isinstance(smoke, dict)]
+            + [str(model.get('smokeTest') or '') for model in manifest.get('models') or [] if isinstance(model, dict)]
+        ),
+        manifest.get('dependencies') or [],
+    )
+    if manifest_needs_torch:
+        torch_result = ensure_torch_cuda_workbench(context, timeout=min(timeout, 600))
+        if torch_result.get('output'):
+            output_parts.append('torch_cuda_workbench:\n' + torch_result.get('output', ''))
+        if not torch_result.get('success'):
+            return finish(False, 'Preparation torch CUDA workbench validation failed: ' + str(torch_result.get('error', 'unknown')))
+        context['env'] = _without_cuda_toolkit_ld_path(context['env'])
+
+    model_resolution = resolve_manifest_models(manifest, context, timeout=timeout)
+    if model_resolution.get('output'):
+        output_parts.append('model_resolution:\n' + model_resolution.get('output', ''))
+    if not model_resolution.get('success'):
+        return finish(False, 'Preparation model resolution failed: ' + str(model_resolution.get('error', 'unknown')))
+
+    for model in manifest.get('models') or []:
+        if not isinstance(model, dict):
+            return finish(False, 'Invalid model entry in preparation manifest')
+        if model.get('required') is not True:
+            continue
+        model_id = str(model.get('id') or 'required-model')
+        smoke_command = str(model.get('smokeTest') or '').strip()
+        if not smoke_command:
+            output_parts.append(f'model_smoke {model_id} skipped: no smoke test command supplied; model resolution evidence accepted')
+            continue
+        argv, err = _safe_smoke_command(smoke_command)
+        if err:
+            return finish(False, f'Required model smoke test {model_id!r} rejected: {err}')
+        smoke_timeout = max(5, min(int(model.get('timeoutSeconds') or 300), timeout))
+        result = subprocess.run(argv, capture_output=True, text=True, timeout=smoke_timeout, cwd=context['workbench_dir'], env=context['env'])
+        stdout = result.stdout.strip()
+        stderr = result.stderr.strip()
+        output_parts.append(f'model_smoke {model_id} exit={result.returncode}\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}')
+        if result.returncode != 0:
+            return finish(False, f'Required model smoke test {model_id!r} failed')
+
+    for smoke in manifest.get('smokeTests') or []:
+        if not isinstance(smoke, dict):
+            return finish(False, 'Invalid smoke test entry in preparation manifest')
+        name = str(smoke.get('name') or 'smoke-test')
+        argv, err = _safe_smoke_command(smoke.get('command') or '')
+        if err:
+            return finish(False, f'Preparation smoke test {name!r} rejected: {err}')
+        smoke_timeout = int(smoke.get('timeoutSeconds') or min(timeout, 300))
+        smoke_timeout = max(5, min(smoke_timeout, timeout))
+        result = subprocess.run(argv, capture_output=True, text=True, timeout=smoke_timeout, cwd=context['workbench_dir'], env=context['env'])
+        stdout = result.stdout.strip()
+        stderr = result.stderr.strip()
+        output_parts.append(f'smoke_test {name} exit={result.returncode}\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}')
+        if result.returncode != 0:
+            return finish(False, f'Preparation smoke test {name!r} failed')
+        expected = [str(e) for e in smoke.get('expectedEvidence') or []]
+        combined = stdout + '\n' + stderr
+        missing = [e for e in expected if e and e not in combined]
+        if missing:
+            return finish(False, f'Preparation smoke test {name!r} missing expected evidence: {missing}')
+    return finish(True, None)
+
+
+def extract_gpu_command(prompt: str) -> dict:
+    """Extract GPU command from LLM response using robust multi-strategy approach.
+
+    Strategies (in order):
+      0. Strip markdown fences, try direct JSON parse
+      1. Largest ```python block (not wrapped in JSON)
+      2. Quote-aware brace matching for JSON objects with "code" field
+      3. Bare ```python blocks (no JSON wrapper)
+      4. Line-by-line code assembly (skip bullets/headers)
+      5. Fallback: nvidia-smi diagnostic
+    """
+    import re
+
+    # ── Strategy 0: Direct JSON from LLM (structured output) ─────────────────
+    # Strip any surrounding markdown fences
+    stripped = re_module.sub(
+        r'^```(json|python)?\s*(.*?)\s*```$',
+        r'\2',
+        prompt.strip(),
+        flags=re_module.DOTALL | re_module.IGNORECASE
+    ).strip()
+    try:
+        parsed = json.loads(stripped)
+        if isinstance(parsed, dict) and parsed.get('action') == 'run_python' and isinstance(parsed.get('code'), str):
+            log(f"Strategy 0: Direct JSON parse OK, code={len(parsed['code'])} chars",
+                thread_id=threading.current_thread().name)
+            return parsed
+    except Exception:
+        pass
+
+    gpu_command = None
+
+    # ── Strategy 1: Largest ```python block (not JSON) ───────────────────────
+    code_blocks = re_module.findall(
+        r'```python\s*(.*?)\s*```',
+        prompt,
+        re_module.DOTALL | re_module.IGNORECASE
+    )
+    if code_blocks:
+        best = max(code_blocks, key=lambda b: len(b.strip())).strip()
+        # Remove non-ASCII characters (em-dash —, curly quotes, etc.) from extracted code
+        best_clean = ''.join(c if ord(c) < 128 else '?' for c in best)
+        if len(best_clean) > 50 and not best_clean.startswith('{'):
+            log(f"Strategy 1: Pure ```python block, {len(best_clean)} chars",
+                thread_id=threading.current_thread().name)
+            return {"action": "run_python", "code": best_clean}
+
+    # ── Strategy 2: Quote-aware brace matching for JSON objects ───────────────
+    # Collect all top-level JSON objects containing 'action' and 'code'
+    in_str = False
+    escape_next = False
+    brace_depth = 0
+    json_start = -1
+    candidates = []
+    for i, ch in enumerate(prompt):
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == '\\' and in_str:
+            escape_next = True
+            continue
+        if ch == '"' and not escape_next:
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if ch == '{':
+            if brace_depth == 0:
+                json_start = i
+            brace_depth += 1
+        elif ch == '}':
+            brace_depth -= 1
+            if brace_depth == 0 and json_start >= 0:
+                candidates.append(prompt[json_start:i+1])
+                json_start = -1
+
+    for cand in candidates:
+        try:
+            cand_obj = json.loads(cand)
+            if (isinstance(cand_obj, dict)
+                    and cand_obj.get('action') == 'run_python'
+                    and isinstance(cand_obj.get('code'), str)
+                    and len(cand_obj['code']) > 20):
+                log(f"Strategy 2: JSON object with run_python, {len(cand_obj['code'])} chars",
+                    thread_id=threading.current_thread().name)
+                return cand_obj
+        except Exception:
+            pass
+
+    # ── Strategy 3: Bare ```python blocks ─────────────────────────────────────
+    for block in code_blocks:
+        block = block.strip()
+        # Remove non-ASCII characters (em-dash —, curly quotes, etc.)
+        block_clean = ''.join(c if ord(c) < 128 else '?' for c in block)
+        if len(block_clean) > 50 and re_module.search(r'\b(import |from |torch|cuda|tensor|def |class )', block_clean):
+            log(f"Strategy 3: Bare ```python block with code, {len(block_clean)} chars",
+                thread_id=threading.current_thread().name)
+            return {"action": "run_python", "code": block_clean}
+
+    # ── Strategy 4: Line-by-line code assembly ────────────────────────────────
+    # AGGRESSIVE: any line with 4+ spaces indentation and alphanumeric content is code
+    lines = prompt.split('\n')
+    code_lines = []
+    in_code = False
+    for raw_line in lines:
+        stripped = raw_line.strip()
+        # Skip empty lines
+        if not stripped:
+            if in_code:
+                in_code = False
+            continue
+        # Skip comment-only lines, markdown bullets
+        if stripped.startswith('#') or stripped.startswith('- ') or stripped.startswith('* '):
+            if in_code:
+                in_code = False
+            continue
+        if stripped.startswith('```') or stripped.startswith('{'):
+            continue
+        # Skip numbered list items WITHOUT Python indicators (unless indented 4+ spaces)
+        # AGGRESSIVE: any indented line (4+ spaces) with alphanumeric content is potential code
+        leading_spaces = len(raw_line) - len(raw_line.lstrip())
+        if leading_spaces >= 4:
+            # SKIP: lines that look like markdown prose/doc strings, not Python code
+            _skip = False
+            _s_strip = stripped
+            # Skip long lines starting with quotes (likely doc strings in markdown)
+            if len(_s_strip) > 60 and _s_strip[0] in ('"', "'"):
+                _skip = True
+            # Skip numbered list items like "6. Uses actual tensor operations..." (both '.' and ')' formats)
+            if re_module.match(r'^\d+[.)]\s+[^=+\-|:]+$', _s_strip):
+                _skip = True
+            # Skip lines that look like parameter docs: "latent_dim  = 8192   (description)"
+            if re_module.match(r'^\s*[a-z_][a-z_0-9]*\s*=\s*\d+.*\([^)]*\)\s*$', _s_strip):
+                _skip = True
+            # Skip lines with only markdown-ish content (starts with quotes or parens)
+            if _s_strip and _s_strip[0] in ('(', '[', '{') and not any(k in _s_strip for k in ('torch.', 'nn.', 'F.', 'self.', '=')):
+                _skip = True
+            # Additional markdown prose skip patterns
+            if '    ' in raw_line and ':' in stripped and '(' not in stripped and '=' not in stripped and '->' not in stripped:
+                if not any(k in stripped for k in ('torch.', 'nn.', 'F.', 'self.', 'def ', 'class ', 'return ')):
+                    _skip = True
+            if '    ' in raw_line and stripped.startswith('(') and stripped.endswith(')'):
+                _skip = True
+            if re_module.match(r'^\s{4,}\w+\s*:\s*\w+\s*=\s*\S.*#.*$', raw_line):
+                _skip = True
+            if re_module.match(r'^\s*\|.*\|\s*$', stripped):
+                _skip = True
+
+            if not _skip and any(c.isalnum() for c in stripped):
+                in_code = True
+                code_lines.append(raw_line)
+                # Don't stop early — collect up to 50 lines
+                if len(code_lines) >= 50:
+                    break
+            continue
+        # UnIndented or lightly indented: only include if it has strong Python indicators
+        if any(kw in stripped for kw in ['import ', 'from ', 'def ', 'class ',
+                                         'torch.', 'cuda.', 'tensor(', '.cuda()', '.to(']):
+            in_code = True
+        if in_code:
+            code_lines.append(raw_line)
+            if len(code_lines) >= 50:
+                break
+        elif len(code_lines) > 0 and stripped:
+            # Light indentation — could be continuation
+            if stripped.startswith('    ') or stripped.startswith('\t'):
+                code_lines.append(raw_line)
+            elif len(code_lines) > 5:
+                break
+
+    if code_lines:
+        code = ''.join(c if ord(c) < 128 else '?' for c in '\n'.join(code_lines))
+        code = strip_markdown_headers(code)
+        code_lines_final = [ln for ln in code.split(chr(10)) if ln.strip()
+                           and not re_module.match(r'^(#{1,6}\s|\*\*|\-\-\-|\d+\.\s+[A-Z])', ln.strip())]
+        code = chr(10).join(code_lines_final)
+        if len(code) > 30:
+            # POST-PROCESSING VALIDATION GATE:
+            # Strategy 4 assembles indented lines that LOOK like Python but are actually
+            # markdown prose (doc strings, bullet descriptions). Reject if no real Python
+            # indicators are present, to prevent SyntaxError cascade from bad code.
+            indicators = ["import ", "from ", "def ", "class ", "torch.", "nn.", "F.",
+                         "cuda.", "tensor(", "self.", "return ", "for ", "while ",
+                         "if ", "else:", "try:", "except ", ".cpu()", ".cuda()",
+                         ".to(", "torch.nn", "torch.cuda", "= torch", "= [", "= {"]
+            n_ind = sum(1 for i in indicators if i in code)
+            has_sig = any(kw in code for kw in ["import ", "def ", "class ", "torch."])
+            if n_ind < 3 and not has_sig:
+                log(f"Strategy 4: ASSEMBLY REJECTED (n_ind={n_ind}<3, has_sig={has_sig}). "
+                    "Falling through to nvidia-smi fallback.",
+                    thread_id=threading.current_thread().name)
+            else:
+                # HEREDOC STRIP
+                _s4_lines = code.split('\n')
+                _s4_clean = []
+                for _ln in _s4_lines:
+                    _ls = _ln.strip()
+                    if _ls in ('PYEOF', 'EOF', 'PYTHON', 'BASH', 'MARKER'): continue
+                    if re_module.match(r"^'{3,}$", _ls) or re_module.match(r'^"{3,}$', _ls): continue
+                    if re_module.search(r'^\s*<<\s+["\']?[A-Z]+["\']?\s*$', _ln): continue
+                    _s4_clean.append(_ln)
+                code = '\n'.join(_s4_clean)
+
+                # AUTO-IMPORT for Strategy 4
+                if re_module.search(r'\bre\.[A-Za-z_][A-Za-z_0-9]*\b', code):
+                    if not any('import re' in c for c in _s4_clean[:5]):
+                        code = 'import re\n' + code
+                if re_module.search(r'\bnp\.[A-Za-z_][A-Za-z_0-9]*\b', code):
+                    if not any('import numpy' in c for c in _s4_clean[:5]):
+                        code = 'import numpy as np\n' + code
+                if re_module.search(r'\bplt\.[A-Za-z_][A-Za-z_0-9]*\b', code):
+                    if not any('import matplotlib' in c for c in _s4_clean[:5]):
+                        code = 'import matplotlib.pyplot as plt\n' + code
+
+                # EXPANDED VALIDATION GATE
+                indicators_s4 = ["import ", "from ", "def ", "class ", "torch.", "nn.", "F.",
+                                 "cuda.", "tensor(", "self.", "return ", "for ", "while ",
+                                 "if ", "else:", "try:", "except ", ".cpu()", ".cuda()",
+                                 ".to(", "torch.nn", "torch.cuda", "= torch", "= [", "= {",
+                                 "re.", "np.", "plt.", "dtype", "device", "shape", "grad"]
+                n_ind_s4 = sum(1 for i in indicators_s4 if i in code)
+                has_sig_s4 = any(kw in code for kw in ["import ", "def ", "class ", "torch.", "re.", "nn."])
+                if n_ind_s4 < 3 and not has_sig_s4:
+                    log(f"Strategy 4: ASSEMBLY REJECTED (n_ind_s4={n_ind_s4}<3, has_sig={has_sig_s4}). "
+                        "Falling through to nvidia-smi fallback.",
+                        thread_id=threading.current_thread().name)
+                elif 'PYEOF' in code or 'EOF' in code:
+                    log(f"Strategy 4: REJECTED -- heredoc markers still present after strip. "
+                        "Falling through to nvidia-smi fallback.",
+                        thread_id=threading.current_thread().name)
+                else:
+                    log(f"Strategy 4: Assembled {len(code_lines_final)} lines, {len(code)} chars "
+                        f"(indicators={n_ind_s4})",
+                        thread_id=threading.current_thread().name)
+                    return {"action": "run_python", "code": code}
+
+    # ── No valid GPU command: fail fast instead of masking bad model output as nvidia-smi success ──
+    log(f"ERROR: No valid GPU command found — refusing nvidia-smi fallback for research jobs",
+        thread_id=threading.current_thread().name)
+    log(f"  Prompt preview (200 chars): {prompt[:200]}",
+        thread_id=threading.current_thread().name)
+    return {"action": "invalid", "error": "No executable GPU command found. Expected JSON {action:'run_python', code:'...'} with real Python code."}
+
+
+
+def execute_quantized_code(code: str, timeout: int = DEFAULT_JOB_TIMEOUT) -> dict:
+    """"Execute Python code with quantized model support (bitsandbytes 8-bit)."""
+    log(f"Executing quantized Python code ({len(code)} chars)",
+        thread_id=threading.current_thread().name)
+
+    # ── Pre-process: coerce f-string tensor.item():.Nf patterns ─────────────
+    fixed_code = re_module.sub(
+        r"f(['\"])([^'\"]*?)\{([^{}]+?)\.item\(\):\.(\d+)f\}([^'\"]*?)\1",
+        lambda m: "f'" + m.group(2) + '{float(' + m.group(3) + '.item()):.'
+                  + m.group(4) + 'f}' + m.group(5) + "'",
+        code
+    )
+
+    # ── Patch: Handle LLaDA transformers 5.x compatibility ─────────────────
+    patch_wrapper = """
+import torch
+import builtins as _builtins
+_orig_getattr = torch.nn.Module.__getattr__
+def _patched_getattr(self, name, *args, **kwargs):
+    if name == 'all_tied_weights_keys':
+        return {}
+    return _orig_getattr(self, name, *args, **kwargs)
+torch.nn.Module.__getattr__ = _patched_getattr
+"""
+    fixed_code = patch_wrapper + fixed_code
+
+    if fixed_code != code:
+        log(f"Format-string coercion applied",
+            thread_id=threading.current_thread().name)
+
+    code_file = f"/tmp/gpu_code_{int(time.time()*1000)}.py"
+    with open(code_file, 'w') as f:
+        f.write(fixed_code)
+
+    try:
+        result = subprocess.run(
+            ['python3', code_file],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd='/tmp',
+            env={
+                **os.environ,
+                'LD_LIBRARY_PATH': '/usr/local/cuda/lib64:' + os.environ.get('LD_LIBRARY_PATH', ''),
+            }
+        )
+        try:
+            os.unlink(code_file)
+        except Exception:
+            pass
+
+        if result.returncode == 0:
+            return {
+                'success': True,
+                'output': result.stdout.strip(),
+                'error': None,
+            }
+        else:
+            return {
+                'success': False,
+                'output': result.stdout.strip(),
+                'error': result.stderr.strip() or f'Exit code: {result.returncode}',
+            }
+    except subprocess.TimeoutExpired:
+        try:
+            os.unlink(code_file)
+        except Exception:
+            pass
+        return {
+            'success': False,
+            'output': '',
+            'error': f'Code execution timed out ({timeout}s limit)',
+        }
+    except Exception as e:
+        try:
+            os.unlink(code_file)
+        except Exception:
+            pass
+        return {
+            'success': False,
+            'output': '',
+            'error': str(e),
+        }
+
+
+
+def repair_embedded_newline_string_literals(code: str) -> str:
+    """Repair common LLM/JSON escape damage: "<physical newline>".join(...).
+
+    Generated GPU commands sometimes intend `"\\n".join(xs)` but the string arrives
+    as a physical newline between quotes, causing `SyntaxError: unterminated string
+    literal`. Keep this repair narrow so normal multi-line code is untouched.
+    """
+    # Handle both `"\n".join(xs)` and `"\n" + text` when the backslash
+    # has been decoded into a physical newline between two quotes.
+    return re_module.sub(r'([\"\'])\n\1(?=\s*(?:\.join\s*\(|\+|,|\)|\]))', r'\1\\n\1', code)
+
+
+def repair_common_torch_api_mistakes(code: str) -> str:
+    """Repair narrow, observed PyTorch API hallucinations in generated experiments."""
+    return re_module.sub(r'(?<![A-Za-z0-9_])total_mem(?![A-Za-z0-9_])', 'total_memory', code)
+
+
+def repair_common_gpu_info_key_assumptions(code: str) -> str:
+    """Repair observed generated-code assumptions about optional GPU info keys."""
+    optional_bool_keys = ('can_load_2x_8b_model_fp16',)
+    fixed = code
+    for key in optional_bool_keys:
+        fixed = re_module.sub(
+            rf"(\b[A-Za-z_][A-Za-z0-9_]*\b)\[['\"]{re_module.escape(key)}['\"]\]",
+            rf"\1.get('{key}', False)",
+            fixed,
+        )
+    return fixed
+
+
+def repair_malformed_dict_value_format_specs(code: str) -> str:
+    """Repair LLM-emitted dict values that use f-string format specs outside f-strings.
+
+    Generated experiments sometimes produce invalid Python such as
+    ``{'agreement': consensus_result['avg_agreement']:.3f}``.  The intent is a
+    rounded numeric metric value, not a type annotation.  Keep the repair narrow:
+    only dict-style key/value separators followed by a simple name/attribute/
+    subscript expression and a ``:.Nf`` suffix before a comma or closing brace.
+    """
+    expr = r"[A-Za-z_][A-Za-z0-9_]*(?:\[[^\n\[\]]+\]|\.[A-Za-z_][A-Za-z0-9_]*|\([^\n()]*\))*"
+    pattern = re_module.compile(rf"(:\s*)({expr})\s*:\.(\d+)f(?=\s*[,}}])")
+    return pattern.sub(lambda m: f"{m.group(1)}round({m.group(2)}, {m.group(3)})", code)
+
+
+def auto_fix_code(code: str) -> str:
+    """Attempt to fix common SyntaxError/IndentationError issues in one pass."""
+    import re as re_module
+
+    def _compiles(candidate: str) -> bool:
+        try:
+            compile(candidate, '<gpu-worker-auto-fix>', 'exec')
+            return True
+        except SyntaxError:
+            return False
+
+    # CRITICAL: init `fixed` BEFORE any closure referencing it (UnboundLocal bytecode bug).
+    # Repair physical-newline string literals before delimiter balancing. The line-by-line
+    # delimiter fixer is intentionally broad and can corrupt valid multi-line dict calls
+    # (e.g. item.update({ ... })) when the only real syntax error is a decoded "\n".
+    fixed = repair_embedded_newline_string_literals(code)
+    fixed = repair_common_torch_api_mistakes(fixed)
+    fixed = repair_malformed_dict_value_format_specs(fixed)
+    if fixed != code and _compiles(fixed):
+        return fixed
+
+    # 1. Add missing colons after def/class/if/for/while/elif/else/try/except/finally/with
+    # Pattern: line ending with keyword followed by newline (no colon)
+    keyword_lines = re_module.compile(
+        r'^(\s*)(def |class |if |elif |else:|try:|except |finally:|with |for |while |async def |async class )',
+        re_module.MULTILINE
+    )
+    def add_colon(m):
+        text = m.group(2)
+        # Already has colon
+        if text.endswith(':'):
+            return m.group(1) + text
+        # if/elif/else/try/except/finally/with/for/while need colon
+        return m.group(1) + text + ':'
+    fixed = keyword_lines.sub(add_colon, fixed)
+
+    # 2. Fix missing closing parens/brackets/braces on lines
+    # Count open (, [, { and try to close them at end of line
+    lines = fixed.split('\n')
+    fixed_lines = []
+    for line in lines:
+        fixed_lines.append(line)
+        open_parens = line.count('(') - line.count(')')
+        open_brackets = line.count('[') - line.count(']')
+        open_braces = line.count('{') - line.count('}')
+        # If we opened more than we closed and line doesn't end with comma/backslash
+        if open_parens > 0 and not line.rstrip().endswith(('\\', ',', '+')):
+            fixed_lines[-1] += ')' * open_parens
+        if open_brackets > 0 and not line.rstrip().endswith(('\\', ',', '+')):
+            fixed_lines[-1] += ']' * open_brackets
+        if open_braces > 0 and not line.rstrip().endswith(('\\', ',', '+')):
+            fixed_lines[-1] += '}' * open_braces
+    fixed = '\n'.join(fixed_lines)
+
+    # 3. Fix common indentation errors: dedent lines that start with blank space after unindented line
+    # (i.e., fix "def foo():\npass\n  something" type issues)
+    lines = fixed.split('\n')
+    fixed_lines = []
+    prev_indented = False
+    for line in lines:
+        stripped = line.lstrip()
+        leading_spaces = len(line) - len(stripped)
+        # If we go from non-indented to indented without intermediate dedent
+        if stripped and leading_spaces > 0 and not prev_indented and fixed_lines:
+            prev_line = fixed_lines[-1].strip()
+            # Previous line was a colon-less header, add pass first
+            if prev_line and not prev_line.startswith('#') and not prev_line.startswith('return') and '(' not in prev_line and ')' not in prev_line:
+                # Check if last line looks like it needed a colon
+                if not prev_line.endswith(':'):
+                    pass  # already handled above
+        fixed_lines.append(line)
+        prev_indented = (leading_spaces > 0)
+    fixed = '\n'.join(fixed_lines)
+
+    return fixed
+
+
+COMMON_STDLIB_MODULES = {
+    'json', 'os', 'sys', 'math', 'random', 'time', 'datetime', 'pathlib', 'statistics',
+    'itertools', 'functools', 'collections', 'subprocess', 're', 'csv', 'tempfile', 'shutil',
+}
+
+COMMON_STDLIB_SYMBOL_IMPORTS = {
+    'defaultdict': 'from collections import defaultdict',
+    'Counter': 'from collections import Counter',
+    'deque': 'from collections import deque',
+}
+
+
+def inject_missing_common_stdlib_imports(code: str) -> str:
+    """Prepend imports for common stdlib modules referenced but not imported.
+
+    Weak implementer models often emit otherwise executable experiments that use
+    json.dumps/os.getcwd/pathlib.Path in final metrics reporting but omit the
+    import line. Repair only top-level stdlib module names, and only after AST
+    parsing succeeds, so pseudocode/syntax errors still fail fast.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    imported = set()
+    loaded_names = set()
+    assigned_names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                imported.add((alias.asname or alias.name.split('.')[0]))
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                imported.add(node.module.split('.')[0])
+            for alias in node.names:
+                imported.add(alias.asname or alias.name)
+        elif isinstance(node, ast.Name):
+            if isinstance(node.ctx, ast.Load):
+                loaded_names.add(node.id)
+            elif isinstance(node.ctx, (ast.Store, ast.Del)):
+                assigned_names.add(node.id)
+
+    missing = sorted((loaded_names & COMMON_STDLIB_MODULES) - imported - assigned_names)
+    missing_symbol_imports = [
+        import_line for symbol, import_line in sorted(COMMON_STDLIB_SYMBOL_IMPORTS.items())
+        if symbol in loaded_names and symbol not in imported and symbol not in assigned_names
+    ]
+    if not missing and not missing_symbol_imports:
+        return code
+    import_lines = [f'import {name}' for name in missing] + missing_symbol_imports
+    return ''.join(f'{line}\n' for line in import_lines) + code
+
+
+def validate_executable_experiment_code(code: str) -> dict:
+    """Fail fast on prose/pseudocode before any dependency install or execution.
+
+    TypeScript validation catches normal API submissions, but the worker also accepts
+    queued jobs directly and has legacy markdown extraction paths. This guard keeps
+    weak-model prose from consuming GPU time or mutating persistent workbenches.
+    """
+    text = str(code or '')
+    placeholder_patterns = [
+        r'\bTODO\b',
+        r'\bFIXME\b',
+        r'placeholder',
+        r'pseudocode',
+        r'your code here',
+        r'\bpass\s*(?:#.*)?$',
+        r'\.\.\.',
+        r'implement (?:this|the actual|real)',
+    ]
+    for pattern in placeholder_patterns:
+        if re_module.search(pattern, text, flags=re_module.IGNORECASE | re_module.MULTILINE):
+            return {'ok': False, 'error': f'Executable code rejected: placeholder/pseudocode marker matched {pattern!r}'}
+
+    if not re_module.search(r'\b(print\s*\(|json\.dump|json\.dumps|logging\.)', text):
+        return {'ok': False, 'error': 'Executable code rejected: experiment must print/log measurable evidence'}
+
+    gpu_probe_patterns = [
+        r'\btorch\.cuda\b',
+        r'\bcuda\.is_available\b',
+        r'\.cuda\s*\(',
+        r'\.to\s*\(\s*[\'\"]cuda',
+        r'\bdevice\s*=\s*[\'\"]cuda',
+        r'\bcupy\b',
+        r'\btriton\b',
+        r'\btensorflow\b.*\bGPU\b',
+        r'\bjax\b.*\b(device|gpu)\b',
+        r'\bnvidia-smi\b',
+        r'\bnvml\b',
+        r'\bgpu_name\b',
+        r'\bcuda_available\b',
+        r'\bvram\b',
+    ]
+    if not any(re_module.search(pattern, text, flags=re_module.IGNORECASE | re_module.DOTALL) for pattern in gpu_probe_patterns):
+        return {'ok': False, 'error': 'Executable code rejected: experiment must include a GPU/CUDA probe or GPU runtime evidence path'}
+
+    return {'ok': True, 'error': None}
+
+
+def _iter_json_objects_from_output(output: str):
+    """Yield all JSON objects embedded in stdout/stderr evidence.
+
+    Worker output often prepends a one-line torch smoke JSON before the actual
+    pretty-printed experiment evidence. A first-object-only scan lets later
+    self-reported contract failures hide behind valid GPU smoke evidence, so scan
+    the full stream with quote-aware brace matching.
+    """
+    text = str(output or '')
+    seen = set()
+    in_str = False
+    escape_next = False
+    brace_depth = 0
+    json_start = -1
+    for i, ch in enumerate(text):
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == '\\' and in_str:
+            escape_next = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if ch == '{':
+            if brace_depth == 0:
+                json_start = i
+            brace_depth += 1
+        elif ch == '}' and brace_depth:
+            brace_depth -= 1
+            if brace_depth == 0 and json_start >= 0:
+                raw = text[json_start:i + 1]
+                json_start = -1
+                try:
+                    parsed = json.loads(raw)
+                except Exception:
+                    continue
+                if isinstance(parsed, dict):
+                    key = (json_start, i, raw[:120])
+                    if key not in seen:
+                        seen.add(key)
+                        yield parsed
+
+
+def validate_execution_result_evidence(result: dict) -> dict:
+    """Reject self-reported invalid experiments after execution.
+
+    Some weak implementers generate Python wrappers that execute successfully but
+    print a JSON sentinel such as {"contract_failure_reason": "..."}. Treating
+    that as success records a non-experiment as completed work and breaks retry
+    feedback. This post-run gate promotes those sentinels to hard failures.
+
+    Also require actual runtime GPU evidence in stdout/stderr. Static code checks
+    only prove that the script mentioned CUDA; the completed job should show the
+    GPU path really executed so graders can distinguish real experiments from
+    wrappers that merely print "done".
+    """
+    if not result.get('success'):
+        return result
+
+    output = result.get('output', '')
+    failure_keys = ('contract_failure_reason', 'contractFailureReason', 'failure_reason')
+    json_objects = list(_iter_json_objects_from_output(output))
+    for obj in json_objects:
+        is_autonomous_preparation_probe = obj.get('type') == 'autonomous_preparation_manifest'
+        for key in failure_keys:
+            value = obj.get(key)
+            if value and not is_autonomous_preparation_probe:
+                result['success'] = False
+                result['error'] = f'Experiment output self-reported {key}: {value}'
+                return result
+        status = str(obj.get('status') or obj.get('verdict') or '').strip().lower()
+        if status in {'invalid', 'rejected', 'contract_failed', 'contract-failed'}:
+            result['success'] = False
+            result['error'] = f'Experiment output self-reported failure status: {status}'
+            return result
+
+    evidence_keys = {
+        'cuda_available', 'gpu_name', 'gpu_count', 'gpu_memory', 'gpu_memory_total',
+        'vram', 'device', 'device_name', 'torch_cuda_version', 'nvidia_driver',
+    }
+    smoke_only_keys = {
+        'cuda_device', 'cuda_tensor_sum', 'torch_cuda_available', 'torch_cuda_version',
+        'torch_version',
+    }
+    saw_preparation_contract_failure = False
+    saw_non_prelude_json = False
+    for obj in json_objects:
+        is_autonomous_preparation_probe = obj.get('type') == 'autonomous_preparation_manifest'
+        saw_preparation_contract_failure = saw_preparation_contract_failure or bool(
+            is_autonomous_preparation_probe and any(obj.get(key) for key in failure_keys)
+        )
+        lowered_keys = {str(key).lower() for key in obj.keys()}
+        is_worker_torch_smoke = bool(lowered_keys) and lowered_keys <= smoke_only_keys
+        if is_autonomous_preparation_probe or is_worker_torch_smoke:
+            continue
+        saw_non_prelude_json = True
+        if lowered_keys & evidence_keys:
+            return result
+        if any(str(obj.get(key)).lower().startswith('cuda') for key in ('device', 'runtime', 'backend')):
+            return result
+
+    if saw_preparation_contract_failure and saw_non_prelude_json:
+        result['success'] = False
+        result['error'] = 'Experiment output missing structured runtime GPU evidence outside the failed preparation probe'
+        return result
+
+    evidence_patterns = [
+        r'\bcuda[_ -]?(available|device|version)\b',
+        r'\bgpu[_ -]?(name|count|memory|util|device)\b',
+        r'\bvram\b',
+        r'\bnvidia\b',
+        r'\brtx\s*\d+',
+        r'\btesla\b',
+        r'\ba\d{2,3}\b',
+    ]
+    if any(re_module.search(pattern, str(output), flags=re_module.IGNORECASE) for pattern in evidence_patterns):
+        return result
+
+    result['success'] = False
+    result['error'] = 'Experiment output missing runtime GPU evidence (e.g. cuda_available, gpu_name, VRAM, or nvidia-smi output)'
+    return result
+
+
+def execute_python_code(code: str, timeout: int = DEFAULT_JOB_TIMEOUT, context: dict = None, dependencies=None, job_id: str = '') -> dict:
+    """Execute Python code inside a persistent per-space workbench."""
+    context = context or prepare_workbench({'spaceId': 'default'})
+    log(f"Executing Python code ({len(code)} chars) in {context['workbench_dir']}",
+        thread_id=threading.current_thread().name)
+
+    validation = validate_executable_experiment_code(code)
+    if not validation.get('ok'):
+        return {'success': False, 'output': '', 'error': validation.get('error')}
+
+    dep_result = install_declared_dependencies(dependencies or [], context, job_id=job_id)
+    if not dep_result.get('success'):
+        return {
+            'success': False,
+            'output': dep_result.get('output', ''),
+            'error': 'Dependency installation failed: ' + str(dep_result.get('error', 'unknown')),
+        }
+
+    torch_prep_output = ''
+    if _code_or_deps_need_torch(code, dependencies or []):
+        torch_result = ensure_torch_cuda_workbench(context)
+        torch_prep_output = torch_result.get('output', '')
+        if not torch_result.get('success'):
+            return {
+                'success': False,
+                'output': torch_prep_output,
+                'error': 'Torch CUDA workbench validation failed: ' + str(torch_result.get('error', 'unknown')),
+            }
+        context['env'] = _without_cuda_toolkit_ld_path(context['env'])
+
+    update_job_queue_status(job_id, 'running_experiment')
+
+    # ── Pre-process: coerce f-string tensor.item():.Nf patterns ────────────────
+    # .item() can return int/str/float — wrapping with float() prevents format errors
+    # Matches: f'{expr.item():.4f}' → f'{float(expr.item()):.4f}'
+    fixed_code = re_module.sub(
+        r"f(['\"])([^'\"]*?)\{([^{}]+?)\.item\(\):\.(\d+)f\}([^'\"]*?)\1",
+        lambda m: "f'" + m.group(2) + '{float(' + m.group(3) + '.item()):.'
+                  + m.group(4) + 'f}' + m.group(5) + "'",
+        code
+    )
+
+    fixed_code = repair_embedded_newline_string_literals(fixed_code)
+    fixed_code = repair_common_torch_api_mistakes(fixed_code)
+    fixed_code = repair_common_gpu_info_key_assumptions(fixed_code)
+    fixed_code = repair_malformed_dict_value_format_specs(fixed_code)
+    fixed_code = inject_missing_common_stdlib_imports(fixed_code)
+
+    # ── Patch: Handle LLaDA transformers 5.x compatibility ────────────────────
+    # LLaDA's custom model code (modeling_llada.py) is missing `all_tied_weights_keys`
+    # which breaks from_pretrained in transformers 5.5+. Patch torch.nn.Module to
+    # return {} (empty dict) when that attribute is missing, instead of AttributeError.
+    # This allows model loading to complete, then we clean up after.
+    patch_wrapper = '''
+try:
+    import torch
+    import torch.nn as nn
+    import re
+    import builtins as _builtins
+    _orig_getattr = torch.nn.Module.__getattr__
+    def _patched_getattr(self, name, *args, **kwargs):
+        if name == 'all_tied_weights_keys':
+            return {}
+        return _orig_getattr(self, name, *args, **kwargs)
+    torch.nn.Module.__getattr__ = _patched_getattr
+except ModuleNotFoundError:
+    torch = None
+'''
+    needs_llada_patch = any(token in fixed_code for token in ('import torch', 'from torch', 'transformers', 'from_pretrained', 'LLaDA', 'llada'))
+    if needs_llada_patch:
+        fixed_code = patch_wrapper + fixed_code
+    if fixed_code != code:
+        log(f"Format-string coercion applied",
+            thread_id=threading.current_thread().name)
+
+    code_file = f"/tmp/gpu_code_{int(time.time()*1000)}.py"
+    with open(code_file, 'w') as f:
+        f.write(fixed_code)
+
+    try:
+        result = subprocess.run(
+            ['python3', code_file],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=context['workbench_dir'],
+            env=context['env'],
+        )
+        try:
+            os.unlink(code_file)
+        except Exception:
+            pass
+
+        if result.returncode == 0:
+            output = result.stdout.strip()
+            if torch_prep_output:
+                output = (torch_prep_output + '\n' + output).strip()
             return {
                 'success': True,
                 'output': output,
