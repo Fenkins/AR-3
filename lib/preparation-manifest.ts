@@ -67,6 +67,21 @@ const VAGUE_GRADING_CRITERIA = new Set([
 const SMOKE_TEST_EXECUTABLES = new Set(['python', 'python3', 'pytest', 'node', 'npm', 'npx', 'bash', 'sh', 'nvidia-smi'])
 const PROSE_COMMAND_MARKERS = /\b(?:please|should|could|would|try to|somehow|maybe|probably|manually|then inspect|as needed)\b/i
 const DESTRUCTIVE_COMMAND_MARKERS = /\b(?:rm\s+-rf|mkfs|shutdown|reboot|poweroff|halt|dd\s+if=|:>\s*\/)\b/i
+const GRADING_ANCHOR_STOPWORDS = new Set([
+  'and',
+  'are',
+  'check',
+  'checks',
+  'concrete',
+  'contain',
+  'contains',
+  'exact',
+  'include',
+  'includes',
+  'must',
+  'the',
+  'with',
+])
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -97,6 +112,24 @@ function validGradingCriterion(value: string): boolean {
   if (VAGUE_GRADING_CRITERIA.has(normalized)) return false
 
   return /\b(json|metric|metrics|score|loss|accuracy|acc|f1|precision|recall|latency|throughput|runtime|seconds|cuda|gpu|vram|memory|artifact|artifacts|stdout|stderr|file|path|model|dependency|dependencies|smoke|failure|error|exception|evidence|measurement|tensor|shape|count|version)\b|[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*/i.test(value)
+}
+
+function evidenceAnchorTokens(value: string): string[] {
+  const normalized = value.toLowerCase().replace(/[^a-z0-9_.-]+/g, ' ')
+  const tokens = new Set<string>()
+  for (const raw of normalized.match(/[a-z][a-z0-9_.-]*/g) || []) {
+    const parts = raw.split(/[._-]+/).filter(Boolean)
+    for (const part of [raw, ...parts]) {
+      const token = part.replace(/s$/, '')
+      if (token.length >= 3 && !GRADING_ANCHOR_STOPWORDS.has(token)) tokens.add(token)
+    }
+  }
+  return Array.from(tokens)
+}
+
+function gradingCriterionHasEvidenceAnchor(criterion: string, anchors: Set<string>): boolean {
+  if (anchors.size === 0) return true
+  return evidenceAnchorTokens(criterion).some(token => anchors.has(token))
 }
 
 function commandStartsWithExecutable(command: string): boolean {
@@ -259,6 +292,7 @@ export function validatePreparationManifest(value: unknown): PreparationManifest
   const smokeTests = Array.isArray(value.smokeTests) ? value.smokeTests : []
   if (!Array.isArray(value.smokeTests)) errors.push('smokeTests must be an array')
   if (smokeTests.length === 0) errors.push('smokeTests must contain at least one executable test')
+  const evidenceAnchors = new Set<string>()
   smokeTests.forEach((test, i) => {
     if (!isPlainObject(test)) {
       errors.push(`smokeTests[${i}] must be an object`)
@@ -270,6 +304,10 @@ export function validatePreparationManifest(value: unknown): PreparationManifest
     }
     if (!Array.isArray(test.expectedEvidence) || test.expectedEvidence.length === 0 || !test.expectedEvidence.every(nonEmptyString)) {
       errors.push(`smokeTests[${i}].expectedEvidence must list concrete evidence fields`)
+    } else {
+      for (const item of test.expectedEvidence) {
+        evidenceAnchorTokens(String(item)).forEach(token => evidenceAnchors.add(token))
+      }
     }
     if (typeof test.timeoutSeconds !== 'number' || test.timeoutSeconds < 5 || test.timeoutSeconds > 86400) {
       errors.push(`smokeTests[${i}].timeoutSeconds must be between 5 and 86400`)
@@ -292,7 +330,19 @@ export function validatePreparationManifest(value: unknown): PreparationManifest
     pushStringError(errors, 'workbench.reuseKey', value.workbench.reuseKey)
     if (!Array.isArray(value.workbench.expectedArtifacts) || !value.workbench.expectedArtifacts.every(nonEmptyString)) {
       errors.push('workbench.expectedArtifacts must be an array of artifact names')
+    } else {
+      for (const artifact of value.workbench.expectedArtifacts) {
+        evidenceAnchorTokens(String(artifact)).forEach(token => evidenceAnchors.add(token))
+      }
     }
+  }
+
+  if (Array.isArray(value.gradingCriteria) && value.gradingCriteria.every(nonEmptyString)) {
+    value.gradingCriteria.forEach((criterion, i) => {
+      if (!gradingCriterionHasEvidenceAnchor(String(criterion), evidenceAnchors)) {
+        errors.push(`gradingCriteria[${i}] must reference evidence named by smokeTests.expectedEvidence or workbench.expectedArtifacts`)
+      }
+    })
   }
 
   if (errors.length > 0) return { ok: false, errors }

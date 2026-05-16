@@ -166,6 +166,7 @@ function validManifest(overrides = {}) {
       expectedEvidence: ['cuda_available'],
       timeoutSeconds: 300,
     }],
+    gradingCriteria: ['stdout contains cuda_available evidence'],
   }))
   assert.equal(result.ok, true, result.errors.join('\n'))
 }
@@ -179,6 +180,38 @@ function validManifest(overrides = {}) {
     ],
   }))
   assert.equal(result.ok, true, result.errors.join('\n'))
+}
+
+{
+  const result = validatePreparationManifest(validManifest({
+    smokeTests: [{
+      name: 'trajectory-metrics',
+      command: 'python smoke_test.py',
+      expectedEvidence: ['cuda_available', 'trajectory_cosine_similarity'],
+      timeoutSeconds: 300,
+    }],
+    workbench: { reuseKey: 'llada-base', expectedArtifacts: ['trajectory_metrics.json'] },
+    gradingCriteria: [
+      'trajectory_cosine_similarity metric improves over baseline',
+      'trajectory_metrics.json artifact path is reported',
+    ],
+  }))
+  assert.equal(result.ok, true, result.errors.join('\n'))
+}
+
+{
+  const result = validatePreparationManifest(validManifest({
+    smokeTests: [{
+      name: 'cuda-only',
+      command: 'python smoke_test.py',
+      expectedEvidence: ['cuda_available'],
+      timeoutSeconds: 300,
+    }],
+    workbench: { reuseKey: 'llada-base', expectedArtifacts: ['cuda_probe.json'] },
+    gradingCriteria: ['bleu_score improves over baseline'],
+  }))
+  assert.equal(result.ok, false)
+  assert(result.errors.some((e) => e.includes('gradingCriteria[0]') && e.includes('smokeTests.expectedEvidence')), result.errors.join('\n'))
 }
 
 console.log('preparation manifest tests passed')
