@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 const assert = require('assert')
+const childProcess = require('child_process')
 const fs = require('fs')
+const os = require('os')
 const path = require('path')
 const ts = require('typescript')
 const vm = require('vm')
@@ -17,7 +19,7 @@ function loadTsModule(relativePath) {
   return module.exports
 }
 
-const { assessGpuExecutionEvidence, buildAutonomousPreparationCommand, extractStrictGpuCommand } = loadTsModule('lib/gpu-command-contract.ts')
+const { assessGpuExecutionEvidence, buildAutonomousPreparationCommand, buildDeterministicGpuExperimentCommand, extractStrictGpuCommand } = loadTsModule('lib/gpu-command-contract.ts')
 
 function testAutonomousPreparationUsesNvidiaSmiFallback() {
   const command = buildAutonomousPreparationCommand({
@@ -559,4 +561,37 @@ function testSuccessCriteriaThresholdsAcceptPassingMetric() {
 
 testSnakeCaseSuccessCriteriaThresholdsAreEnforced()
 testSuccessCriteriaThresholdsAcceptPassingMetric()
+
+function testDeterministicExperimentUsesSnakeCaseManifestAliases() {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ar3-deterministic-'))
+  const command = buildDeterministicGpuExperimentCommand({
+    researchGoal: 'measure deterministic fallback handoff',
+    stepDescription: 'reuse snake-case manifest fields',
+    stageName: 'Implementation',
+    reason: 'model emitted prose',
+    preparationManifest: {
+      dependencies: [{ import_name: 'json', name: 'json' }],
+      models: [],
+      smoke_tests: [{ name: 'snake-smoke', expected_evidence: ['cuda_available'] }],
+      grading_criteria: ['cuda_available metric is reported in stdout'],
+      workbench: { reuse_key: 'snake-case-workbench', expected_artifacts: ['deterministic_gpu_experiment_metrics.json'] },
+    },
+  })
+
+  const result = childProcess.spawnSync('python3', ['-'], {
+    input: command.code,
+    encoding: 'utf8',
+    env: { ...process.env, AR3_WORKBENCH_ROOT: tempRoot },
+  })
+
+  assert.strictEqual(result.status, 0, result.stderr)
+  const output = JSON.parse(result.stdout.trim().split(/\n/).pop())
+  assert.match(output.workbench, /snake-case-workbench$/)
+  assert.deepStrictEqual(output.grading_criteria_checked, ['cuda_available metric is reported in stdout'])
+  assert.strictEqual(output.smoke_tests_declared, 1)
+  assert.ok(output.run_history_path.endsWith('deterministic_gpu_experiment_run_history.jsonl'))
+  assert.ok(fs.existsSync(output.run_history_path), 'generated experiment should persist run history')
+}
+
+testDeterministicExperimentUsesSnakeCaseManifestAliases()
 console.log('gpu-command-contract tests passed')

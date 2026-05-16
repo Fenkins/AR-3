@@ -1021,9 +1021,19 @@ stage_name = ${stageName}
 contract_failure_reason = ${reason}
 preparation_manifest = json.loads(${manifestForPython})
 workbench_root = Path(os.environ.get("AR3_WORKBENCH_ROOT", "/tmp/ar3-workbenches"))
+
+def manifest_get(row, *keys, default=None):
+    if not isinstance(row, dict):
+        return default
+    for key in keys:
+        if key in row and row[key] is not None:
+            return row[key]
+    return default
+
 reuse_key = "deterministic-gpu-experiment"
 if isinstance(preparation_manifest, dict):
-    reuse_key = str((preparation_manifest.get("workbench") or {}).get("reuseKey") or reuse_key)
+    workbench_config = preparation_manifest.get("workbench") or {}
+    reuse_key = str(manifest_get(workbench_config, "reuseKey", "reuse_key", default=reuse_key))
 workbench = Path(os.environ.get("AR3_WORKBENCH_DIR") or (workbench_root / reuse_key))
 workbench.mkdir(parents=True, exist_ok=True)
 
@@ -1129,9 +1139,9 @@ except Exception as exc:
 
 manifest_deps = []
 if isinstance(preparation_manifest, dict):
-    for dep in preparation_manifest.get("dependencies") or []:
+    for dep in manifest_get(preparation_manifest, "dependencies", "dependency_specs", default=[]) or []:
         if isinstance(dep, dict):
-            manifest_deps.append(dep.get("importName") or dep.get("name"))
+            manifest_deps.append(manifest_get(dep, "importName", "import_name", "module", "name"))
         else:
             manifest_deps.append(dep)
 for dep in manifest_deps[:12]:
@@ -1142,13 +1152,13 @@ for dep in manifest_deps[:12]:
         continue
     metrics["dependency_imports"][module] = importlib.util.find_spec(module) is not None
 
-models = preparation_manifest.get("models") if isinstance(preparation_manifest, dict) else []
+models = manifest_get(preparation_manifest, "models", "model_specs", default=[]) if isinstance(preparation_manifest, dict) else []
 try:
     import requests
     for model in (models or [])[:5]:
-        model_id = model.get("id") if isinstance(model, dict) else str(model)
-        source = model.get("source") if isinstance(model, dict) else "unknown"
-        item = {"id": model_id, "source": source, "required": bool(model.get("required")) if isinstance(model, dict) else False}
+        model_id = manifest_get(model, "id", "modelId", "model_id", "repoId", "repo_id") if isinstance(model, dict) else str(model)
+        source = manifest_get(model, "source", "provider", default="unknown") if isinstance(model, dict) else "unknown"
+        item = {"id": model_id, "source": source, "required": bool(manifest_get(model, "required", default=False)) if isinstance(model, dict) else False}
         if source == "huggingface" and isinstance(model_id, str) and "/" in model_id:
             response = requests.get("https://huggingface.co/api/models/" + model_id, timeout=20)
             item["status_code"] = response.status_code
@@ -1166,9 +1176,9 @@ except Exception as exc:
     metrics["model_metadata_error"] = repr(exc)
 
 if isinstance(preparation_manifest, dict):
-    criteria = [str(c) for c in (preparation_manifest.get("gradingCriteria") or [])]
+    criteria = [str(c) for c in (manifest_get(preparation_manifest, "gradingCriteria", "grading_criteria", default=[]) or [])]
     metrics["grading_criteria_checked"] = criteria[:10]
-    metrics["smoke_tests_declared"] = len(preparation_manifest.get("smokeTests") or [])
+    metrics["smoke_tests_declared"] = len(manifest_get(preparation_manifest, "smokeTests", "smoke_tests", default=[]) or [])
     stopwords = {"with", "that", "this", "must", "print", "prints", "json", "metric", "metrics", "evidence", "and", "the", "for", "from", "contains", "contain"}
     def flatten_evidence(prefix, value, out):
         if isinstance(value, dict):
@@ -1196,6 +1206,18 @@ metrics["runtime_seconds"] = round(time.time() - started, 3)
 metrics_path = workbench / "deterministic_gpu_experiment_metrics.json"
 metrics_path.write_text(json.dumps(metrics, indent=2, sort_keys=True))
 metrics["artifacts"].append(str(metrics_path))
+run_history_path = workbench / "deterministic_gpu_experiment_run_history.jsonl"
+history_row = {
+    "timestamp": round(time.time(), 3),
+    "stage": stage_name,
+    "contract_repair_reason": contract_failure_reason,
+    "metrics_path": str(metrics_path),
+    "runtime_seconds": metrics["runtime_seconds"],
+}
+with run_history_path.open("a", encoding="utf-8") as history_file:
+    history_file.write(json.dumps(history_row, sort_keys=True) + "\\n")
+metrics["run_history_path"] = str(run_history_path)
+metrics["artifacts"].append(str(run_history_path))
 print(json.dumps(metrics, sort_keys=True))`
 
   return { action: 'run_python', dependencies, code }
