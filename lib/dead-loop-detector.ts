@@ -420,6 +420,9 @@ function collectArtifactContext(value: unknown): string[] {
   for (const key of ['artifacts', 'artifact_paths', 'artifactPaths', 'expectedArtifacts']) {
     if (Array.isArray(source[key])) values.push(...source[key].filter((item: unknown): item is string => typeof item === 'string'))
   }
+  for (const key of ['expected_artifacts', 'output_paths']) {
+    if (Array.isArray(source[key])) values.push(...source[key].filter((item: unknown): item is string => typeof item === 'string'))
+  }
   if (source.workbench && typeof source.workbench === 'object') {
     values.push(...collectArtifactContext(source.workbench))
   }
@@ -536,7 +539,11 @@ function normalizeWorkbenchContext(value: unknown): string {
   if (workbench && typeof workbench === 'object' && typeof workbench.reuseKey === 'string') {
     return workbench.reuseKey.trim().toLowerCase()
   }
+  if (workbench && typeof workbench === 'object' && typeof workbench.reuse_key === 'string') {
+    return workbench.reuse_key.trim().toLowerCase()
+  }
   if (typeof source.workbenchReuseKey === 'string') return source.workbenchReuseKey.trim().toLowerCase()
+  if (typeof source.workbench_reuse_key === 'string') return source.workbench_reuse_key.trim().toLowerCase()
   return ''
 }
 

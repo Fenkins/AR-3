@@ -603,6 +603,34 @@ const repeatedJsonCommandWithModels = (id, modelContext = {}) => ({
 {
   const first = variantCodeSignature(repeatedJsonCommandWithModels('a', {
     preparation_manifest: {
+      workbench: { reuse_key: 'shared-workbench', expected_artifacts: ['metrics.json', 'stdout.log'] },
+    },
+  }))
+  const second = variantCodeSignature(repeatedJsonCommandWithModels('b', {
+    preparation_manifest: {
+      workbench: { reuse_key: 'shared-workbench', expected_artifacts: ['stdout.log', 'metrics.json'] },
+    },
+  }))
+  assert.equal(first, second, 'snake_case workbench artifact order should not create a new executable signature')
+}
+
+{
+  const first = variantCodeSignature(repeatedJsonCommandWithModels('a', {
+    preparation_manifest: {
+      workbench: { reuse_key: 'shared-workbench', expected_artifacts: ['metrics.json'] },
+    },
+  }))
+  const second = variantCodeSignature(repeatedJsonCommandWithModels('b', {
+    preparation_manifest: {
+      workbench: { reuse_key: 'shared-workbench-v2', expected_artifacts: ['metrics.json', 'model_status.json'] },
+    },
+  }))
+  assert.notEqual(first, second, 'changed snake_case workbench context should reset repeated executable signatures')
+}
+
+{
+  const first = variantCodeSignature(repeatedJsonCommandWithModels('a', {
+    preparation_manifest: {
       workbench: { reuseKey: 'shared-workbench' },
       preparation_run_history: [
         {
