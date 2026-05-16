@@ -295,6 +295,25 @@ function gradingCriterionTexts(value: unknown): string[] {
   return texts
 }
 
+function evidenceDeclarationTexts(value: unknown): string[] {
+  if (typeof value === 'string') return [value.trim()].filter(Boolean)
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return []
+
+  const row = value as Record<string, unknown>
+  const texts: string[] = []
+  for (const key of ['field', 'fields', 'key', 'keys', 'metric', 'metrics', 'name', 'path', 'paths', 'file', 'files', 'filename', 'filenames', 'artifact', 'artifacts', 'evidence', 'expectedEvidence', 'expected_evidence']) {
+    const raw = row[key]
+    if (typeof raw === 'string' && raw.trim()) {
+      texts.push(raw.trim())
+      continue
+    }
+    if (Array.isArray(raw)) {
+      texts.push(...raw.flatMap(evidenceDeclarationTexts))
+    }
+  }
+  return texts
+}
+
 function manifestExpectedEvidence(preparationManifest: unknown): string[] {
   if (!preparationManifest || typeof preparationManifest !== 'object' || Array.isArray(preparationManifest)) return []
   const source = preparationManifest as Record<string, unknown>
@@ -308,8 +327,10 @@ function manifestExpectedEvidence(preparationManifest: unknown): string[] {
       const evidence = row.expectedEvidence || row.expected_evidence
       if (!Array.isArray(evidence)) continue
       for (const item of evidence.slice(0, 20)) {
-        const normalized = String(item || '').trim()
-        if (normalized) expected.add(normalized)
+        for (const text of evidenceDeclarationTexts(item).slice(0, 20)) {
+          const normalized = String(text || '').trim()
+          if (normalized) expected.add(normalized)
+        }
       }
     }
   }
@@ -335,6 +356,7 @@ function manifestExpectedArtifacts(preparationManifest: unknown): string[] {
   if (!Array.isArray(artifacts)) return []
 
   return artifacts
+    .flatMap(evidenceDeclarationTexts)
     .map(value => String(value || '').trim())
     .filter(Boolean)
     .filter(value => !['stdout', 'stderr', 'logs', 'log'].includes(value.toLowerCase()))

@@ -132,6 +132,78 @@ function testManifestExpectedArtifactsAcceptStructuredArtifactObject() {
 testManifestExpectedArtifactsRejectProseOnlyMentions()
 testManifestExpectedArtifactsAcceptStructuredArtifactObject()
 
+function testObjectShapedExpectedEvidenceIsEnforced() {
+  const result = assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    success: true,
+    output: JSON.stringify({
+      cuda_available: true,
+      gpu_name: 'Test GPU',
+      runtime_seconds: 0.02,
+      artifacts: ['/tmp/ar3-workbenches/object-evidence/metrics.json'],
+    }),
+    preparationManifest: {
+      smokeTests: [
+        {
+          name: 'object-evidence-smoke',
+          expectedEvidence: [
+            { field: 'cuda_available' },
+            { metric: 'tensor_sum' },
+          ],
+        },
+      ],
+      gradingCriteria: [
+        'stdout contains JSON metrics with cuda_available and tensor_sum',
+      ],
+      workbench: {
+        expectedArtifacts: ['metrics.json'],
+      },
+    },
+  })
+
+  assert.strictEqual(result.valid, false)
+  assert.match(result.reason, /expected evidence/)
+  assert.match(result.reason, /tensor_sum/)
+}
+
+function testObjectShapedExpectedArtifactsAreEnforced() {
+  const result = assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    success: true,
+    output: JSON.stringify({
+      cuda_available: true,
+      gpu_name: 'Test GPU',
+      tensor_sum: 120,
+      runtime_seconds: 0.02,
+      artifacts: ['/tmp/ar3-workbenches/object-artifacts/metrics.json'],
+    }),
+    preparationManifest: {
+      smokeTests: [
+        {
+          name: 'object-artifact-smoke',
+          expectedEvidence: [{ field: 'cuda_available' }, { field: 'tensor_sum' }],
+        },
+      ],
+      gradingCriteria: [
+        'stdout contains JSON metrics with cuda_available and tensor_sum',
+      ],
+      workbench: {
+        expectedArtifacts: [
+          { path: 'metrics.json' },
+          { filename: 'model-status.json' },
+        ],
+      },
+    },
+  })
+
+  assert.strictEqual(result.valid, false)
+  assert.match(result.reason, /expected artifacts/)
+  assert.match(result.reason, /model-status\.json/)
+}
+
+testObjectShapedExpectedEvidenceIsEnforced()
+testObjectShapedExpectedArtifactsAreEnforced()
+
 function testManifestExpectedArtifactsRejectNegativeArtifactFields() {
   const result = assessGpuExecutionEvidence({
     stageName: 'Implementation',
