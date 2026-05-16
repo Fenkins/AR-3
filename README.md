@@ -154,5 +154,5 @@ agpl=3 License - contact https://www.linkedin.com/in/anatolii-kovalev-5296961a6/
 
 ---
 
-**Repository**: https://github.com/Fenkins/AR-2  
-**Issues**: https://github.com/Fenkins/AR-2/issues
+**Repository**: https://github.com/Fenkins/AR-3  
+**Issues**: https://github.com/Fenkins/AR-3/issues
