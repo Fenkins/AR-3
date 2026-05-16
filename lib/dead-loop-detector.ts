@@ -170,6 +170,10 @@ function extractMetricSignatureText(value: string): string | null {
     entries.push(entry)
   }
 
+  for (const entry of markdownMetricTableEntries(value)) {
+    entries.push(entry)
+  }
+
   const uniqueEntries = Array.from(new Set(entries)).sort()
   return uniqueEntries.length ? uniqueEntries.join('\n') : null
 }
@@ -277,6 +281,47 @@ function looseMetricEntries(text: string): string[] {
     entries.push(`${key}=${normalizedValue}`)
   }
   return entries
+}
+
+function markdownMetricTableEntries(text: string): string[] {
+  const lines = String(text || '').split(/\r?\n/)
+  const entries: string[] = []
+
+  for (let i = 0; i < lines.length - 2; i += 1) {
+    const header = markdownTableCells(lines[i])
+    const separator = markdownTableCells(lines[i + 1])
+    if (!header || !separator || !separator.every(cell => /^:?-{3,}:?$/.test(cell.trim()))) continue
+
+    const normalizedHeader = header.map(normalizeMetricKey)
+    const nameIndex = normalizedHeader.findIndex(key => /^(?:metric|metric_name|name|key|label)$/.test(key))
+    const valueIndex = normalizedHeader.findIndex(key => /^(?:value|score|result|measurement)$/.test(key))
+    if (nameIndex === -1 || valueIndex === -1) continue
+
+    for (let rowIndex = i + 2; rowIndex < lines.length; rowIndex += 1) {
+      const row = markdownTableCells(lines[rowIndex])
+      if (!row || row.length < Math.max(nameIndex, valueIndex) + 1) break
+
+      const metricName = normalizeMetricKey(row[nameIndex])
+      if (!metricName || isEphemeralMetricKey(metricName)) continue
+
+      const normalizedValue = normalizeMetricValue(row[valueIndex])
+      if (normalizedValue === null) continue
+      entries.push(`${metricName}=${normalizedValue}`)
+    }
+  }
+
+  return entries
+}
+
+function markdownTableCells(line: string): string[] | null {
+  const trimmed = String(line || '').trim()
+  if (!trimmed.includes('|')) return null
+  const cells = trimmed
+    .replace(/^\|/, '')
+    .replace(/\|$/, '')
+    .split('|')
+    .map(cell => cell.trim())
+  return cells.length >= 2 ? cells : null
 }
 
 function isStatusOnlyWorkerOutput(value: string): boolean {

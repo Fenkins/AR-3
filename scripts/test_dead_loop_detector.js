@@ -99,6 +99,24 @@ const repeatedHumanLabelMetricCompletion = (id, label, value = 0.42, grade = 0) 
   }],
 })
 
+const repeatedMarkdownMetricTableCompletion = (id, value = 0.42, grade = 0) => ({
+  id,
+  stageId: 'stage_3',
+  name: `Implementation ${id}`,
+  status: 'COMPLETED',
+  grade,
+  feedback: 'No measurable improvement over baseline.',
+  steps: [{
+    status: 'COMPLETED',
+    result: [
+      '| Metric | Value | Evidence |',
+      '| --- | ---: | --- |',
+      `| Validation Accuracy | ${value} | /tmp/ar3-workbenches/${id}/metrics.json |`,
+      '| CUDA Available | true | stdout |',
+    ].join('\n'),
+  }],
+})
+
 const repeatedPythonDictMetricCompletion = (id, accuracy = 0.42, grade = 0) => ({
   id,
   stageId: 'stage_3',
@@ -917,6 +935,32 @@ const repeatedJsonCommandWithModels = (id, modelContext = {}) => ({
   assert.equal(assessment.stuck, true)
   assert.equal(assessment.repeatedCount, 3)
   assert.match(assessment.reason, /no grade improvement/)
+}
+
+{
+  const first = variantProgressSignature(repeatedMarkdownMetricTableCompletion('a'))
+  const second = variantProgressSignature(repeatedMarkdownMetricTableCompletion('b'))
+  assert.equal(first, second, 'Markdown metric tables should create stable progress signatures despite noisy evidence paths')
+}
+
+{
+  const assessment = assessDeadLoop([
+    repeatedMarkdownMetricTableCompletion('a'),
+    repeatedMarkdownMetricTableCompletion('b'),
+    repeatedMarkdownMetricTableCompletion('c'),
+  ], 'stage_3')
+  assert.equal(assessment.stuck, true)
+  assert.equal(assessment.repeatedCount, 3)
+  assert.match(assessment.reason, /no grade improvement/)
+}
+
+{
+  const assessment = assessDeadLoop([
+    repeatedMarkdownMetricTableCompletion('a', 0.42),
+    repeatedMarkdownMetricTableCompletion('b', 0.43),
+    repeatedMarkdownMetricTableCompletion('c', 0.44),
+  ], 'stage_3')
+  assert.equal(assessment.stuck, false)
 }
 
 {
