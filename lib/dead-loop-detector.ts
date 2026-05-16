@@ -141,6 +141,9 @@ function extractMetricSignatureText(value: string): string | null {
 
 function metricEntriesFromObject(value: Record<string, unknown>, prefix: string = ''): string[] {
   const entries: string[] = []
+  const namedMetricEntry = metricEntryFromNamedRow(value, prefix)
+  if (namedMetricEntry) return [namedMetricEntry]
+
   for (const [rawKey, rawValue] of Object.entries(value)) {
     const key = rawKey.trim().toLowerCase()
     if (!key || isEphemeralMetricKey(key)) continue
@@ -158,7 +161,12 @@ function metricEntriesFromObject(value: Record<string, unknown>, prefix: string 
         if (itemValue !== null) {
           entries.push(`${path}[${index}]=${itemValue}`)
         } else if (item && typeof item === 'object' && !Array.isArray(item)) {
-          entries.push(...metricEntriesFromObject(item as Record<string, unknown>, `${path}[${index}]`))
+          const namedMetricEntry = metricEntryFromNamedRow(item as Record<string, unknown>, path)
+          if (namedMetricEntry) {
+            entries.push(namedMetricEntry)
+          } else {
+            entries.push(...metricEntriesFromObject(item as Record<string, unknown>, `${path}[${index}]`))
+          }
         }
       })
       continue
@@ -169,6 +177,31 @@ function metricEntriesFromObject(value: Record<string, unknown>, prefix: string 
     }
   }
   return entries
+}
+
+function metricEntryFromNamedRow(value: Record<string, unknown>, prefix: string = ''): string | null {
+  const rawName = firstString(
+    value.name,
+    value.metric,
+    value.metricName,
+    value.metric_name,
+    value.key,
+    value.label
+  )
+  if (!rawName) return null
+
+  const rawMetricValue = value.value ?? value.score ?? value.result ?? value.measurement
+  const normalizedValue = normalizeMetricValue(rawMetricValue)
+  if (normalizedValue === null) return null
+
+  const name = rawName
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+  if (!name || isEphemeralMetricKey(name)) return null
+
+  return `${prefix ? `${prefix}.` : ''}${name}=${normalizedValue}`
 }
 
 function looseMetricEntries(text: string): string[] {

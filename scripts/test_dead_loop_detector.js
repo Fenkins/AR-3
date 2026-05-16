@@ -131,6 +131,23 @@ const repeatedNestedMetricCompletion = (id, loss = 0.31, grade = 0) => ({
   }],
 })
 
+const repeatedNamedMetricRowCompletion = (id, rows, grade = 0) => ({
+  id,
+  stageId: 'stage_3',
+  name: `Implementation ${id}`,
+  status: 'COMPLETED',
+  grade,
+  feedback: 'No measurable improvement over baseline.',
+  steps: [{
+    status: 'COMPLETED',
+    result: JSON.stringify({
+      metrics: rows,
+      run_id: `job-${id}`,
+      artifact_path: `/tmp/ar3-workbenches/${id}/metrics.json`,
+    }),
+  }],
+})
+
 const completedWithoutProgressEvidence = (id, grade = 0) => ({
   id,
   stageId: 'stage_3',
@@ -662,6 +679,48 @@ const repeatedJsonCommandWithModels = (id, modelContext = {}) => ({
     repeatedNestedMetricCompletion('a', 0.31),
     repeatedNestedMetricCompletion('b', 0.28),
     repeatedNestedMetricCompletion('c', 0.25),
+  ], 'stage_3')
+  assert.equal(assessment.stuck, false)
+}
+
+{
+  const first = variantProgressSignature(repeatedNamedMetricRowCompletion('a', [
+    { name: 'accuracy', value: 0.42 },
+    { metric: 'loss', score: 0.31 },
+  ]))
+  const second = variantProgressSignature(repeatedNamedMetricRowCompletion('b', [
+    { metric: 'loss', score: 0.31 },
+    { name: 'accuracy', value: 0.42 },
+  ]))
+  assert.equal(first, second, 'named metric row order should not create a new progress signature')
+}
+
+{
+  const first = variantProgressSignature(repeatedNamedMetricRowCompletion('a', [
+    { name: 'accuracy', value: 0.42 },
+  ]))
+  const second = variantProgressSignature(repeatedNamedMetricRowCompletion('b', [
+    { name: 'loss', value: 0.42 },
+  ]))
+  assert.notEqual(first, second, 'named metric rows should include the metric identity, not only the value')
+}
+
+{
+  const assessment = assessDeadLoop([
+    repeatedNamedMetricRowCompletion('a', [{ name: 'accuracy', value: 0.42 }]),
+    repeatedNamedMetricRowCompletion('b', [{ name: 'accuracy', value: 0.42 }]),
+    repeatedNamedMetricRowCompletion('c', [{ name: 'accuracy', value: 0.42 }]),
+  ], 'stage_3')
+  assert.equal(assessment.stuck, true)
+  assert.equal(assessment.repeatedCount, 3)
+  assert.match(assessment.reason, /no grade improvement/)
+}
+
+{
+  const assessment = assessDeadLoop([
+    repeatedNamedMetricRowCompletion('a', [{ name: 'accuracy', value: 0.42 }]),
+    repeatedNamedMetricRowCompletion('b', [{ name: 'accuracy', value: 0.43 }]),
+    repeatedNamedMetricRowCompletion('c', [{ name: 'accuracy', value: 0.44 }]),
   ], 'stage_3')
   assert.equal(assessment.stuck, false)
 }
