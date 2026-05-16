@@ -170,8 +170,8 @@ def prepare_workbench(job: dict) -> dict:
 def _dependency_to_pip_spec(dep) -> str:
     """Normalize a command/manifest dependency into a concrete pip spec."""
     if isinstance(dep, dict):
-        name = str(dep.get('name') or '').strip()
-        version_spec = str(dep.get('versionSpec') or '').strip()
+        name = str(dep.get('name') or dep.get('package') or dep.get('pip') or dep.get('pipPackage') or '').strip()
+        version_spec = str(dep.get('versionSpec') or dep.get('version') or dep.get('constraint') or '').strip()
         dep = name + version_spec
     dep = str(dep).strip()
     return dep
@@ -363,7 +363,29 @@ def install_declared_dependencies(dependencies, context: dict, timeout: int = 90
     if not normalized.get('success'):
         return {'success': False, 'error': normalized.get('error')}
     deps = normalized['deps']
+    record_path = None
+    if context.get('workbench_dir'):
+        record_path = Path(context['workbench_dir']) / 'installed_dependencies.json'
+
+        def write_dependency_record(success: bool, error: str = None):
+            payload = {
+                'timestamp': datetime.now().isoformat(),
+                'success': bool(success),
+                'declared': dependencies or [],
+                'normalized': deps,
+                'pipArgs': normalized['pip_args'],
+                'error': error,
+            }
+            tmp_path = record_path.with_suffix('.json.tmp')
+            with open(tmp_path, 'w') as f:
+                json.dump(payload, f, indent=2, sort_keys=True)
+            os.replace(tmp_path, record_path)
+    else:
+        def write_dependency_record(success: bool, error: str = None):
+            return None
+
     if not deps:
+        write_dependency_record(True)
         return {'success': True, 'output': 'no declared dependencies', 'error': None}
 
     cmd = [sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', '--upgrade', *normalized['pip_args'], '--target', context['packages_dir'], *deps]
@@ -372,12 +394,18 @@ def install_declared_dependencies(dependencies, context: dict, timeout: int = 90
         thread_id=threading.current_thread().name)
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=context['env'])
     if result.returncode != 0:
+        error = result.stderr.strip() or f'pip exited {result.returncode}'
+        write_dependency_record(False, error)
         return {
             'success': False,
             'output': result.stdout.strip(),
-            'error': result.stderr.strip() or f'pip exited {result.returncode}',
+            'error': error,
         }
-    return {'success': True, 'output': result.stdout.strip(), 'error': None}
+    write_dependency_record(True)
+    output = result.stdout.strip()
+    if record_path is not None:
+        output = (output + '\n' if output else '') + f'installed_dependencies={record_path}'
+    return {'success': True, 'output': output, 'error': None}
 
 
 def strip_markdown_headers(code: str) -> str:

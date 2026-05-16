@@ -79,6 +79,16 @@ def test_deprecated_sklearn_dependency_is_rewritten_to_scikit_learn():
     assert 'numpy' in normalized['deps']
 
 
+def test_manifest_dependency_aliases_are_normalized_like_typescript_manifest():
+    normalized = gpu_worker.normalize_declared_dependencies([
+        {'package': 'torch', 'version': '>=2.0.0', 'import': 'torch'},
+        {'pipPackage': 'sklearn>=0.0', 'purpose': 'legacy alias from weak manifest'},
+    ])
+    assert normalized['success'] is True
+    assert normalized['deps'] == ['torch==2.5.1', 'scikit-learn']
+    assert 'https://download.pytorch.org/whl/cu124' in normalized['pip_args']
+
+
 def test_install_dependencies_upgrades_existing_workbench_packages(monkeypatch, tmp_path):
     captured = {}
 
@@ -97,6 +107,25 @@ def test_install_dependencies_upgrades_existing_workbench_packages(monkeypatch, 
     assert result['success'] is True
     assert '--upgrade' in captured['cmd']
     assert 'torch==2.5.1' in captured['cmd']
+
+
+def test_install_dependencies_records_workbench_dependency_manifest(monkeypatch, tmp_path):
+    class Result:
+        returncode = 0
+        stdout = 'installed'
+        stderr = ''
+
+    monkeypatch.setattr(gpu_worker.subprocess, 'run', lambda *args, **kwargs: Result())
+    context = {'packages_dir': str(tmp_path / 'packages'), 'workbench_dir': str(tmp_path), 'env': {}}
+    result = gpu_worker.install_declared_dependencies([{'package': 'numpy'}], context)
+    record_path = tmp_path / 'installed_dependencies.json'
+    record = json.loads(record_path.read_text())
+
+    assert result['success'] is True
+    assert f'installed_dependencies={record_path}' in result['output']
+    assert record['success'] is True
+    assert record['normalized'] == ['numpy']
+    assert record['declared'] == [{'package': 'numpy'}]
 
 
 def test_worker_queue_status_tracks_preparation_install_execution_and_validation(tmp_path, monkeypatch):
