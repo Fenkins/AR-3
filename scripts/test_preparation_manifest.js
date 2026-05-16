@@ -90,7 +90,7 @@ function validManifest(overrides = {}) {
   aliasManifest.models = [{ modelId: 'GSAI-Research/LLaDA-8B-Base', purpose: 'primary target', smokeTest: 'python -c "print(1)"' }]
   aliasManifest.dependencies = [{ package: 'torch>=2.0.0', purpose: 'tensor execution' }]
   aliasManifest.resources = [{ resourceType: 'gpu-memory', specification: '12GB VRAM', purpose: 'load model' }]
-  aliasManifest.smokeTests = [{ test: 'python -c "print(1)"', expectedEvidence: 'prints 1' }]
+  aliasManifest.smokeTests = [{ test: 'python -c "print(1)"', expectedEvidence: 'stdout' }]
   aliasManifest.gradingCriteria = [{ criterion: 'Code runs', evidence: 'stdout contains cuda_available' }]
   delete aliasManifest.workbench
   const result = validatePreparationManifest(aliasManifest)
@@ -152,6 +152,20 @@ function validManifest(overrides = {}) {
   }))
   assert.equal(result.ok, false)
   assert(result.errors.some((e) => e.includes('smokeTests[0].command')), result.errors.join('\n'))
+}
+
+{
+  const result = validatePreparationManifest(validManifest({
+    smokeTests: [{
+      name: 'vague-evidence',
+      command: 'python smoke_test.py',
+      expectedEvidence: ['better results'],
+      timeoutSeconds: 300,
+    }],
+    gradingCriteria: ['stdout contains concrete metric evidence'],
+  }))
+  assert.equal(result.ok, false)
+  assert(result.errors.some((e) => e.includes('smokeTests[0].expectedEvidence') && e.includes('vague')), result.errors.join('\n'))
 }
 
 {
