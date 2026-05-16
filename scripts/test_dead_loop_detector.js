@@ -83,6 +83,22 @@ const repeatedLooseMetricCompletion = (id, accuracy = 0.42, grade = 0) => ({
   }],
 })
 
+const repeatedHumanLabelMetricCompletion = (id, label, value = 0.42, grade = 0) => ({
+  id,
+  stageId: 'stage_3',
+  name: `Implementation ${id}`,
+  status: 'COMPLETED',
+  grade,
+  feedback: 'No measurable improvement over baseline.',
+  steps: [{
+    status: 'COMPLETED',
+    result: [
+      `started_at=2026-05-15T16:37:0${id}Z artifact_path=/tmp/ar3-workbenches/${id}/metrics.json elapsed_ms=${1000 + id.charCodeAt(0)}`,
+      `${label}: ${value}`,
+    ].join('\n'),
+  }],
+})
+
 const repeatedPythonDictMetricCompletion = (id, accuracy = 0.42, grade = 0) => ({
   id,
   stageId: 'stage_3',
@@ -884,6 +900,23 @@ const repeatedJsonCommandWithModels = (id, modelContext = {}) => ({
     repeatedLooseMetricCompletion('c', 0.44),
   ], 'stage_3')
   assert.equal(assessment.stuck, false)
+}
+
+{
+  const first = variantProgressSignature(repeatedHumanLabelMetricCompletion('a', 'Validation Accuracy'))
+  const second = variantProgressSignature(repeatedHumanLabelMetricCompletion('b', 'validation-accuracy'))
+  assert.equal(first, second, 'human-readable metric labels should normalize casing, spaces, and dashes')
+}
+
+{
+  const assessment = assessDeadLoop([
+    repeatedHumanLabelMetricCompletion('a', 'Validation Accuracy'),
+    repeatedHumanLabelMetricCompletion('b', 'validation accuracy'),
+    repeatedHumanLabelMetricCompletion('c', 'validation-accuracy'),
+  ], 'stage_3')
+  assert.equal(assessment.stuck, true)
+  assert.equal(assessment.repeatedCount, 3)
+  assert.match(assessment.reason, /no grade improvement/)
 }
 
 {

@@ -151,6 +151,15 @@ function isEphemeralMetricKey(key: string): boolean {
   return /(?:^|_)(?:job|run|id|uuid|path|file|artifact|timestamp|created|updated|duration|elapsed|seconds|time_ms|latency_ms|success|ok|status|state|exit_code|returncode|return_code)(?:$|_)/i.test(key)
 }
 
+function normalizeMetricKey(key: string): string {
+  return key
+    .trim()
+    .toLowerCase()
+    .replace(/[-\s]+/g, '_')
+    .replace(/[^a-z0-9_.]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+}
+
 function extractMetricSignatureText(value: string): string | null {
   const entries: string[] = []
   for (const candidate of metricObjectCandidates(value)) {
@@ -251,11 +260,7 @@ function metricEntryFromNamedRow(value: Record<string, unknown>, prefix: string 
   const normalizedValue = normalizeMetricValue(rawMetricValue)
   if (normalizedValue === null) return null
 
-  const name = rawName
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_.-]+/g, '_')
-    .replace(/^_+|_+$/g, '')
+  const name = normalizeMetricKey(rawName)
   if (!name || isEphemeralMetricKey(name)) return null
 
   return `${prefix ? `${prefix}.` : ''}${name}=${normalizedValue}`
@@ -263,9 +268,9 @@ function metricEntryFromNamedRow(value: Record<string, unknown>, prefix: string 
 
 function looseMetricEntries(text: string): string[] {
   const entries: string[] = []
-  const metricPattern = /(?:^|[\s,;])([a-zA-Z][a-zA-Z0-9_.-]{1,80})\s*[:=]\s*(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?|true|false)\b/gi
+  const metricPattern = /(?:^|[\s,;])([a-zA-Z][a-zA-Z0-9_.-]{1,80}(?:[ -][a-zA-Z0-9_.-]{1,40}){0,4})\s*[:=]\s*(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?|true|false)\b/gi
   for (const match of String(text || '').matchAll(metricPattern)) {
-    const key = match[1].trim().toLowerCase()
+    const key = normalizeMetricKey(match[1])
     if (isEphemeralMetricKey(key)) continue
     const normalizedValue = normalizeMetricValue(match[2])
     if (normalizedValue === null) continue
