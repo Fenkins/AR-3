@@ -420,8 +420,8 @@ export function validatePreparationManifest(value: unknown): PreparationManifest
     if (!nonEmptyString(value.workbench.reuseKey) || !validWorkbenchReuseKey(value.workbench.reuseKey)) {
       errors.push('workbench.reuseKey must be a stable slug, not a temp path, URL, traversal path, or vague placeholder')
     }
-    if (!Array.isArray(value.workbench.expectedArtifacts) || !value.workbench.expectedArtifacts.every(nonEmptyString)) {
-      errors.push('workbench.expectedArtifacts must be an array of artifact names')
+    if (!Array.isArray(value.workbench.expectedArtifacts) || value.workbench.expectedArtifacts.length === 0 || !value.workbench.expectedArtifacts.every(nonEmptyString)) {
+      errors.push('workbench.expectedArtifacts must be a non-empty array of artifact names')
     } else {
       for (const artifact of value.workbench.expectedArtifacts) {
         if (!validExpectedArtifactName(String(artifact))) {

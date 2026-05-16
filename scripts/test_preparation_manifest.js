@@ -261,6 +261,17 @@ function validManifest(overrides = {}) {
 
 {
   const result = validatePreparationManifest(validManifest({
+    workbench: {
+      reuseKey: 'llada-base',
+      expectedArtifacts: [],
+    },
+  }))
+  assert.equal(result.ok, false)
+  assert(result.errors.some((e) => e.includes('workbench.expectedArtifacts') && e.includes('non-empty')), result.errors.join('\n'))
+}
+
+{
+  const result = validatePreparationManifest(validManifest({
     smokeTests: [{
       name: 'trajectory-threshold',
       command: 'python smoke_test.py',
