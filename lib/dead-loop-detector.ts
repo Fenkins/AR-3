@@ -28,6 +28,10 @@ function hashText(value: string): string {
 function normalizeFailureText(value: string): string {
   return value
     .toLowerCase()
+    .replace(/\b(?:runtime|api|gpu|worker|contract)[-_][a-z0-9_.-]+\b/g, match => {
+      const family = match.split(/[-_]/, 1)[0]
+      return `${family}<id>`
+    })
     .replace(/\b[a-f0-9]{8,}\b/g, '<hash>')
     .replace(/\b\d+(?:\.\d+)?\b/g, '<num>')
     .replace(/\/tmp\/[^\s'\"]+/g, '<tmp-path>')
@@ -503,6 +507,7 @@ export function assessDeadLoop(
         reason: 'Dead-loop detector found ' + repeatedCode[1] + ' ' + stageId + ' variants with the same normalized executable code signature ' + repeatedCode[0] + '. Pausing so the next retry changes the implementation, preparation manifest, or grading target instead of rerunning identical code.',
       }
     }
+    return { stuck: false, reason: 'stage has varied executable code or command context signatures' }
   }
 
   const failures = stageVariants

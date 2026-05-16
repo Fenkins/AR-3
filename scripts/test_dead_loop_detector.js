@@ -117,6 +117,19 @@ const repeatedCodeFailure = (id, error) => ({
   }],
 })
 
+const repeatedDynamicFailureMode = (id) => ({
+  id,
+  stageId: 'stage_3',
+  name: 'Implementation ' + id,
+  status: 'FAILED',
+  failureMode: 'RUNTIME_' + id,
+  feedback: 'ModuleNotFoundError: no module named transformers',
+  steps: [{
+    status: 'FAILED',
+    result: 'GPU worker failed before executable code was captured',
+  }],
+})
+
 const repeatedJsonCommandFailure = (id, dependencies = []) => ({
   id,
   stageId: 'stage_3',
@@ -190,6 +203,23 @@ const repeatedJsonCommandWithModels = (id, modelContext = {}) => ({
   const first = variantCodeSignature(repeatedCodeFailure('a', 'ModuleNotFoundError: no module named transformers'))
   const second = variantCodeSignature(repeatedCodeFailure('b', 'CUDA out of memory while allocating tensor'))
   assert.equal(first, second, 'same executable code should create the same code signature despite different runtime errors')
+}
+
+{
+  const first = variantFailureSignature(repeatedDynamicFailureMode('a'))
+  const second = variantFailureSignature(repeatedDynamicFailureMode('b'))
+  assert.equal(first, second, 'dynamic failureMode ids should not split identical failure signatures')
+}
+
+{
+  const assessment = assessDeadLoop([
+    repeatedDynamicFailureMode('a'),
+    repeatedDynamicFailureMode('b'),
+    repeatedDynamicFailureMode('c'),
+  ], 'stage_3')
+  assert.equal(assessment.stuck, true)
+  assert.equal(assessment.repeatedCount, 3)
+  assert.match(assessment.reason, /same normalized failure signature/)
 }
 
 {
@@ -348,7 +378,7 @@ const repeatedJsonCommandWithModels = (id, modelContext = {}) => ({
     repeatedJsonCommandFailure('c', ['torch==2.6.0']),
   ], 'stage_3')
   assert.equal(assessment.stuck, false)
-  assert.match(assessment.reason, /varied failure signatures|not enough failed variants/)
+  assert.match(assessment.reason, /varied executable code|varied failure signatures|not enough failed variants/)
 }
 
 {
