@@ -207,6 +207,21 @@ export function variantProgressSignature(variant: VariantLike): string | null {
   return normalized ? hashText(normalized) : null
 }
 
+function variantMetricProgressSignature(variant: VariantLike): string | null {
+  if (variant.status !== 'COMPLETED') return null
+
+  const completedSteps = Array.isArray(variant.steps)
+    ? variant.steps.filter(step => step.status === 'COMPLETED')
+    : []
+  const metricText = completedSteps
+    .map(step => [step.result, step.feedback].filter(Boolean).join('\n'))
+    .map(extractMetricSignatureText)
+    .filter((signature): signature is string => Boolean(signature))
+    .join('\n')
+
+  return metricText ? hashText([variant.stageId || '', metricText].filter(Boolean).join('\n')) : null
+}
+
 function jsonObjectCandidates(text: string): string[] {
   const source = String(text || '')
   const candidates: string[] = []
@@ -448,6 +463,24 @@ export function assessDeadLoop(
   const stageVariants = variants.filter(variant => variant.stageId === stageId)
   const completed = stageVariants.filter(variant => variant.status === 'COMPLETED')
   if (completed.length > 0) {
+    const grades = completed
+      .map(variant => typeof variant.grade === 'number' ? variant.grade : null)
+      .filter((grade): grade is number => grade !== null)
+    const bestGrade = grades.length ? Math.max(...grades) : null
+    const lowestGrade = grades.length ? Math.min(...grades) : null
+    const highestGrade = grades.length ? Math.max(...grades) : null
+    const hasGradeImprovement = lowestGrade !== null && highestGrade !== null && highestGrade > lowestGrade
+    const metricProgressCount = completed
+      .map(variantMetricProgressSignature)
+      .filter((signature): signature is string => Boolean(signature))
+      .length
+    const noMetricProgressDeadLoop = (): DeadLoopAssessment => ({
+      stuck: true,
+      repeatedSignature: 'completed-without-metric-progress-evidence',
+      repeatedCount: completed.length,
+      reason: `Dead-loop detector found ${completed.length} completed ${stageId} variants without normalized metric evidence and no grade improvement. Pausing so the next retry produces concrete metrics, grading evidence, or a changed preparation manifest instead of accepting generic completions.`,
+    })
+
     const progressBySignature = new Map<string, VariantLike[]>()
     for (const variant of completed) {
       const signature = variantProgressSignature(variant)
@@ -477,13 +510,16 @@ export function assessDeadLoop(
         }
       }
 
+      if (completed.length >= repeatThreshold && metricProgressCount === 0 && !hasGradeImprovement && (bestGrade === null || bestGrade <= 0)) {
+        return noMetricProgressDeadLoop()
+      }
+
       return { stuck: false, reason: 'stage has completed variants with progress evidence' }
     }
 
-    const grades = completed
-      .map(variant => typeof variant.grade === 'number' ? variant.grade : null)
-      .filter((grade): grade is number => grade !== null)
-    const bestGrade = grades.length ? Math.max(...grades) : null
+    if (completed.length >= repeatThreshold && metricProgressCount === 0 && !hasGradeImprovement && (bestGrade === null || bestGrade <= 0)) {
+      return noMetricProgressDeadLoop()
+    }
     if (bestGrade === null || bestGrade > 0) {
       return { stuck: false, reason: 'stage has completed variants with progress evidence' }
     }

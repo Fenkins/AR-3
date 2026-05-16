@@ -99,6 +99,19 @@ const repeatedPythonDictMetricCompletion = (id, accuracy = 0.42, grade = 0) => (
   }],
 })
 
+const completedWithoutProgressEvidence = (id, grade = 0) => ({
+  id,
+  stageId: 'stage_3',
+  name: `Implementation ${id}`,
+  status: 'COMPLETED',
+  grade,
+  feedback: null,
+  steps: [{
+    status: 'COMPLETED',
+    result: `completed without numeric evidence ${id}`,
+  }],
+})
+
 const repeatedCodeFailure = (id, error) => ({
   id,
   stageId: 'stage_3',
@@ -512,6 +525,26 @@ const repeatedJsonCommandWithModels = (id, modelContext = {}) => ({
     repeatedPythonDictMetricCompletion('a', 0.42),
     repeatedPythonDictMetricCompletion('b', 0.43),
     repeatedPythonDictMetricCompletion('c', 0.44),
+  ], 'stage_3')
+  assert.equal(assessment.stuck, false)
+}
+
+{
+  const assessment = assessDeadLoop([
+    completedWithoutProgressEvidence('a'),
+    completedWithoutProgressEvidence('b'),
+    completedWithoutProgressEvidence('c'),
+  ], 'stage_3')
+  assert.equal(assessment.stuck, true)
+  assert.equal(assessment.repeatedSignature, 'completed-without-metric-progress-evidence')
+  assert.match(assessment.reason, /without normalized metric evidence/)
+}
+
+{
+  const assessment = assessDeadLoop([
+    completedWithoutProgressEvidence('a', 10),
+    completedWithoutProgressEvidence('b', 20),
+    completedWithoutProgressEvidence('c', 30),
   ], 'stage_3')
   assert.equal(assessment.stuck, false)
 }
