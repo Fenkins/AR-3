@@ -56,8 +56,8 @@ AR-3 is an interactive research platform that enables autonomous agent-driven so
 
 ```bash
 # Clone repository
-git clone https://github.com/Fenkins/AR-2.git
-cd AR-1
+git clone https://github.com/Fenkins/AR-3.git
+cd AR-3
 
 # Automated launch
 python3 deploy/vast-ai-launch.py
