@@ -89,6 +89,15 @@ def test_manifest_dependency_aliases_are_normalized_like_typescript_manifest():
     assert 'https://download.pytorch.org/whl/cu124' in normalized['pip_args']
 
 
+def test_manifest_dependency_plain_version_becomes_valid_pip_spec():
+    normalized = gpu_worker.normalize_declared_dependencies([
+        {'package': 'transformers', 'version': '4.45.2'},
+        {'name': 'accelerate', 'versionSpec': '>=0.33.0'},
+    ])
+    assert normalized['success'] is True
+    assert normalized['deps'] == ['transformers==4.45.2', 'accelerate>=0.33.0']
+
+
 def test_install_dependencies_upgrades_existing_workbench_packages(monkeypatch, tmp_path):
     captured = {}
 

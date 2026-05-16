@@ -594,4 +594,32 @@ function testDeterministicExperimentUsesSnakeCaseManifestAliases() {
 }
 
 testDeterministicExperimentUsesSnakeCaseManifestAliases()
+
+function testDeterministicExperimentUsesManifestDependencyVersions() {
+  const command = buildDeterministicGpuExperimentCommand({
+    researchGoal: 'verify dependency normalization',
+    stepDescription: 'build deterministic fallback',
+    stageName: 'Implementation',
+    reason: 'model emitted prose',
+    preparationManifest: {
+      dependencies: [
+        { package: 'transformers', version: '4.45.2' },
+        { name: 'accelerate', versionSpec: '>=0.33.0' },
+        { pipPackage: 'sklearn>=0.0' },
+        { name: 'torch', version: '2.5.1' },
+      ],
+      models: [],
+      smokeTests: [],
+      gradingCriteria: ['cuda_available metric is reported in stdout'],
+      workbench: { reuseKey: 'dependency-version-workbench', expectedArtifacts: ['deterministic_gpu_experiment_metrics.json'] },
+    },
+  })
+
+  assert.ok(command.dependencies.includes('transformers==4.45.2'))
+  assert.ok(command.dependencies.includes('accelerate>=0.33.0'))
+  assert.ok(command.dependencies.includes('sklearn>=0.0'))
+  assert.ok(!command.dependencies.some((dep) => dep.startsWith('torch')), 'torch is installed by worker CUDA pinning')
+}
+
+testDeterministicExperimentUsesManifestDependencyVersions()
 console.log('gpu-command-contract tests passed')
