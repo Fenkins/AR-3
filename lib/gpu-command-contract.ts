@@ -1409,7 +1409,7 @@ function looksLikePreparationManifestWrapper(command: StrictGpuCommand): boolean
 }
 
 function pythonFenceCandidate(text: string): string | null {
-  const match = String(text || '').match(/\`\`\`python\s*([\s\S]*?)\`\`\`/i)
+  const match = String(text || '').match(/\`\`\`(?:python|py|code)\s*([\s\S]*?)\`\`\`/i)
   return match?.[1]?.trim() || null
 }
 

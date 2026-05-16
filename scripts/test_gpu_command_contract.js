@@ -17,7 +17,7 @@ function loadTsModule(relativePath) {
   return module.exports
 }
 
-const { assessGpuExecutionEvidence, buildAutonomousPreparationCommand } = loadTsModule('lib/gpu-command-contract.ts')
+const { assessGpuExecutionEvidence, buildAutonomousPreparationCommand, extractStrictGpuCommand } = loadTsModule('lib/gpu-command-contract.ts')
 
 function testAutonomousPreparationUsesNvidiaSmiFallback() {
   const command = buildAutonomousPreparationCommand({
@@ -34,6 +34,39 @@ function testAutonomousPreparationUsesNvidiaSmiFallback() {
 }
 
 testAutonomousPreparationUsesNvidiaSmiFallback()
+
+function validBareGpuCode() {
+  return [
+    'import json',
+    'import torch',
+    'device = "cuda" if torch.cuda.is_available() else "cpu"',
+    'x = torch.ones((2,), device=device)',
+    'print(json.dumps({"cuda_available": torch.cuda.is_available(), "device": device, "tensor_sum": float(x.sum().item())}))',
+  ].join('\n')
+}
+
+function testStrictGpuExtractorAcceptsPyFence() {
+  const result = extractStrictGpuCommand('```py\n' + validBareGpuCode() + '\n```')
+  assert.strictEqual(result.ok, true, result.reason)
+  assert.strictEqual(result.command.action, 'run_python')
+  assert.ok(result.command.dependencies.includes('torch'), 'bare py fence should infer torch dependency')
+}
+
+function testStrictGpuExtractorAcceptsGenericCodeFence() {
+  const result = extractStrictGpuCommand('```code\n' + validBareGpuCode() + '\n```')
+  assert.strictEqual(result.ok, true, result.reason)
+  assert.strictEqual(result.command.action, 'run_python')
+}
+
+function testStrictGpuExtractorStillRejectsProseInGenericFence() {
+  const result = extractStrictGpuCommand('```code\nUse torch to run a GPU benchmark and print JSON metrics.\n```')
+  assert.strictEqual(result.ok, false)
+  assert.match(result.reason, /executable Python syntax|lacks enough/)
+}
+
+testStrictGpuExtractorAcceptsPyFence()
+testStrictGpuExtractorAcceptsGenericCodeFence()
+testStrictGpuExtractorStillRejectsProseInGenericFence()
 
 function manifestWithExpectedArtifacts(artifacts) {
   return {
