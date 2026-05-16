@@ -70,6 +70,22 @@ function validManifest(overrides = {}) {
 }
 
 {
+  const result = validatePreparationManifest(validManifest({
+    models: [{ id: 'owner/model', source: 'huggingface', purpose: 'placeholder model id', required: true, smokeTest: 'python smoke_test.py' }],
+  }))
+  assert.equal(result.ok, false)
+  assert(result.errors.some((e) => e.includes('models[0].id')), result.errors.join('\n'))
+}
+
+{
+  const result = validatePreparationManifest(validManifest({
+    dependencies: [{ name: 'transformers', purpose: 'load tokenizer/model configs', required: true, importName: 'pip install transformers' }],
+  }))
+  assert.equal(result.ok, false)
+  assert(result.errors.some((e) => e.includes('dependencies[0].importName')), result.errors.join('\n'))
+}
+
+{
   const retry = buildPreparationRetryMessage('Original goal', ['models[0].id is not a valid HuggingFace repo id', 'smokeTests must not be empty'])
   assert.match(retry, /Original goal/)
   assert.match(retry, /models\[0\]\.id/)

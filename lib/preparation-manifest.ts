@@ -58,6 +58,7 @@ type ValidationErr = { ok: false; errors: string[] }
 export type PreparationManifestValidation = ValidationOk | ValidationErr
 
 const VAGUE_DEPENDENCIES = new Set(['stuff', 'things', 'dependencies', 'packages', 'libs', 'libraries', 'requirements', 'misc'])
+const VAGUE_MODEL_ID_PARTS = new Set(['owner', 'org', 'organization', 'namespace', 'user', 'repo', 'model', 'model-name', 'your-org', 'your-model'])
 const VAGUE_PURPOSES = new Set(['stuff', 'things', 'misc', 'needed', 'required', 'useful'])
 const VAGUE_GRADING_CRITERIA = new Set([
   'works',
@@ -106,8 +107,9 @@ function validHuggingFaceRepoId(id: string): boolean {
   // HF repo IDs are owner/name. Reject URL fragments like LLaDA-8B-Base/re
   // by requiring an owner and a meaningful repo name, not a path suffix.
   if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{1,95}\/[A-Za-z0-9][A-Za-z0-9_.-]{1,95}$/.test(id)) return false
-  const [, repo] = id.split('/')
-  if (['resolve', 'blob', 'tree', 'raw', 'main', 're'].includes(repo.toLowerCase())) return false
+  const [owner, repo] = id.split('/').map(part => part.toLowerCase())
+  if (['resolve', 'blob', 'tree', 'raw', 'main', 're'].includes(repo)) return false
+  if (VAGUE_MODEL_ID_PARTS.has(owner) || VAGUE_MODEL_ID_PARTS.has(repo)) return false
   return true
 }
 
