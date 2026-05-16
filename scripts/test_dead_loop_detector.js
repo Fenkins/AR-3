@@ -513,6 +513,74 @@ const repeatedJsonCommandWithModels = (id, modelContext = {}) => ({
 }
 
 {
+  const first = variantCodeSignature(repeatedJsonCommandWithModels('a', {
+    preparation_manifest: {
+      workbench: { reuseKey: 'shared-workbench' },
+      preparation_run_history: [
+        {
+          success: false,
+          error: 'MISSING_EVIDENCE: expected METRICS_JSON in /tmp/ar3-workbenches/a/stdout.log',
+          outputTail: 'preparation_manifest=/tmp/ar3-workbenches/a/preparation_manifest.json\npreparation_run_history=/tmp/ar3-workbenches/a/preparation_run_history.json',
+        },
+      ],
+    },
+  }))
+  const second = variantCodeSignature(repeatedJsonCommandWithModels('b', {
+    preparation_manifest: {
+      workbench: { reuseKey: 'shared-workbench' },
+      preparation_run_history: [
+        {
+          success: false,
+          error: 'MISSING_EVIDENCE: expected METRICS_JSON in /tmp/ar3-workbenches/b/stdout.log',
+          outputTail: 'preparation_manifest=/tmp/ar3-workbenches/b/preparation_manifest.json\npreparation_run_history=/tmp/ar3-workbenches/b/preparation_run_history.json',
+        },
+      ],
+    },
+  }))
+  assert.equal(first, second, 'ephemeral workbench paths in run history should not create new executable signatures')
+}
+
+{
+  const first = variantCodeSignature(repeatedJsonCommandWithModels('a', {
+    preparation_manifest: {
+      workbench: { reuseKey: 'shared-workbench' },
+      preparation_run_history: [
+        { success: false, error: 'MISSING_EVIDENCE: expected METRICS_JSON' },
+      ],
+    },
+  }))
+  const second = variantCodeSignature(repeatedJsonCommandWithModels('b', {
+    preparation_manifest: {
+      workbench: { reuseKey: 'shared-workbench' },
+      preparation_run_history: [
+        { success: false, error: 'ModuleNotFoundError: no module named transformers' },
+      ],
+    },
+  }))
+  assert.notEqual(first, second, 'changed run-history failure context should reset repeated executable signatures')
+}
+
+{
+  const first = variantCodeSignature(repeatedJsonCommandWithModels('a', {
+    preparation_manifest: {
+      workbench: { reuseKey: 'shared-workbench' },
+      preparation_run_history: [
+        { success: true, outputTail: 'metrics={"accuracy":0.42,"elapsed_ms":1000,"artifact_path":"/tmp/ar3-workbenches/a/metrics.json"}' },
+      ],
+    },
+  }))
+  const second = variantCodeSignature(repeatedJsonCommandWithModels('b', {
+    preparation_manifest: {
+      workbench: { reuseKey: 'shared-workbench' },
+      preparation_run_history: [
+        { success: true, outputTail: 'metrics={"accuracy":0.44,"elapsed_ms":2000,"artifact_path":"/tmp/ar3-workbenches/b/metrics.json"}' },
+      ],
+    },
+  }))
+  assert.notEqual(first, second, 'changed run-history metric evidence should reset repeated executable signatures')
+}
+
+{
   const assessment = assessDeadLoop([
     repeatedJsonCommandFailure('a', ['torch==2.4.0']),
     repeatedJsonCommandFailure('b', ['torch==2.5.0']),

@@ -466,6 +466,53 @@ function normalizeWorkbenchContext(value: unknown): string {
   return ''
 }
 
+function normalizeRunHistoryText(value: string): string {
+  return normalizeProgressText(value)
+    .replace(/preparation_manifest=<tmp-path>/g, 'preparation_manifest=<path>')
+    .replace(/preparation_run_history=<tmp-path>/g, 'preparation_run_history=<path>')
+}
+
+function collectRunHistoryContext(value: unknown): string[] {
+  if (!value || typeof value !== 'object') return []
+  const source = value as Record<string, any>
+  const rows = [
+    source.runHistory,
+    source.run_history,
+    source.preparationRunHistory,
+    source.preparation_run_history,
+    source.previousRuns,
+    source.previous_runs,
+    source.priorRuns,
+    source.prior_runs,
+  ].find(Array.isArray)
+  if (!Array.isArray(rows)) return []
+
+  const values: string[] = []
+  for (const row of rows.slice(-5)) {
+    if (typeof row === 'string') {
+      const normalized = normalizeRunHistoryText(row)
+      if (normalized) values.push(normalized)
+      continue
+    }
+    if (!row || typeof row !== 'object') continue
+    const entry = row as Record<string, any>
+    const success = typeof entry.success === 'boolean' ? `success=${entry.success}` : ''
+    const status = firstString(entry.status, entry.state)
+    const error = firstString(entry.error, entry.failure, entry.failureReason, entry.failure_reason)
+    const output = firstString(entry.outputTail, entry.output_tail, entry.output, entry.stdoutTail, entry.stdout_tail)
+    const metrics = extractMetricSignatureText([output, entry.metrics ? JSON.stringify({ metrics: entry.metrics }) : ''].filter(Boolean).join('\n'))
+    const normalized = [
+      success,
+      status ? `status=${status.trim().toLowerCase()}` : '',
+      error ? `error=${normalizeRunHistoryText(error)}` : '',
+      output ? `output=${normalizeRunHistoryText(output)}` : '',
+      metrics ? `metrics=${metrics}` : '',
+    ].filter(Boolean).join('|')
+    if (normalized) values.push(normalized)
+  }
+  return values
+}
+
 function normalizeCommandContext(parsed: Record<string, any>): string {
   const nestedManifest = parsed.preparation_manifest || parsed.preparationManifest || parsed.manifest
   const normalizedDependencies = normalizeStringList([
@@ -488,12 +535,17 @@ function normalizeCommandContext(parsed: Record<string, any>): string {
     ...collectArtifactContext(parsed),
     ...collectArtifactContext(nestedManifest),
   ])
+  const normalizedRunHistory = normalizeStringList([
+    ...collectRunHistoryContext(parsed),
+    ...collectRunHistoryContext(nestedManifest),
+  ])
   const workbenchContext = normalizeWorkbenchContext(nestedManifest) || normalizeWorkbenchContext(parsed)
   return [
     normalizedDependencies ? `dependencies=${normalizedDependencies}` : '',
     normalizedModels ? `models=${normalizedModels}` : '',
     normalizedSmokeTests ? `smoke_tests=${normalizedSmokeTests}` : '',
     normalizedArtifacts ? `artifacts=${normalizedArtifacts}` : '',
+    normalizedRunHistory ? `run_history=${normalizedRunHistory}` : '',
     workbenchContext ? `workbench=${workbenchContext}` : '',
   ].filter(Boolean).join('\n')
 }
