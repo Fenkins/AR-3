@@ -196,6 +196,26 @@ const repeatedJsonCommandFailure = (id, dependencies = []) => ({
   }],
 })
 
+const repeatedFencedCodeFailure = (id, error, fence = 'python') => ({
+  id,
+  stageId: 'stage_3',
+  name: 'Implementation ' + id,
+  status: 'FAILED',
+  failureMode: 'RUNTIME_' + id,
+  feedback: error,
+  steps: [{
+    status: 'FAILED',
+    result: [
+      'GPU worker captured weak-model prose with executable code:',
+      '```' + fence,
+      'import json',
+      'import torch',
+      'print(json.dumps({"cuda_available": torch.cuda.is_available(), "metric": 0.1}))',
+      '```',
+    ].join('\n'),
+  }],
+})
+
 const repeatedJsonCommandWithModels = (id, modelContext = {}) => ({
   id,
   stageId: 'stage_3',
@@ -272,6 +292,23 @@ const repeatedJsonCommandWithModels = (id, modelContext = {}) => ({
     repeatedCodeFailure('a', 'ModuleNotFoundError: no module named transformers'),
     repeatedCodeFailure('b', 'CUDA out of memory while allocating tensor'),
     repeatedCodeFailure('c', 'FileNotFoundError: missing artifact'),
+  ], 'stage_3')
+  assert.equal(assessment.stuck, true)
+  assert.equal(assessment.repeatedCount, 3)
+  assert.match(assessment.reason, /same normalized executable code signature/)
+}
+
+{
+  const first = variantCodeSignature(repeatedFencedCodeFailure('a', 'ModuleNotFoundError: no module named transformers'))
+  const second = variantCodeSignature(repeatedFencedCodeFailure('b', 'CUDA out of memory while allocating tensor', 'py'))
+  assert.equal(first, second, 'same fenced executable code should create the same signature despite different runtime errors')
+}
+
+{
+  const assessment = assessDeadLoop([
+    repeatedFencedCodeFailure('a', 'ModuleNotFoundError: no module named transformers'),
+    repeatedFencedCodeFailure('b', 'CUDA out of memory while allocating tensor', 'py'),
+    repeatedFencedCodeFailure('c', 'FileNotFoundError: missing artifact', 'code'),
   ], 'stage_3')
   assert.equal(assessment.stuck, true)
   assert.equal(assessment.repeatedCount, 3)

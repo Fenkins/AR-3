@@ -449,6 +449,9 @@ function extractExecutableSignatureText(value: string): string | null {
   const codeBlock = text.match(/\[CODE\]\s*([\s\S]*?)\s*\[\/CODE\]/i)
   if (codeBlock?.[1]?.trim()) return codeBlock[1]
 
+  const fencedCodeBlock = text.match(/(^|\n)\s*```(?:python|py|code)?\s*\n([\s\S]*?)\n\s*```/i)
+  if (fencedCodeBlock?.[2]?.trim()) return fencedCodeBlock[2]
+
   for (const candidate of jsonObjectCandidates(text)) {
     try {
       const parsed = JSON.parse(candidate)
