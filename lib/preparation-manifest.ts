@@ -114,7 +114,21 @@ function validHuggingFaceRepoId(id: string): boolean {
 function validPackageSpec(name: string): boolean {
   const trimmed = name.trim()
   if (VAGUE_DEPENDENCIES.has(trimmed.toLowerCase())) return false
-  return /^[A-Za-z0-9][A-Za-z0-9_.-]*(\[[A-Za-z0-9_,.-]+\])?([<>=!~]=?.+)?$/.test(trimmed)
+  const versionClause = '(?:==|!=|~=|>=|<=|>|<)\\s*[A-Za-z0-9.*+!_:-]+'
+  const packageSpecPattern = new RegExp(
+    `^[A-Za-z0-9][A-Za-z0-9_.-]*(?:\\[[A-Za-z0-9_,.-]+\\])?(?:\\s*${versionClause}(?:\\s*,\\s*${versionClause})*)?$`
+  )
+  return packageSpecPattern.test(trimmed)
+}
+
+function validImportName(value: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/.test(value.trim())
+}
+
+function validVersionSpec(value: string): boolean {
+  const trimmed = value.trim()
+  const versionClause = '(?:==|!=|~=|>=|<=|>|<)\\s*[A-Za-z0-9.*+!_:-]+'
+  return new RegExp(`^${versionClause}(?:\\s*,\\s*${versionClause})*$`).test(trimmed)
 }
 
 function validGradingCriterion(value: string): boolean {
@@ -336,6 +350,12 @@ export function validatePreparationManifest(value: unknown): PreparationManifest
     }
     if (!nonEmptyString(dep.purpose) || VAGUE_PURPOSES.has(dep.purpose.trim().toLowerCase())) {
       errors.push(`dependencies[${i}].purpose must explain why the package is needed`)
+    }
+    if (dep.importName !== undefined && (!nonEmptyString(dep.importName) || !validImportName(dep.importName))) {
+      errors.push(`dependencies[${i}].importName must be a concrete Python import path like torch or transformers.models`)
+    }
+    if (dep.versionSpec !== undefined && (!nonEmptyString(dep.versionSpec) || !validVersionSpec(dep.versionSpec))) {
+      errors.push(`dependencies[${i}].versionSpec must be a pip version constraint like >=2.4.0 or ==4.45.*`)
     }
     if (typeof dep.required !== 'boolean') errors.push(`dependencies[${i}].required must be boolean`)
   })

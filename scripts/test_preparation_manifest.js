@@ -331,4 +331,43 @@ function validManifest(overrides = {}) {
   assert(result.errors.some((e) => e.includes('successCriteria[0].metric') && e.includes('smokeTests.expectedEvidence')), result.errors.join('\n'))
 }
 
+{
+  const result = validatePreparationManifest(validManifest({
+    dependencies: [
+      {
+        name: 'torch>=2.4.0,<2.6.0',
+        purpose: 'CUDA tensor execution',
+        required: true,
+        importName: 'torch.cuda',
+        versionSpec: '>=2.4.0,<2.6.0',
+      },
+      {
+        name: 'transformers[torch]==4.45.*',
+        purpose: 'load tokenizer/model configs',
+        required: true,
+        importName: 'transformers',
+      },
+    ],
+  }))
+  assert.equal(result.ok, true, result.errors.join('\n'))
+}
+
+{
+  const result = validatePreparationManifest(validManifest({
+    dependencies: [
+      {
+        name: 'torch>=2.4.0; rm -rf /tmp/workbench',
+        purpose: 'CUDA tensor execution',
+        required: true,
+        importName: 'torch; print(1)',
+        versionSpec: 'latest please',
+      },
+    ],
+  }))
+  assert.equal(result.ok, false)
+  assert(result.errors.some((e) => e.includes('dependencies[0].name')), result.errors.join('\n'))
+  assert(result.errors.some((e) => e.includes('dependencies[0].importName')), result.errors.join('\n'))
+  assert(result.errors.some((e) => e.includes('dependencies[0].versionSpec')), result.errors.join('\n'))
+}
+
 console.log('preparation manifest tests passed')
