@@ -1,4 +1,4 @@
-Total output lines: 1995
+Total output lines: 2115
 
 #!/usr/bin/env python3
 """
@@ -34,6 +34,8 @@ POLL_INTERVAL = 3  # seconds
 DEFAULT_MAX_CONCURRENT = 1
 DEFAULT_JOB_TIMEOUT = 3600  # 1 hour default
 DEFAULT_WORKBENCH_ROOT = '/tmp/ar3-workbenches'
+DEFAULT_DISK_WARN_FREE_BYTES = 8 * 1024**3
+DEFAULT_DISK_FAIL_FREE_BYTES = 2 * 1024**3
 
 # Thread-safe lock for queue file operations
 queue_lock = threading.Lock()
@@ -128,6 +130,62 @@ def _safe_slug(value: str, fallback: str = 'space') -> str:
     return slug[:80] or fallback
 
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(str(os.environ.get(name, default)).strip())
+    except Exception:
+        return default
+
+
+def _dir_size_bytes(path: Path) -> int:
+    total = 0
+    if not path.exists():
+        return 0
+    for child in path.rglob('*'):
+        try:
+            if child.is_file() or child.is_symlink():
+                total += child.lstat().st_size
+        except FileNotFoundError:
+            continue
+    return total
+
+
+def collect_workbench_disk_pressure(context: dict) -> dict:
+    """Return a bounded disk pressure snapshot for job metadata and logs."""
+    workbench_dir = Path(context['workbench_dir'])
+    root = workbench_dir.parent
+    try:
+        usage = shutil.disk_usage(root if root.exists() else workbench_dir)
+        used = usage.total - usage.free
+        used_percent = round((used / usage.total) * 100, 2) if usage.total else None
+    except Exception as exc:
+        return {
+            'ok': True,
+            'warning': f'disk pressure unavailable: {exc}',
+            'workbenchDir': str(workbench_dir),
+            'workbenchRoot': str(root),
+        }
+
+    workbench_bytes = _dir_size_bytes(workbench_dir)
+    warn_free = _env_int('AR3_DISK_WARN_FREE_BYTES', DEFAULT_DISK_WARN_FREE_BYTES)
+    fail_free = _env_int('AR3_DISK_FAIL_FREE_BYTES', DEFAULT_DISK_FAIL_FREE_BYTES)
+    warning = None
+    if usage.free < warn_free:
+        warning = f'low disk space: {usage.free} bytes free under workbench root {root}'
+    return {
+        'ok': usage.free >= fail_free,
+        'warning': warning,
+        'workbenchDir': str(workbench_dir),
+        'workbenchRoot': str(root),
+        'freeBytes': usage.free,
+        'totalBytes': usage.total,
+        'usedPercent': used_percent,
+        'workbenchBytes': workbench_bytes,
+        'warnFreeBytes': warn_free,
+        'failFreeBytes': fail_free,
+    }
+
+
 def prepare_workbench(job: dict) -> dict:
     """Create/reuse a persistent per-space workbench and execution env.
 
@@ -149,6 +207,17 @@ def prepare_workbench(job: dict) -> dict:
 
     existing_pythonpath = os.environ.get('PYTHONPATH', '')
     pythonpath = str(packages_dir) + ((os.pathsep + existing_pythonpath) if existing_pythonpath else '')
+    library_paths = [
+        '/usr/local/nvidia/lib',
+        '/usr/local/nvidia/lib64',
+        '/usr/local/cuda/compat',
+        '/usr/local/cuda/lib64',
+        '/usr/local/cuda/targets/x86_64-linux/lib',
+    ]
+    existing_ld_library_path = os.environ.get('LD_LIBRARY_PATH', '')
+    if existing_ld_library_path:
+        library_paths.append(existing_ld_library_path)
+
     env = {
         **os.environ,
         'AR3_WORKBENCH_DIR': str(workbench),
@@ -157,9 +226,9 @@ def prepare_workbench(job: dict) -> dict:
         'HUGGINGFACE_HUB_CACHE': str(cache_dir / 'huggingface' / 'hub'),
         'TRANSFORMERS_CACHE': str(cache_dir / 'huggingface' / 'transformers'),
         'TORCH_HOME': str(cache_dir / 'torch'),
-        'PIP_CACHE_DIR': str(cache_dir / 'pip'),
+        'PIP_NO_CACHE_DIR': '1',
         'PYTHONPATH': pythonpath,
-        'LD_LIBRARY_PATH': '/usr/local/cuda/lib64:' + os.environ.get('LD_LIBRARY_PATH', ''),
+        'LD_LIBRARY_PATH': os.pathsep.join(library_paths),
     }
     return {
         'workbench_dir': str(workbench),
@@ -231,6 +300,34 @@ def normalize_declared_dependencies(dependencies) -> dict:
     return {'success': True, 'deps': deps, 'pip_args': pip_args, 'error': None}
 
 
+MISSING_MODULE_PACKAGE_ALIASES = {
+    'pil': 'Pillow',
+    'cv2': 'opencv-python-headless',
+    'sklearn': 'scikit-learn',
+    'yaml': 'PyYAML',
+    'bs4': 'beautifulsoup4',
+}
+
+
+def missing_module_install_command(module_name: str, context: dict) -> dict:
+    """Build a safe workbench-local pip install command for ModuleNotFoundError repair."""
+    module_name = str(module_name or '').strip()
+    if not re_module.match(r'^[A-Za-z_][A-Za-z0-9_]*$', module_name):
+        return {'success': False, 'error': f'Unsafe missing module name rejected: {module_name!r}'}
+    package = MISSING_MODULE_PACKAGE_ALIASES.get(module_name.lower(), module_name)
+    normalized = normalize_declared_dependencies([package])
+    if not normalized.get('success'):
+        return {'success': False, 'error': normalized.get('error')}
+    deps = normalized['deps']
+    if not deps:
+        return {'success': False, 'error': f'Missing module {module_name!r} is not a pip-installable dependency'}
+    cmd = [
+        sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check',
+        '--upgrade', *normalized['pip_args'], '--target', context['packages_dir'], *deps,
+    ]
+    return {'success': True, 'cmd': cmd, 'deps': deps, 'pip_args': normalized['pip_args'], 'error': None}
+
+
 TORCH_CUDA_SMOKE_CODE = r'''
 import json
 try:
@@ -252,7 +349,7 @@ except Exception as exc:
 '''.strip()
 
 
-PYTORCH_CU124_INSTALL_ARGS = [
+PYTORCH_CUDA_INSTALL_ARGS = [
     '--index-url', 'https://download.pytorch.org/whl/cu124',
     '--extra-index-url', 'https://pypi.org/simple',
     'torch==2.5.1', 'torchvision==0.20.1', 'torchaudio==2.5.1',
@@ -309,9 +406,10 @@ def ensure_torch_cuda_workbench(context: dict, force: bool = False, timeout: int
 
     VAST CUDA images can import a globally working torch while a per-space --target install
     shadows it with an incompatible CUDA wheel set. The observed failure is often
-    `undefined symbol: __nvJitLinkComplete_12_4` from libcusparse/libnvJitLink. Detect that
-    before experiment execution, clear only the workbench-local torch/CUDA wheel dirs, install
-    a known cu124 set, then run the smoke test again and surface evidence in job output.
+    `undefined symbol: __nvJitLinkComplete_12_4` or torch.cuda.is_available()
+    returning false on a visible GPU. Detect that before experiment execution,
+    clear only the workbench-local torch/CUDA wheel dirs, install a CUDA 12.4
+    wheel set, then run the smoke test again and surface evidence in job output.
     """
     outputs = []
     torch_env = _without_cuda_toolkit_ld_path(context['env'])
@@ -330,8 +428,8 @@ def ensure_torch_cuda_workbench(context: dict, force: bool = False, timeout: int
     removed = _purge_torch_package_dirs(context['packages_dir'])
     outputs.append('torch_cuda_repair removed=' + json.dumps(removed))
     install_cmd = [
-        sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', '--upgrade',
-        '--target', context['packages_dir'], *PYTORCH_CU124_INSTALL_ARGS,
+        sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', '--no-cache-dir', '--upgrade',
+        '--target', context['packages_dir'], *PYTORCH_CUDA_INSTALL_ARGS,
     ]
     install = subprocess.run(install_cmd, capture_output=True, text=True, timeout=timeout, env=context['env'])
     install_output = _combined_completed_output(install)
@@ -392,143 +490,9 @@ def install_declared_dependencies(dependencies, context: dict, timeout: int = 90
         write_dependency_record(True)
         return {'success': True, 'output': 'no declared dependencies', 'error': None}
 
-    cmd = [sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', '--upgrade', *normalized['pip_args'], '--target', context['packages_dir'], *deps]
+    cmd = [sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', '--no-cache-dir', '--upgrade', *normalized['pip_args'], '--target', context['packages_dir'], *deps]
     update_job_queue_status(job_id, 'installing_dependencies')
-    log('Installing declared dependencies into workbench: ' + ' '.join(shlex.quote(d) for d in deps),
-        thread_id=threading.current_thread().name)
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=context['env'])
-    if result.returncode != 0:
-        error = result.stderr.strip() or f'pip exited {result.returncode}'
-        write_dependency_record(False, error)
-        return {
-            'success': False,
-            'output': result.stdout.strip(),
-            'error': error,
-        }
-    write_dependency_record(True)
-    output = result.stdout.strip()
-    if record_path is not None:
-        output = (output + '\n' if output else '') + f'installed_dependencies={record_path}'
-    return {'success': True, 'output': output, 'error': None}
-
-
-def strip_markdown_headers(code: str) -> str:
-    """Remove markdown/table/header lines accidentally captured around code."""
-    kept = []
-    for line in code.split('\n'):
-        stripped = line.strip()
-        if not stripped:
-            kept.append(line)
-            continue
-        if re_module.match(r'^(#{1,6}\s|[-*]\s+|\|.*\|$|```)', stripped):
-            continue
-        kept.append(line)
-    return '\n'.join(kept).strip()
-
-
-def _extract_first_json_object(text: str):
-    """Return the first valid JSON object embedded in text, using quote-aware braces."""
-    in_str = False
-    escape_next = False
-    brace_depth = 0
-    json_start = -1
-    for i, ch in enumerate(str(text or '')):
-        if escape_next:
-            escape_next = False
-            continue
-        if ch == '\\' and in_str:
-            escape_next = True
-            continue
-        if ch == '"' and not escape_next:
-            in_str = not in_str
-            continue
-        if in_str:
-            continue
-        if ch == '{':
-            if brace_depth == 0:
-                json_start = i
-            brace_depth += 1
-        elif ch == '}':
-            brace_depth -= 1
-            if brace_depth == 0 and json_start >= 0:
-                try:
-                    parsed = json.loads(text[json_start:i + 1])
-                    if isinstance(parsed, dict):
-                        return parsed
-                except Exception:
-                    pass
-                json_start = -1
-    return None
-
-
-def extract_preparation_manifest(job: dict):
-    """Extract a validated preparation manifest from job context or prompt markers.
-
-    The Next.js side persists a PreparationManifest in Space.setupStep and passes it
-    through job context. Older jobs may only contain the appended
-    [PREPARATION_MANIFEST_VALIDATED] marker in the prompt, so support both.
-    """
-    context = job.get('context') or ''
-    if isinstance(context, dict):
-        candidate = context.get('preparationManifest') or context.get('manifest')
-        if isinstance(candidate, dict):
-            return candidate
-    if isinstance(context, str) and context.strip():
-        try:
-            parsed = json.loads(context)
-            if isinstance(parsed, dict):
-                candidate = parsed.get('preparationManifest') or parsed.get('manifest')
-                if isinstance(candidate, dict):
-                    return candidate
-        except Exception:
-            marker_obj = _extract_first_json_object(context)
-            if isinstance(marker_obj, dict) and marker_obj.get('schemaVersion') == 'ar3.preparation-manifest.v1':
-                return marker_obj
-
-    prompt = job.get('prompt') or ''
-    marker = '[PREPARATION_MANIFEST_VALIDATED]:'
-    if marker in prompt:
-        after_marker = prompt.split(marker, 1)[1]
-        candidate = _extract_first_json_object(after_marker)
-        if isinstance(candidate, dict):
-            return c…11607 tokens truncated…
-    def _patched_getattr(self, name, *args, **kwargs):
-        if name == 'all_tied_weights_keys':
-            return {}
-        return _orig_getattr(self, name, *args, **kwargs)
-    torch.nn.Module.__getattr__ = _patched_getattr
-except ModuleNotFoundError:
-    torch = None
-'''
-    needs_llada_patch = any(token in fixed_code for token in ('import torch', 'from torch', 'transformers', 'from_pretrained', 'LLaDA', 'llada'))
-    if needs_llada_patch:
-        fixed_code = patch_wrapper + fixed_code
-    if fixed_code != code:
-        log(f"Format-string coercion applied",
-            thread_id=threading.current_thread().name)
-
-    code_file = f"/tmp/gpu_code_{int(time.time()*1000)}.py"
-    with open(code_file, 'w') as f:
-        f.write(fixed_code)
-
-    try:
-        result = subprocess.run(
-            ['python3', code_file],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            cwd=context['workbench_dir'],
-            env=context['env'],
-        )
-        try:
-            os.unlink(code_file)
-        except Exception:
-            pass
-
-        if result.returncode == 0:
-            output = result.stdout.strip()
-            if torch_prep_output:
-                output = (torch_prep_output + '\n' + output).strip()
+    log('Installing declared dependencies into workbench: ' + ' '.join(shlex.quo…12824 tokens truncated…              output = (torch_prep_output + '\n' + output).strip()
             return {
                 'success': True,
                 'output': output,
@@ -585,10 +549,19 @@ except ModuleNotFoundError:
                 missing = re_module.search(r"No module named '(\w+)'", stderr)
                 if missing:
                     pkg = missing.group(1)
-                    log(f"Missing module '{pkg}' detected, attempting pip install",
+                    repair = missing_module_install_command(pkg, context)
+                    if not repair.get('success'):
+                        log(f"Missing module '{pkg}' was not auto-installable: {repair.get('error')}",
+                            thread_id=threading.current_thread().name)
+                        return {
+                            'success': False,
+                            'output': result.stdout.strip(),
+                            'error': f"Missing module '{pkg}' could not be auto-installed: {repair.get('error')}",
+                        }
+                    log(f"Missing module '{pkg}' detected, attempting pip install: " + ' '.join(shlex.quote(d) for d in repair['deps']),
                         thread_id=threading.current_thread().name)
                     install_res = subprocess.run(
-                        [sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', '--target', context['packages_dir'], pkg],
+                        repair['cmd'],
                         capture_output=True, text=True, timeout=120, env=context['env']
                     )
                     if install_res.returncode == 0:
@@ -680,13 +653,25 @@ def execute_gpu_command(job: dict, timeout: int = DEFAULT_JOB_TIMEOUT) -> dict:
         action = gpu_command.get('action', 'run_python')
         update_job_queue_status(job_id, 'preparing_workbench')
         context_info = prepare_workbench(job)
+        disk_pressure = collect_workbench_disk_pressure(context_info)
+        if disk_pressure.get('warning'):
+            log(disk_pressure['warning'], thread_id=tid)
         preparation_manifest = extract_preparation_manifest(job)
         result_metadata = {
             'workbenchDir': context_info['workbench_dir'],
             'artifactsDir': context_info['artifacts_dir'],
             'dependencies': gpu_command.get('dependencies', []),
             'preparationManifestApplied': bool(preparation_manifest),
+            'diskPressure': disk_pressure,
         }
+        disk_pressure_output = 'disk_pressure=' + json.dumps(disk_pressure, sort_keys=True)
+        if not disk_pressure.get('ok', True):
+            return {
+                'success': False,
+                'output': disk_pressure_output,
+                'error': 'Insufficient free disk space for GPU job preparation',
+                **result_metadata,
+            }
         preparation_output = ''
         if preparation_manifest:
             log('Applying preparation manifest before experiment execution', thread_id=tid)
@@ -768,6 +753,7 @@ def execute_gpu_command(job: dict, timeout: int = DEFAULT_JOB_TIMEOUT) -> dict:
             }
 
         result['code'] = gpu_command.get('code', '')
+        result['output'] = (disk_pressure_output + '\n' + result.get('output', '')).strip()
         if preparation_output:
             result['output'] = (preparation_output + '\n' + result.get('output', '')).strip()
         update_job_queue_status(job_id, 'validating_evidence')

@@ -98,6 +98,29 @@ def test_manifest_dependency_plain_version_becomes_valid_pip_spec():
     assert normalized['deps'] == ['transformers==4.45.2', 'accelerate>=0.33.0']
 
 
+def test_missing_module_auto_install_reuses_dependency_normalization(tmp_path):
+    context = {'packages_dir': str(tmp_path / 'packages')}
+    repair = gpu_worker.missing_module_install_command('torch', context)
+    assert repair['success'] is True
+    assert 'torch==2.5.1' in repair['deps']
+    assert 'https://download.pytorch.org/whl/cu124' in repair['cmd']
+    assert '--upgrade' in repair['cmd']
+
+
+def test_missing_module_auto_install_maps_common_import_aliases(tmp_path):
+    context = {'packages_dir': str(tmp_path / 'packages')}
+    repair = gpu_worker.missing_module_install_command('cv2', context)
+    assert repair['success'] is True
+    assert repair['deps'] == ['opencv-python-headless']
+
+
+def test_missing_stdlib_module_is_not_auto_installed(tmp_path):
+    context = {'packages_dir': str(tmp_path / 'packages')}
+    repair = gpu_worker.missing_module_install_command('json', context)
+    assert repair['success'] is False
+    assert 'not a pip-installable dependency' in repair['error']
+
+
 def test_install_dependencies_upgrades_existing_workbench_packages(monkeypatch, tmp_path):
     captured = {}
 
