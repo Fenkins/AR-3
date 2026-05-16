@@ -1,3 +1,5 @@
+Total output lines: 944
+
 #!/usr/bin/env node
 const assert = require('assert')
 const childProcess = require('child_process')
@@ -516,36 +518,7 @@ function testGpuIdentityCanValidateRuntimeEvidenceWhenTorchCudaIsFalse() {
     fallbackUsed: false,
     success: true,
     output: JSON.stringify({ accuracy: 0.91, loss: 0.12, cuda_available: false, gpu_name: 'RTX 4090', gpu_memory_gb: 24 }),
-  })
-  assert.equal(assessed.valid, true, assessed.reason)
-}
-
-function testArtifactOnlyOutputIsNotValidGpuEvidence() {
-  const assessed = contract.assessGpuExecutionEvidence({
-    stageName: 'Implementation',
-    fallbackUsed: false,
-    success: true,
-    output: 'saved metrics to /tmp/ar3-workbenches/run-1/metrics.json',
-  })
-  assert.equal(assessed.valid, false)
-  assert.match(assessed.reason, /runtime GPU evidence/i)
-}
-
-function testStrictGpuCommandRejectsCpuOnlyMetricsCode() {
-  const extracted = contract.extractStrictGpuCommand(JSON.stringify({
-    action: 'run_python',
-    dependencies: [],
-    code: 'import json\nresult = {"accuracy": 0.91, "loss": 0.12}\nprint(json.dumps(result))\nassert result["accuracy"] > 0\nprint("done")',
-  }))
-  assert.equal(extracted.ok, false)
-  assert.match(extracted.reason, /GPU\/CUDA probe/i)
-}
-
-function testStrictGpuCommandAcceptsExecutableGpuProbeCode() {
-  const extracted = contract.extractStrictGpuCommand(JSON.stringify({
-    action: 'run_python',
-    dependencies: ['torch'],
-    code: 'import json\nimport torch\ndevice = "cuda" if torch.cuda.is_available() else "cpu"\nx = torch.ones((2, 2), device=device)\nresult = {"cuda_available": torch.cuda.is_available(), "device": str(x.device), "sum": float(x.sum().item())}\nprint(json.dumps(result, sort_keys=True))',
+…319 tokens truncated…\nprint(json.dumps(result, sort_keys=True))',
   }))
   assert.equal(extracted.ok, true, extracted.reason)
 }
@@ -841,6 +814,51 @@ function testDeterministicExperimentCriteriaEvidenceRejectsEmptyValues() {
   assert.match(assessed.reason, /grading criteria/i)
 }
 
+function testDeterministicExperimentCriteriaEvidenceRejectsUnsatisfiedThreshold() {
+  const assessed = contract.assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    fallbackUsed: false,
+    success: true,
+    output: JSON.stringify({
+      type: 'deterministic_gpu_experiment',
+      cuda_available: true,
+      gpu_name: 'RTX 3060',
+      research_metrics: { accuracy: 0.42 },
+      grading_criteria_checked: ['accuracy >= 0.90'],
+      grading_criteria_evidence: {
+        'accuracy >= 0.90': {
+          matched: true,
+          matched_keys: ['research_metrics.accuracy'],
+        },
+      },
+    }),
+  })
+  assert.equal(assessed.valid, false)
+  assert.match(assessed.reason, /grading criteria/i)
+}
+
+function testDeterministicExperimentCriteriaEvidenceAcceptsSatisfiedThreshold() {
+  const assessed = contract.assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    fallbackUsed: false,
+    success: true,
+    output: JSON.stringify({
+      type: 'deterministic_gpu_experiment',
+      cuda_available: true,
+      gpu_name: 'RTX 3060',
+      research_metrics: { accuracy: 0.91 },
+      grading_criteria_checked: ['accuracy must be at least 0.90'],
+      grading_criteria_evidence: {
+        'accuracy must be at least 0.90': {
+          matched: true,
+          matched_keys: ['research_metrics.accuracy'],
+        },
+      },
+    }),
+  })
+  assert.equal(assessed.valid, true, assessed.reason)
+}
+
 function testPreparationStagesShortCircuitWeakModelContractFailures() {
   assert.equal(contract.shouldShortCircuitPreparationFallback('Investigation', 'response did not parse as the required JSON object'), true)
   assert.equal(contract.shouldShortCircuitPreparationFallback('Planning', 'JSON action must be "run_python"'), true)
@@ -893,5 +911,7 @@ testDeterministicExperimentCriteriaEvidencePassesGate()
 testDeterministicExperimentCriteriaEvidenceRejectsPartialExplicitMetrics()
 testDeterministicExperimentCriteriaEvidenceRejectsForgedKeys()
 testDeterministicExperimentCriteriaEvidenceRejectsEmptyValues()
+testDeterministicExperimentCriteriaEvidenceRejectsUnsatisfiedThreshold()
+testDeterministicExperimentCriteriaEvidenceAcceptsSatisfiedThreshold()
 testPreparationStagesShortCircuitWeakModelContractFailures()
 console.log('strict gpu contract tests passed')
