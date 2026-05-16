@@ -429,10 +429,14 @@ function validateGradingCriteriaEvidence(parsedOutput: any, preparationManifest?
     const normalized = artifact.toLowerCase().replace(/\\/g, '/')
     const basename = normalized.split('/').filter(Boolean).pop() || normalized
     const artifactKey = /(^|[.[_])(artifact|artifacts|artifact_path|artifact_paths|path|paths|file|files|filename|filenames|workbench)(]|\.|_|$)/
+    const negativeArtifactKey = /(^|[.[_])(error|errors|missing|failure|failures|failed|not_found|unsaved|absent)(]|\.|_|$)/
+    const negativeArtifactValue = /\b(missing|not found|not_found|failed|failure|error|absent|did not save|not saved|unavailable)\b/
     return flattenedEvidenceEntries.some(({ key, value }) => {
       if (!artifactKey.test(key)) return false
+      if (negativeArtifactKey.test(key) || negativeArtifactValue.test(value)) return false
       const normalizedValue = value.replace(/\\/g, '/')
       return normalizedValue === normalized ||
+        normalizedValue === basename ||
         normalizedValue.endsWith('/' + basename) ||
         normalizedValue.includes('/' + basename + ' ') ||
         normalizedValue.includes('/' + basename + ',') ||

@@ -132,6 +132,28 @@ function testManifestExpectedArtifactsAcceptStructuredArtifactObject() {
 testManifestExpectedArtifactsRejectProseOnlyMentions()
 testManifestExpectedArtifactsAcceptStructuredArtifactObject()
 
+function testManifestExpectedArtifactsRejectNegativeArtifactFields() {
+  const result = assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    success: true,
+    output: JSON.stringify({
+      cuda_available: true,
+      gpu_name: 'Test GPU',
+      tensor_sum: 120,
+      runtime_seconds: 0.02,
+      artifact_error: 'missing metrics.json after validation',
+      artifact_status: 'not saved: metrics.json',
+    }),
+    preparationManifest: manifestWithExpectedArtifacts(['metrics.json']),
+  })
+
+  assert.strictEqual(result.valid, false)
+  assert.match(result.reason, /expected artifacts/)
+  assert.match(result.reason, /metrics\.json/)
+}
+
+testManifestExpectedArtifactsRejectNegativeArtifactFields()
+
 function testSnakeCaseManifestEvidenceAliasesAreEnforced() {
   const result = assessGpuExecutionEvidence({
     stageName: 'Implementation',
