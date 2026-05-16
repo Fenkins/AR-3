@@ -550,6 +550,95 @@ function normalizeCommandContext(parsed: Record<string, any>): string {
   ].filter(Boolean).join('\n')
 }
 
+function findQuotedValueForKey(text: string, key: string): string | null {
+  const keyPattern = new RegExp(`['"]${key}['"]\\s*:`, 'g')
+  let match: RegExpExecArray | null
+  while ((match = keyPattern.exec(text)) !== null) {
+    let index = match.index + match[0].length
+    while (/\s/.test(text[index] || '')) index += 1
+    const quote = text[index]
+    if (quote !== '\'' && quote !== '"') continue
+
+    let value = ''
+    let escaped = false
+    for (let i = index + 1; i < text.length; i++) {
+      const ch = text[i]
+      if (escaped) {
+        value += ch === 'n' ? '\n' : ch === 't' ? '\t' : ch
+        escaped = false
+        continue
+      }
+      if (ch === '\\') {
+        escaped = true
+        continue
+      }
+      if (ch === quote) return value
+      value += ch
+    }
+  }
+  return null
+}
+
+function findStringArrayForKey(text: string, key: string): string[] {
+  const keyPattern = new RegExp(`['"]${key}['"]\\s*:\\s*\\[`, 'g')
+  const match = keyPattern.exec(text)
+  if (!match) return []
+
+  const values: string[] = []
+  let index = match.index + match[0].length
+  while (index < text.length) {
+    while (/[\s,]/.test(text[index] || '')) index += 1
+    if (text[index] === ']') return values
+    const quote = text[index]
+    if (quote !== '\'' && quote !== '"') return values
+
+    let value = ''
+    let escaped = false
+    for (let i = index + 1; i < text.length; i++) {
+      const ch = text[i]
+      if (escaped) {
+        value += ch === 'n' ? '\n' : ch === 't' ? '\t' : ch
+        escaped = false
+        continue
+      }
+      if (ch === '\\') {
+        escaped = true
+        continue
+      }
+      if (ch === quote) {
+        values.push(value)
+        index = i + 1
+        break
+      }
+      value += ch
+    }
+    if (escaped) return values
+  }
+
+  return values
+}
+
+function extractPythonRunCommand(text: string): Record<string, any> | null {
+  const action = findQuotedValueForKey(text, 'action')
+  const code = findQuotedValueForKey(text, 'code')
+  if (action !== 'run_python' || !code?.trim()) return null
+
+  const command: Record<string, any> = { action, code }
+  const dependencies = findStringArrayForKey(text, 'dependencies')
+  if (dependencies.length) command.dependencies = dependencies
+  const installedDependencies = findStringArrayForKey(text, 'installed_dependencies')
+  if (installedDependencies.length) command.installed_dependencies = installedDependencies
+  const modelIds = findStringArrayForKey(text, 'model_ids')
+  if (modelIds.length) command.model_ids = modelIds
+  const modelPaths = findStringArrayForKey(text, 'model_paths')
+  if (modelPaths.length) command.model_paths = modelPaths
+
+  const workbenchReuseKey = findQuotedValueForKey(text, 'workbenchReuseKey')
+  if (workbenchReuseKey) command.workbenchReuseKey = workbenchReuseKey
+
+  return command
+}
+
 function extractExecutableSignatureText(value: string): string | null {
   const text = String(value || '')
   const codeBlock = text.match(/\[CODE\]\s*([\s\S]*?)\s*\[\/CODE\]/i)
@@ -569,6 +658,15 @@ function extractExecutableSignatureText(value: string): string | null {
           .join('\n---COMMAND-CONTEXT---\n')
       }
     } catch {}
+  }
+
+  const pythonCommand = extractPythonRunCommand(text)
+  if (pythonCommand) {
+    const normalizedCode = normalizeCodeText(pythonCommand.code)
+    const normalizedContext = normalizeCommandContext(pythonCommand)
+    return [normalizedCode, normalizedContext]
+      .filter(Boolean)
+      .join('\n---COMMAND-CONTEXT---\n')
   }
 
   return null

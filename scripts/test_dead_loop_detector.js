@@ -213,6 +213,25 @@ const repeatedJsonCommandFailure = (id, dependencies = []) => ({
   }],
 })
 
+const repeatedPythonDictCommandFailure = (id, dependencies = ['torch==2.4.0', 'transformers==4.45.0']) => ({
+  id,
+  stageId: 'stage_3',
+  name: 'Implementation ' + id,
+  status: 'FAILED',
+  failureMode: 'RUNTIME_' + id,
+  feedback: 'GPU worker rejected Python-literal runtime output',
+  steps: [{
+    status: 'FAILED',
+    result: [
+      "{'action': 'run_python',",
+      " 'dependencies': [" + dependencies.map(dep => "'" + dep + "'").join(', ') + "],",
+      " 'model_ids': ['GSAI-ML/LLaDA-8B-Base'],",
+      " 'workbenchReuseKey': 'llada-base',",
+      " 'code': 'import json\\nimport torch\\nprint(json.dumps({\"cuda_available\": torch.cuda.is_available(), \"metric\": 0.1}))'}",
+    ].join('\n'),
+  }],
+})
+
 const repeatedFencedCodeFailure = (id, error, fence = 'python') => ({
   id,
   stageId: 'stage_3',
@@ -339,9 +358,32 @@ const repeatedJsonCommandWithModels = (id, modelContext = {}) => ({
 }
 
 {
+  const first = variantCodeSignature(repeatedPythonDictCommandFailure('a', ['torch==2.4.0', 'transformers==4.45.0']))
+  const second = variantCodeSignature(repeatedPythonDictCommandFailure('b', ['transformers==4.45.0', 'torch==2.4.0']))
+  assert.equal(first, second, 'Python-literal GPU command dependency order should not create a new executable signature')
+}
+
+{
   const first = variantCodeSignature(repeatedJsonCommandFailure('a', ['torch==2.4.0']))
   const second = variantCodeSignature(repeatedJsonCommandFailure('b', ['torch==2.5.0']))
   assert.notEqual(first, second, 'changed dependency pins should reset repeated executable signatures')
+}
+
+{
+  const first = variantCodeSignature(repeatedPythonDictCommandFailure('a', ['torch==2.4.0']))
+  const second = variantCodeSignature(repeatedPythonDictCommandFailure('b', ['torch==2.5.0']))
+  assert.notEqual(first, second, 'changed Python-literal dependency pins should reset repeated executable signatures')
+}
+
+{
+  const assessment = assessDeadLoop([
+    repeatedPythonDictCommandFailure('a'),
+    repeatedPythonDictCommandFailure('b'),
+    repeatedPythonDictCommandFailure('c'),
+  ], 'stage_3')
+  assert.equal(assessment.stuck, true)
+  assert.equal(assessment.repeatedCount, 3)
+  assert.match(assessment.reason, /same normalized executable code signature/)
 }
 
 {
