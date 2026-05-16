@@ -1046,4 +1046,58 @@ const repeatedJsonCommandWithModels = (id, modelContext = {}) => ({
   assert.equal(assessment.stuck, false)
 }
 
+{
+  const workerStatusOnly = JSON.stringify({
+    success: true,
+    exit_code: 0,
+    returncode: 0,
+    status: 'completed',
+    output: 'worker finished successfully',
+  })
+  const completedStatusOnly = (id) => ({
+    id,
+    stageId: 'stage_3',
+    name: `Implementation ${id}`,
+    status: 'COMPLETED',
+    grade: 0,
+    steps: [{ status: 'COMPLETED', result: workerStatusOnly }],
+  })
+
+  assert.equal(
+    variantProgressSignature(completedStatusOnly('a')),
+    null,
+    'worker lifecycle status alone is not research metric evidence'
+  )
+
+  const assessment = assessDeadLoop([
+    completedStatusOnly('a'),
+    completedStatusOnly('b'),
+    completedStatusOnly('c'),
+  ], 'stage_3')
+  assert.equal(assessment.stuck, true)
+  assert.equal(assessment.repeatedSignature, 'completed-without-metric-progress-evidence')
+}
+
+{
+  const wrappedMetrics = JSON.stringify({
+    success: true,
+    exit_code: 0,
+    output: JSON.stringify({
+      cuda_available: true,
+      tensor_sum: 12.5,
+      accuracy: 0.75,
+    }),
+  })
+  assert.ok(
+    variantProgressSignature({
+      id: 'wrapped',
+      stageId: 'stage_3',
+      status: 'COMPLETED',
+      grade: 0,
+      steps: [{ status: 'COMPLETED', result: wrappedMetrics }],
+    }),
+    'worker-wrapped research metrics should remain visible to dead-loop detection'
+  )
+}
+
 console.log('dead-loop detector tests passed')

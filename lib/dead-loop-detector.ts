@@ -148,7 +148,7 @@ function normalizeMetricValue(value: unknown): string | null {
 }
 
 function isEphemeralMetricKey(key: string): boolean {
-  return /(?:^|_)(?:job|run|id|uuid|path|file|artifact|timestamp|created|updated|duration|elapsed|seconds|time_ms|latency_ms)(?:$|_)/i.test(key)
+  return /(?:^|_)(?:job|run|id|uuid|path|file|artifact|timestamp|created|updated|duration|elapsed|seconds|time_ms|latency_ms|success|ok|status|state|exit_code|returncode|return_code)(?:$|_)/i.test(key)
 }
 
 function extractMetricSignatureText(value: string): string | null {
@@ -274,6 +274,23 @@ function looseMetricEntries(text: string): string[] {
   return entries
 }
 
+function isStatusOnlyWorkerOutput(value: string): boolean {
+  const trimmed = String(value || '').trim()
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return false
+  if (extractMetricSignatureText(trimmed)) return false
+
+  for (const candidate of jsonObjectCandidates(trimmed)) {
+    const parsed = parseMetricObjectCandidate(candidate)
+    if (!parsed) continue
+    const keys = Object.keys(parsed).map(key => key.trim().toLowerCase())
+    if (keys.some(key => /^(?:success|ok|status|state|exit_code|returncode|return_code|output|stdout|stderr|error)$/.test(key))) {
+      return true
+    }
+  }
+
+  return false
+}
+
 export function variantFailureSignature(variant: VariantLike): string | null {
   if (variant.status !== 'FAILED') return null
 
@@ -305,6 +322,9 @@ export function variantProgressSignature(variant: VariantLike): string | null {
     .map(step => [step.result, step.feedback].filter(Boolean).join(' '))
     .filter(Boolean)
     .join(' ')
+  if (stepText && completedSteps.every(step => isStatusOnlyWorkerOutput([step.result, step.feedback].filter(Boolean).join(' ')))) {
+    return null
+  }
   const metricText = completedSteps
     .map(step => [step.result, step.feedback].filter(Boolean).join('\n'))
     .map(extractMetricSignatureText)
