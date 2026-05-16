@@ -226,6 +226,27 @@ function testManifestExpectedArtifactsRejectNegativeArtifactFields() {
 
 testManifestExpectedArtifactsRejectNegativeArtifactFields()
 
+function testManifestExpectedArtifactsRejectStatusOnlyMentions() {
+  const result = assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    success: true,
+    output: JSON.stringify({
+      cuda_available: true,
+      gpu_name: 'Test GPU',
+      tensor_sum: 120,
+      runtime_seconds: 0.02,
+      artifact_status: 'saved metrics.json after validation',
+    }),
+    preparationManifest: manifestWithExpectedArtifacts(['metrics.json']),
+  })
+
+  assert.strictEqual(result.valid, false)
+  assert.match(result.reason, /expected artifacts/)
+  assert.match(result.reason, /metrics\.json/)
+}
+
+testManifestExpectedArtifactsRejectStatusOnlyMentions()
+
 function testSnakeCaseManifestEvidenceAliasesAreEnforced() {
   const result = assessGpuExecutionEvidence({
     stageName: 'Implementation',
