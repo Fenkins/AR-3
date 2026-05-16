@@ -99,6 +99,38 @@ const repeatedPythonDictMetricCompletion = (id, accuracy = 0.42, grade = 0) => (
   }],
 })
 
+const repeatedNestedMetricCompletion = (id, loss = 0.31, grade = 0) => ({
+  id,
+  stageId: 'stage_3',
+  name: `Implementation ${id}`,
+  status: 'COMPLETED',
+  grade,
+  feedback: 'No measurable improvement over baseline.',
+  steps: [{
+    status: 'COMPLETED',
+    result: JSON.stringify({
+      metrics: {
+        evaluation: {
+          loss,
+          accuracy: 0.42,
+        },
+        layers: [
+          { cosine_similarity: 0.77 },
+          { cosine_similarity: 0.81 },
+        ],
+        cuda: {
+          available: true,
+          device: 'NVIDIA A100',
+        },
+        runtime: {
+          elapsed_ms: 1000 + id.charCodeAt(0),
+          artifact_path: `/tmp/ar3-workbenches/${id}/metrics.json`,
+        },
+      },
+    }),
+  }],
+})
+
 const completedWithoutProgressEvidence = (id, grade = 0) => ({
   id,
   stageId: 'stage_3',
@@ -525,6 +557,32 @@ const repeatedJsonCommandWithModels = (id, modelContext = {}) => ({
     repeatedPythonDictMetricCompletion('a', 0.42),
     repeatedPythonDictMetricCompletion('b', 0.43),
     repeatedPythonDictMetricCompletion('c', 0.44),
+  ], 'stage_3')
+  assert.equal(assessment.stuck, false)
+}
+
+{
+  const first = variantProgressSignature(repeatedNestedMetricCompletion('a'))
+  const second = variantProgressSignature(repeatedNestedMetricCompletion('b'))
+  assert.equal(first, second, 'nested metrics should create the same progress signature despite noisy nested runtime fields')
+}
+
+{
+  const assessment = assessDeadLoop([
+    repeatedNestedMetricCompletion('a'),
+    repeatedNestedMetricCompletion('b'),
+    repeatedNestedMetricCompletion('c'),
+  ], 'stage_3')
+  assert.equal(assessment.stuck, true)
+  assert.equal(assessment.repeatedCount, 3)
+  assert.match(assessment.reason, /no grade improvement/)
+}
+
+{
+  const assessment = assessDeadLoop([
+    repeatedNestedMetricCompletion('a', 0.31),
+    repeatedNestedMetricCompletion('b', 0.28),
+    repeatedNestedMetricCompletion('c', 0.25),
   ], 'stage_3')
   assert.equal(assessment.stuck, false)
 }

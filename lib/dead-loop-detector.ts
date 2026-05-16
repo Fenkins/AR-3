@@ -128,12 +128,7 @@ function isEphemeralMetricKey(key: string): boolean {
 function extractMetricSignatureText(value: string): string | null {
   const entries: string[] = []
   for (const candidate of metricObjectCandidates(value)) {
-    for (const [key, rawValue] of Object.entries(candidate)) {
-      if (isEphemeralMetricKey(key)) continue
-      const normalizedValue = normalizeMetricValue(rawValue)
-      if (normalizedValue === null) continue
-      entries.push(`${key.trim().toLowerCase()}=${normalizedValue}`)
-    }
+    entries.push(...metricEntriesFromObject(candidate))
   }
 
   for (const entry of looseMetricEntries(value)) {
@@ -142,6 +137,38 @@ function extractMetricSignatureText(value: string): string | null {
 
   const uniqueEntries = Array.from(new Set(entries)).sort()
   return uniqueEntries.length ? uniqueEntries.join('\n') : null
+}
+
+function metricEntriesFromObject(value: Record<string, unknown>, prefix: string = ''): string[] {
+  const entries: string[] = []
+  for (const [rawKey, rawValue] of Object.entries(value)) {
+    const key = rawKey.trim().toLowerCase()
+    if (!key || isEphemeralMetricKey(key)) continue
+
+    const path = prefix ? `${prefix}.${key}` : key
+    const normalizedValue = normalizeMetricValue(rawValue)
+    if (normalizedValue !== null) {
+      entries.push(`${path}=${normalizedValue}`)
+      continue
+    }
+
+    if (Array.isArray(rawValue)) {
+      rawValue.forEach((item, index) => {
+        const itemValue = normalizeMetricValue(item)
+        if (itemValue !== null) {
+          entries.push(`${path}[${index}]=${itemValue}`)
+        } else if (item && typeof item === 'object' && !Array.isArray(item)) {
+          entries.push(...metricEntriesFromObject(item as Record<string, unknown>, `${path}[${index}]`))
+        }
+      })
+      continue
+    }
+
+    if (rawValue && typeof rawValue === 'object') {
+      entries.push(...metricEntriesFromObject(rawValue as Record<string, unknown>, path))
+    }
+  }
+  return entries
 }
 
 function looseMetricEntries(text: string): string[] {
