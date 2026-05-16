@@ -121,7 +121,11 @@ NEXTAUTH_SECRET="$INTERNAL_SECRET"
 INTERNAL_API_SECRET="$INTERNAL_SECRET"
 HF_TOKEN="$HF_TOKEN"
 ENVEOF
-echo ".env written (HF_TOKEN masked: ${HF_TOKEN:0:8}...)"
+if [ -n "$HF_TOKEN" ]; then
+    echo ".env written (HF_TOKEN configured)"
+else
+    echo ".env written (HF_TOKEN not configured)"
+fi
 
 # ── 9. Database setup ───────────────────────────────────────────────────────────
 echo "[9/14] Setting up database..."
@@ -210,9 +214,7 @@ echo "=== AR-3 Setup Complete ==="
 echo "Date: $(date)"
 echo "Public URL: ${TUNNEL_URL:-pending}"
 echo ""
-echo "Admin credentials (change these!):"
-echo "  Email: admin@example.com"
-echo "  Password: jkp93p"
+echo "Admin credentials are initialized from the seed data; rotate them after first login."
 echo ""
 
 # Save status
