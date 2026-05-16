@@ -67,6 +67,8 @@ const VAGUE_GRADING_CRITERIA = new Set([
 const SMOKE_TEST_EXECUTABLES = new Set(['python', 'python3', 'pytest', 'node', 'npm', 'npx', 'bash', 'sh', 'nvidia-smi'])
 const PROSE_COMMAND_MARKERS = /\b(?:please|should|could|would|try to|somehow|maybe|probably|manually|then inspect|as needed)\b/i
 const DESTRUCTIVE_COMMAND_MARKERS = /\b(?:rm\s+-rf|mkfs|shutdown|reboot|poweroff|halt|dd\s+if=|:>\s*\/)\b/i
+const EPHEMERAL_PATH_MARKERS = /^(?:\/tmp\/|\/var\/tmp\/|\/dev\/shm\/|file:\/\/)/i
+const PATH_TRAVERSAL_MARKERS = /(?:^|\/)\.\.(?:\/|$)/
 const GRADING_ANCHOR_STOPWORDS = new Set([
   'and',
   'are',
@@ -150,6 +152,21 @@ function validSmokeTestCommand(command: string): boolean {
   if (PROSE_COMMAND_MARKERS.test(trimmed)) return false
   if (DESTRUCTIVE_COMMAND_MARKERS.test(trimmed)) return false
   return commandStartsWithExecutable(trimmed)
+}
+
+function validWorkbenchReuseKey(value: string): boolean {
+  const trimmed = value.trim()
+  if (trimmed.length < 3 || trimmed.length > 80) return false
+  if (EPHEMERAL_PATH_MARKERS.test(trimmed) || PATH_TRAVERSAL_MARKERS.test(trimmed)) return false
+  return /^[a-z0-9][a-z0-9._-]*[a-z0-9]$/i.test(trimmed)
+}
+
+function validExpectedArtifactName(value: string): boolean {
+  const trimmed = value.trim()
+  if (trimmed.length < 3 || trimmed.length > 160) return false
+  if (EPHEMERAL_PATH_MARKERS.test(trimmed) || PATH_TRAVERSAL_MARKERS.test(trimmed)) return false
+  if (/^[a-z]+:\/\//i.test(trimmed)) return false
+  return /^[A-Za-z0-9][A-Za-z0-9._\/-]*$/.test(trimmed)
 }
 
 function pushStringError(errors: string[], path: string, value: unknown) {
@@ -327,11 +344,16 @@ export function validatePreparationManifest(value: unknown): PreparationManifest
   if (!isPlainObject(value.workbench)) {
     errors.push('workbench must be an object')
   } else {
-    pushStringError(errors, 'workbench.reuseKey', value.workbench.reuseKey)
+    if (!nonEmptyString(value.workbench.reuseKey) || !validWorkbenchReuseKey(value.workbench.reuseKey)) {
+      errors.push('workbench.reuseKey must be a stable slug, not a temp path, URL, traversal path, or vague placeholder')
+    }
     if (!Array.isArray(value.workbench.expectedArtifacts) || !value.workbench.expectedArtifacts.every(nonEmptyString)) {
       errors.push('workbench.expectedArtifacts must be an array of artifact names')
     } else {
       for (const artifact of value.workbench.expectedArtifacts) {
+        if (!validExpectedArtifactName(String(artifact))) {
+          errors.push('workbench.expectedArtifacts must contain stable relative artifact names, not temp paths, URLs, or traversal paths')
+        }
         evidenceAnchorTokens(String(artifact)).forEach(token => evidenceAnchors.add(token))
       }
     }

@@ -214,4 +214,26 @@ function validManifest(overrides = {}) {
   assert(result.errors.some((e) => e.includes('gradingCriteria[0]') && e.includes('smokeTests.expectedEvidence')), result.errors.join('\n'))
 }
 
+{
+  const result = validatePreparationManifest(validManifest({
+    workbench: {
+      reuseKey: '/tmp/ar3-workbenches/run-123',
+      expectedArtifacts: ['metrics.json'],
+    },
+  }))
+  assert.equal(result.ok, false)
+  assert(result.errors.some((e) => e.includes('workbench.reuseKey') && e.includes('stable slug')), result.errors.join('\n'))
+}
+
+{
+  const result = validatePreparationManifest(validManifest({
+    workbench: {
+      reuseKey: 'llada-base',
+      expectedArtifacts: ['/tmp/ar3-workbenches/run-123/metrics.json', '../stdout.log'],
+    },
+  }))
+  assert.equal(result.ok, false)
+  assert(result.errors.some((e) => e.includes('workbench.expectedArtifacts') && e.includes('stable relative')), result.errors.join('\n'))
+}
+
 console.log('preparation manifest tests passed')
