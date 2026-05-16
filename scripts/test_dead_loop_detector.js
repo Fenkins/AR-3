@@ -232,6 +232,24 @@ const repeatedPythonDictCommandFailure = (id, dependencies = ['torch==2.4.0', 't
   }],
 })
 
+const repeatedPythonDictCommandWithManifest = (id, manifestContext = {}) => ({
+  id,
+  stageId: 'stage_3',
+  name: 'Implementation ' + id,
+  status: 'FAILED',
+  failureMode: 'RUNTIME_' + id,
+  feedback: 'GPU worker rejected Python-literal runtime output with manifest context',
+  steps: [{
+    status: 'FAILED',
+    result: [
+      "{'action': 'run_python',",
+      " 'dependencies': [],",
+      " 'preparation_manifest': " + JSON.stringify(manifestContext).replace(/\"/g, "'") + ',',
+      " 'code': 'import json\\nimport torch\\nprint(json.dumps({\"cuda_available\": torch.cuda.is_available(), \"metric\": 0.1}))'}",
+    ].join('\n'),
+  }],
+})
+
 const repeatedFencedCodeFailure = (id, error, fence = 'python') => ({
   id,
   stageId: 'stage_3',
@@ -384,6 +402,34 @@ const repeatedJsonCommandWithModels = (id, modelContext = {}) => ({
   assert.equal(assessment.stuck, true)
   assert.equal(assessment.repeatedCount, 3)
   assert.match(assessment.reason, /same normalized executable code signature/)
+}
+
+{
+  const first = variantCodeSignature(repeatedPythonDictCommandWithManifest('a', {
+    models: [{ id: 'GSAI-ML/LLaDA-8B-Base', source: 'huggingface' }],
+    dependencies: [{ name: 'torch', versionSpec: '==2.4.0', importName: 'torch' }],
+    workbench: { reuseKey: 'llada-base' },
+  }))
+  const second = variantCodeSignature(repeatedPythonDictCommandWithManifest('b', {
+    dependencies: [{ importName: 'torch', versionSpec: '==2.4.0', name: 'torch' }],
+    models: [{ source: 'huggingface', id: 'GSAI-ML/LLaDA-8B-Base' }],
+    workbench: { reuseKey: 'llada-base' },
+  }))
+  assert.equal(first, second, 'Python-literal nested manifest context should normalize order')
+}
+
+{
+  const first = variantCodeSignature(repeatedPythonDictCommandWithManifest('a', {
+    models: [{ id: 'GSAI-ML/LLaDA-8B-Base', source: 'huggingface' }],
+    dependencies: [{ name: 'torch', versionSpec: '==2.4.0', importName: 'torch' }],
+    workbench: { reuseKey: 'llada-base' },
+  }))
+  const second = variantCodeSignature(repeatedPythonDictCommandWithManifest('b', {
+    models: [{ id: 'Dream-org/Dream-v0-Base', source: 'huggingface' }],
+    dependencies: [{ name: 'torch', versionSpec: '==2.4.0', importName: 'torch' }],
+    workbench: { reuseKey: 'dream-base' },
+  }))
+  assert.notEqual(first, second, 'changed Python-literal nested manifest context should reset repeated executable signatures')
 }
 
 {

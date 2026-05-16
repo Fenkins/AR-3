@@ -102,12 +102,38 @@ function parseMetricObjectCandidate(objectText: string): Record<string, unknown>
 function pythonLiteralObjectToJson(objectText: string): string | null {
   const source = String(objectText || '').trim()
   if (!source.startsWith('{') || !source.endsWith('}')) return null
-  if (/[^\s\w{}\[\],.:+\/\'"-]/.test(source)) return null
+  if (hasUnsafePythonLiteralSyntax(source)) return null
   return source
     .replace(/'([^'\\]*(?:\\.[^'\\]*)*)'/g, (_, value) => JSON.stringify(value.replace(/\\'/g, "'")))
     .replace(/\bTrue\b/g, 'true')
     .replace(/\bFalse\b/g, 'false')
     .replace(/\bNone\b/g, 'null')
+}
+
+function hasUnsafePythonLiteralSyntax(source: string): boolean {
+  let inString: '\'' | '"' | null = null
+  let escaped = false
+
+  for (const ch of source) {
+    if (inString) {
+      if (escaped) {
+        escaped = false
+      } else if (ch === '\\') {
+        escaped = true
+      } else if (ch === inString) {
+        inString = null
+      }
+      continue
+    }
+
+    if (ch === '\'' || ch === '"') {
+      inString = ch
+      continue
+    }
+    if (!/[\s\w{}\[\],.:+\/\-<>=~!]/.test(ch)) return true
+  }
+
+  return Boolean(inString || escaped)
 }
 
 function normalizeMetricValue(value: unknown): string | null {
@@ -710,7 +736,16 @@ function extractExecutableSignatureText(value: string): string | null {
           .filter(Boolean)
           .join('\n---COMMAND-CONTEXT---\n')
       }
-    } catch {}
+    } catch {
+      const parsed = parseMetricObjectCandidate(candidate)
+      if (parsed?.action === 'run_python' && typeof parsed.code === 'string' && parsed.code.trim()) {
+        const normalizedCode = normalizeCodeText(parsed.code)
+        const normalizedContext = normalizeCommandContext(parsed)
+        return [normalizedCode, normalizedContext]
+          .filter(Boolean)
+          .join('\n---COMMAND-CONTEXT---\n')
+      }
+    }
   }
 
   const pythonCommand = extractPythonRunCommand(text)
