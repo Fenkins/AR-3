@@ -73,6 +73,7 @@ const VAGUE_GRADING_CRITERIA = new Set([
   'interesting',
 ])
 const SMOKE_TEST_EXECUTABLES = new Set(['python', 'python3', 'pytest', 'node', 'npm', 'npx', 'bash', 'sh', 'nvidia-smi'])
+const RESOURCE_KINDS = new Set(['gpu', 'dataset', 'file', 'service', 'web', 'other'])
 const PROSE_COMMAND_MARKERS = /\b(?:please|should|could|would|try to|somehow|maybe|probably|manually|then inspect|as needed)\b/i
 const DESTRUCTIVE_COMMAND_MARKERS = /\b(?:rm\s+-rf|mkfs|shutdown|reboot|poweroff|halt|dd\s+if=|:>\s*\/)\b/i
 const EPHEMERAL_PATH_MARKERS = /^(?:\/tmp\/|\/var\/tmp\/|\/dev\/shm\/|file:\/\/)/i
@@ -224,9 +225,10 @@ function normalizePreparationManifest(value: Record<string, unknown>): Record<st
   if (Array.isArray(normalized.resources)) {
     normalized.resources = normalized.resources.map((resource: unknown) => {
       if (!isPlainObject(resource)) return resource
+      const kind = resource.kind ?? (RESOURCE_KINDS.has(String(resource.resourceType)) ? resource.resourceType : 'other')
       return {
         ...resource,
-        kind: resource.kind ?? resource.resourceType ?? 'other',
+        kind,
         name: resource.name ?? resource.specification ?? resource.resourceType ?? 'resource',
         required: typeof resource.required === 'boolean' ? resource.required : true,
       }
@@ -344,6 +346,9 @@ export function validatePreparationManifest(value: unknown): PreparationManifest
     if (!isPlainObject(resource)) {
       errors.push(`resources[${i}] must be an object`)
       return
+    }
+    if (!RESOURCE_KINDS.has(String(resource.kind))) {
+      errors.push(`resources[${i}].kind must be one of gpu, dataset, file, service, web, other`)
     }
     pushStringError(errors, `resources[${i}].name`, resource.name)
     pushStringError(errors, `resources[${i}].purpose`, resource.purpose)

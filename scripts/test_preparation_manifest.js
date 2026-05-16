@@ -98,6 +98,7 @@ function validManifest(overrides = {}) {
   assert.equal(result.manifest.models[0].id, 'GSAI-Research/LLaDA-8B-Base')
   assert.equal(result.manifest.models[0].source, 'huggingface')
   assert.equal(result.manifest.dependencies[0].name, 'torch>=2.0.0')
+  assert.equal(result.manifest.resources[0].kind, 'other')
   assert.equal(result.manifest.smokeTests[0].command, 'python -c "print(1)"')
 }
 
@@ -130,6 +131,14 @@ function validManifest(overrides = {}) {
   assert.equal(result.ok, false)
   assert(result.errors.some((e) => e.includes('gradingCriteria[0]')), result.errors.join('\n'))
   assert(result.errors.some((e) => e.includes('concrete evidence')), result.errors.join('\n'))
+}
+
+{
+  const result = validatePreparationManifest(validManifest({
+    resources: [{ kind: 'banana', name: 'cuda', purpose: 'execute smoke tests', required: true }],
+  }))
+  assert.equal(result.ok, false)
+  assert(result.errors.some((e) => e.includes('resources[0].kind')), result.errors.join('\n'))
 }
 
 {
