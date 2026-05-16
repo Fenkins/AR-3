@@ -190,7 +190,12 @@ function metricEntryFromNamedRow(value: Record<string, unknown>, prefix: string 
   )
   if (!rawName) return null
 
-  const rawMetricValue = value.value ?? value.score ?? value.result ?? value.measurement
+  const rawMetricValue = value.value
+    ?? value.metricValue
+    ?? value.metric_value
+    ?? value.score
+    ?? value.result
+    ?? value.measurement
   const normalizedValue = normalizeMetricValue(rawMetricValue)
   if (normalizedValue === null) return null
 

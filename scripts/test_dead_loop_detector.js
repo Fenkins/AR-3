@@ -816,6 +816,26 @@ const repeatedJsonCommandWithModels = (id, modelContext = {}) => ({
 }
 
 {
+  const first = variantProgressSignature(repeatedNamedMetricRowCompletion('a', [
+    { metric_name: 'accuracy', metric_value: 0.42 },
+  ]))
+  const second = variantProgressSignature(repeatedNamedMetricRowCompletion('b', [
+    { metric_name: 'loss', metric_value: 0.42 },
+  ]))
+  assert.notEqual(first, second, 'metric_name/metric_value rows should keep the metric identity')
+}
+
+{
+  const first = variantProgressSignature(repeatedNamedMetricRowCompletion('a', [
+    { metricName: 'accuracy', metricValue: 0.42 },
+  ]))
+  const second = variantProgressSignature(repeatedNamedMetricRowCompletion('b', [
+    { metricName: 'accuracy', metricValue: 0.42 },
+  ]))
+  assert.equal(first, second, 'metricName/metricValue rows should create stable progress signatures')
+}
+
+{
   const assessment = assessDeadLoop([
     repeatedNamedMetricRowCompletion('a', [{ name: 'accuracy', value: 0.42 }]),
     repeatedNamedMetricRowCompletion('b', [{ name: 'accuracy', value: 0.42 }]),
