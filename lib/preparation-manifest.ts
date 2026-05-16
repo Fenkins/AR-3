@@ -435,9 +435,11 @@ export function validatePreparationManifest(value: unknown): PreparationManifest
   if (successCriteria.length > 0) {
     successCriteria.forEach((criterion, i) => {
       if (!isPlainObject(criterion)) return
-      const successText = [criterion.metric, criterion.evidence].filter(nonEmptyString).join(' ')
-      if (successText && !gradingCriterionHasEvidenceAnchor(successText, evidenceAnchors)) {
-        errors.push(`successCriteria[${i}] must reference evidence named by smokeTests.expectedEvidence or workbench.expectedArtifacts`)
+      if (nonEmptyString(criterion.metric) && !gradingCriterionHasEvidenceAnchor(criterion.metric, evidenceAnchors)) {
+        errors.push(`successCriteria[${i}].metric must reference evidence named by smokeTests.expectedEvidence or workbench.expectedArtifacts`)
+      }
+      if (nonEmptyString(criterion.evidence) && !gradingCriterionHasEvidenceAnchor(criterion.evidence, evidenceAnchors)) {
+        errors.push(`successCriteria[${i}].evidence must reference evidence named by smokeTests.expectedEvidence or workbench.expectedArtifacts`)
       }
     })
   }

@@ -277,4 +277,24 @@ function validManifest(overrides = {}) {
   assert(result.errors.some((e) => e.includes('successCriteria[0]') && e.includes('smokeTests.expectedEvidence')), result.errors.join('\n'))
 }
 
+{
+  const result = validatePreparationManifest(validManifest({
+    smokeTests: [{
+      name: 'cuda-grounded-threshold',
+      command: 'python smoke_test.py',
+      expectedEvidence: ['cuda_available'],
+      timeoutSeconds: 300,
+    }],
+    gradingCriteria: ['stdout contains cuda_available evidence'],
+    successCriteria: [{
+      name: 'ungrounded accuracy threshold',
+      metric: 'accuracy',
+      threshold: '>= 0.75',
+      evidence: 'cuda_available',
+    }],
+  }))
+  assert.equal(result.ok, false)
+  assert(result.errors.some((e) => e.includes('successCriteria[0].metric') && e.includes('smokeTests.expectedEvidence')), result.errors.join('\n'))
+}
+
 console.log('preparation manifest tests passed')
