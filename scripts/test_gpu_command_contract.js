@@ -247,6 +247,55 @@ function testManifestExpectedArtifactsRejectStatusOnlyMentions() {
 
 testManifestExpectedArtifactsRejectStatusOnlyMentions()
 
+function testManifestExpectedArtifactsRejectNegativeStructuredSibling() {
+  const result = assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    success: true,
+    output: JSON.stringify({
+      cuda_available: true,
+      gpu_name: 'Test GPU',
+      tensor_sum: 120,
+      runtime_seconds: 0.02,
+      artifacts: [
+        {
+          path: '/tmp/ar3-workbenches/negative-sibling/metrics.json',
+          exists: false,
+        },
+      ],
+    }),
+    preparationManifest: manifestWithExpectedArtifacts(['metrics.json']),
+  })
+
+  assert.strictEqual(result.valid, false)
+  assert.match(result.reason, /expected artifacts/)
+  assert.match(result.reason, /metrics\.json/)
+}
+
+function testManifestExpectedArtifactsAcceptPositiveStructuredSibling() {
+  const result = assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    success: true,
+    output: JSON.stringify({
+      cuda_available: true,
+      gpu_name: 'Test GPU',
+      tensor_sum: 120,
+      runtime_seconds: 0.02,
+      artifacts: [
+        {
+          path: '/tmp/ar3-workbenches/positive-sibling/metrics.json',
+          exists: true,
+        },
+      ],
+    }),
+    preparationManifest: manifestWithExpectedArtifacts(['metrics.json']),
+  })
+
+  assert.strictEqual(result.valid, true, result.reason)
+}
+
+testManifestExpectedArtifactsRejectNegativeStructuredSibling()
+testManifestExpectedArtifactsAcceptPositiveStructuredSibling()
+
 function testSnakeCaseManifestEvidenceAliasesAreEnforced() {
   const result = assessGpuExecutionEvidence({
     stageName: 'Implementation',
