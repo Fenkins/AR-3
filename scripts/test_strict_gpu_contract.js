@@ -356,6 +356,47 @@ function testManifestCriteriaAcceptHyphenatedMetricAgainstUnderscoreField() {
   assert.equal(assessed.valid, true, assessed.reason)
 }
 
+function testManifestSuccessCriteriaRejectMissingEvidence() {
+  const assessed = contract.assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    fallbackUsed: false,
+    success: true,
+    preparationManifest: {
+      success_criteria: [
+        { name: 'trajectory quality', metric: 'trajectory_cosine_similarity', evidence: 'research_metrics.trajectory_cosine_similarity' },
+      ],
+    },
+    output: JSON.stringify({
+      cuda_available: true,
+      gpu_name: 'RTX 3060',
+      runtime_seconds: 2.4,
+      tensor_sum: 123.0,
+    }),
+  })
+  assert.equal(assessed.valid, false)
+  assert.match(assessed.reason, /trajectory_cosine_similarity/)
+}
+
+function testManifestSuccessCriteriaAcceptConcreteEvidence() {
+  const assessed = contract.assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    fallbackUsed: false,
+    success: true,
+    preparationManifest: {
+      success_criteria: [
+        { name: 'trajectory quality', metric: 'trajectory_cosine_similarity', evidence: 'research_metrics.trajectory_cosine_similarity' },
+      ],
+    },
+    output: JSON.stringify({
+      cuda_available: true,
+      gpu_name: 'RTX 3060',
+      research_metrics: { trajectory_cosine_similarity: 0.993 },
+      runtime_seconds: 2.4,
+    }),
+  })
+  assert.equal(assessed.valid, true, assessed.reason)
+}
+
 function testManifestSmokeExpectedEvidenceRejectsMissingField() {
   const assessed = contract.assessGpuExecutionEvidence({
     stageName: 'Implementation',
@@ -785,6 +826,8 @@ testManifestCriteriaRejectMissingPlainMetricEvidence()
 testManifestCriteriaAcceptPlainMetricEvidence()
 testManifestCriteriaRejectHyphenatedMetricWithoutEvidence()
 testManifestCriteriaAcceptHyphenatedMetricAgainstUnderscoreField()
+testManifestSuccessCriteriaRejectMissingEvidence()
+testManifestSuccessCriteriaAcceptConcreteEvidence()
 testCpuOnlyJsonMetricsAreNotValidGpuEvidence()
 testFalseCudaAvailabilityIsNotRuntimeGpuEvidence()
 testGpuIdentityCanValidateRuntimeEvidenceWhenTorchCudaIsFalse()
