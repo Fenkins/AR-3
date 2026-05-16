@@ -603,6 +603,30 @@ const repeatedJsonCommandWithModels = (id, modelContext = {}) => ({
 
 {
   const first = variantCodeSignature(repeatedJsonCommandWithModels('a', {
+    dependencies: [],
+    preparation_manifest: {
+      dependencies: [
+        { package: 'transformers', version_spec: '>=4.45.0', import_name: 'transformers' },
+        { pip_package: 'accelerate', version: '>=0.34.0', import: 'accelerate' },
+      ],
+      workbench: { reuse_key: 'shared-workbench' },
+    },
+  }))
+  const second = variantCodeSignature(repeatedJsonCommandWithModels('b', {
+    dependencies: [],
+    preparation_manifest: {
+      dependencies: [
+        { pip_package: 'accelerate', version: '>=0.34.0', import: 'accelerate' },
+        { package: 'transformers', version_spec: '>=4.46.0', import_name: 'transformers' },
+      ],
+      workbench: { reuse_key: 'shared-workbench' },
+    },
+  }))
+  assert.notEqual(first, second, 'changed snake_case dependency specs should reset repeated executable signatures')
+}
+
+{
+  const first = variantCodeSignature(repeatedJsonCommandWithModels('a', {
     preparation_manifest: {
       smokeTests: [
         { name: 'model-smoke', command: 'python smoke_model.py', expectedEvidence: ['model_or_error', 'cuda_available'] },
@@ -621,6 +645,28 @@ const repeatedJsonCommandWithModels = (id, modelContext = {}) => ({
     },
   }))
   assert.equal(first, second, 'smoke test and artifact order should not create a new executable signature')
+}
+
+{
+  const first = variantCodeSignature(repeatedJsonCommandWithModels('a', {
+    preparation_manifest: {
+      models: [{ model_id: 'GSAI-ML/LLaDA-8B-Base', local_path: '/models/llada' }],
+      smoke_tests: [
+        { name: 'model-smoke', command: 'python smoke_model.py', expected_evidence: ['model_or_error', 'cuda_available'] },
+      ],
+      workbench: { reuse_key: 'shared-workbench', expected_artifacts: ['metrics.json'] },
+    },
+  }))
+  const second = variantCodeSignature(repeatedJsonCommandWithModels('b', {
+    preparation_manifest: {
+      models: [{ model_id: 'GSAI-ML/LLaDA-8B-Base', local_path: '/models/llada-v2' }],
+      smoke_tests: [
+        { name: 'model-smoke', command: 'python smoke_model_v2.py', expected_evidence: ['cuda_available', 'model_or_error'] },
+      ],
+      workbench: { reuse_key: 'shared-workbench', expected_artifacts: ['metrics.json'] },
+    },
+  }))
+  assert.notEqual(first, second, 'changed snake_case model path and smoke-test command should reset repeated executable signatures')
 }
 
 {

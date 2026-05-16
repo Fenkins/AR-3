@@ -467,10 +467,10 @@ function collectDependencyContext(value: unknown): string[] {
     }
     if (!dependency || typeof dependency !== 'object') continue
     const row = dependency as Record<string, any>
-    const name = firstString(row.name, row.package, row.pip, row.pipPackage)
+    const name = firstString(row.name, row.package, row.pip, row.pipPackage, row.pip_package)
     if (!name) continue
-    const versionSpec = firstString(row.versionSpec, row.version, row.constraint)
-    const importName = firstString(row.importName, row.import)
+    const versionSpec = firstString(row.versionSpec, row.version_spec, row.version, row.constraint)
+    const importName = firstString(row.importName, row.import_name, row.import)
     dependencies.push([
       name,
       versionSpec ? `version=${versionSpec}` : '',
@@ -541,7 +541,7 @@ function collectModelContext(value: unknown): string[] {
         values.push(model)
       } else if (model && typeof model === 'object') {
         const row = model as Record<string, any>
-        for (const key of ['id', 'model_id', 'modelId', 'repo', 'repo_id', 'repoId', 'path', 'localPath']) {
+        for (const key of ['id', 'model_id', 'modelId', 'repo', 'repo_id', 'repoId', 'path', 'localPath', 'local_path']) {
           if (typeof row[key] === 'string') values.push(row[key])
         }
       }
@@ -562,10 +562,11 @@ function collectModelContext(value: unknown): string[] {
 function collectSmokeTestContext(value: unknown): string[] {
   if (!value || typeof value !== 'object') return []
   const source = value as Record<string, any>
-  if (!Array.isArray(source.smokeTests)) return []
+  const smokeTests = source.smokeTests || source.smoke_tests
+  if (!Array.isArray(smokeTests)) return []
 
   const values: string[] = []
-  for (const test of source.smokeTests) {
+  for (const test of smokeTests) {
     if (typeof test === 'string') {
       values.push(test)
       continue
@@ -575,7 +576,9 @@ function collectSmokeTestContext(value: unknown): string[] {
     const command = firstString(row.command, row.test)
     const evidence = Array.isArray(row.expectedEvidence)
       ? normalizeStringList(row.expectedEvidence)
-      : firstString(row.expectedEvidence)
+      : Array.isArray(row.expected_evidence)
+        ? normalizeStringList(row.expected_evidence)
+        : firstString(row.expectedEvidence, row.expected_evidence)
     values.push([
       firstString(row.name),
       command ? `command=${command}` : '',
