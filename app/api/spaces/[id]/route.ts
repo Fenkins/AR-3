@@ -21,6 +21,7 @@ import {
   runLoopBackground,
   runThinkingSetupBackground,
 } from '@/lib/research-engine'
+import { getSpaceCacheSize } from '@/lib/model-cache'
 
 export async function GET(
   request: NextRequest,
@@ -37,8 +38,7 @@ export async function GET(
       },
       include: {
         Experiment: {
-          orderBy: { createdAt: 'desc' },
-          take: 50,
+          orderBy: [{ cycleNumber: 'desc' }, { createdAt: 'desc' }],
         },
         Breakthrough: {
           orderBy: { createdAt: 'desc' },
@@ -75,9 +75,10 @@ export async function GET(
     const executionVariants = executionState?.variants || []
     const mergedVariants = (dbVariants.length > 0 ? dbVariants : executionVariants).map(normalizeVariantForClient)
     const clientSpace = normalizeSpaceForClient(space)
+    const cacheSize = await getSpaceCacheSize(params.id)
 
     return NextResponse.json({
-      space: { ...clientSpace, variants: mergedVariants },
+      space: { ...clientSpace, variants: mergedVariants, cacheSize },
       stages,
       execution: { ...executionState, variants: mergedVariants },
       isRunning: executionState?.isRunning ?? (space.status === 'RUNNING'),

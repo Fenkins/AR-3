@@ -18,6 +18,7 @@ export async function GET(request: NextRequest) {
             id: true,
             phase: true,
             status: true,
+            cycleNumber: true,
             tokensUsed: true,
             cost: true,
             createdAt: true,

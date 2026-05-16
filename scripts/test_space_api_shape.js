@@ -45,19 +45,26 @@ const { removeSpaceWorkbenchDirs } = loadTs('lib/space-cleanup.ts')
   const dbSpace = {
     id: 'space-1',
     name: 'Fresh test space',
-    Experiment: [{ id: 'exp-1' }],
+    currentCycle: 50,
+    Experiment: [
+      { id: 'exp-1', phase: 'IMPLEMENTATION', status: 'COMPLETED', cycleNumber: 1 },
+      { id: 'exp-2', phase: 'EVALUATION', status: 'FAILED', cycleNumber: 1 },
+    ],
     Breakthrough: [{ id: 'break-1' }],
-    Variant: [{ id: 'variant-3', VariantStep: [{ id: 'step-3' }] }],
+    Variant: [{ id: 'variant-3', cycleNumber: 1, VariantStep: [{ id: 'step-3' }] }],
     _count: { Experiment: 12, Breakthrough: 2, ModelCache: 5 },
   }
   const normalized = normalizeSpaceForClient(dbSpace)
-  assert.deepEqual(normalized.experiments.map(e => e.id), ['exp-1'])
+  assert.deepEqual(normalized.experiments.map(e => e.id), ['exp-1', 'exp-2'])
   assert.deepEqual(normalized.breakthroughs.map(b => b.id), ['break-1'])
   assert.deepEqual(normalized.variants.map(v => v.id), ['variant-3'])
   assert.deepEqual(normalized.variants[0].steps.map(s => s.id), ['step-3'])
   assert.equal(normalized._count.experiments, 12)
   assert.equal(normalized._count.breakthroughs, 2)
   assert.equal(normalized._count.modelCaches, 5)
+  assert.equal(normalized.displayCycle, 1)
+  assert.equal(normalized.completedCycleCount, 0)
+  assert.equal(normalized.cycleSummary.persistedCurrentCycle, 50)
 }
 
 {

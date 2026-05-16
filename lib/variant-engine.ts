@@ -169,6 +169,8 @@ async function searchModels(query: string, limit = 5): Promise<DiscoveredModel[]
 export interface Variant {
   id: string
   stageId: string
+  stageName?: string
+  cycleNumber?: number
   name: string
   description: string
   steps: Step[]

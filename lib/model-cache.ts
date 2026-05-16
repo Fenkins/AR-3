@@ -203,9 +203,9 @@ export async function removeFromCache(id: string): Promise<void> {
   const entry = await prisma.modelCache.findUnique({ where: { id } })
   if (!entry) return
   
-  // Delete file from disk
+  // Delete file or downloaded snapshot directory from disk.
   if (fs.existsSync(entry.filePath)) {
-    fs.unlinkSync(entry.filePath)
+    fs.rmSync(entry.filePath, { recursive: true, force: true })
   }
   
   // Delete from database
@@ -215,21 +215,17 @@ export async function removeFromCache(id: string): Promise<void> {
 export async function clearSpaceCache(spaceId: string): Promise<void> {
   const entries = await prisma.modelCache.findMany({ where: { spaceId } })
   
-  // Delete all files from disk
+  // Delete all files/snapshot directories from disk
   for (const entry of entries) {
     if (fs.existsSync(entry.filePath)) {
-      fs.unlinkSync(entry.filePath)
+      fs.rmSync(entry.filePath, { recursive: true, force: true })
     }
   }
   
   // Remove space cache directory if empty
   const spaceDir = getSpaceCacheDir(spaceId)
   if (fs.existsSync(spaceDir)) {
-    try {
-      fs.rmdirSync(spaceDir)
-    } catch {
-      // Directory not empty, ignore
-    }
+    fs.rmSync(spaceDir, { recursive: true, force: true })
   }
   
   // Delete from database
