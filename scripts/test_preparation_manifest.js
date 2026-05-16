@@ -159,13 +159,13 @@ function validManifest(overrides = {}) {
     smokeTests: [{
       name: 'vague-evidence',
       command: 'python smoke_test.py',
-      expectedEvidence: ['better results'],
+      expectedEvidence: ['better results', 'interesting'],
       timeoutSeconds: 300,
     }],
     gradingCriteria: ['stdout contains concrete metric evidence'],
   }))
   assert.equal(result.ok, false)
-  assert(result.errors.some((e) => e.includes('smokeTests[0].expectedEvidence') && e.includes('vague')), result.errors.join('\n'))
+  assert(result.errors.some((e) => e.includes('smokeTests[0].expectedEvidence') && e.includes('concrete evidence')), result.errors.join('\n'))
 }
 
 {

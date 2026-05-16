@@ -373,7 +373,8 @@ export function validatePreparationManifest(value: unknown): PreparationManifest
     } else {
       for (const item of test.expectedEvidence) {
         if (!validEvidenceField(String(item))) {
-          errors.push(`smokeTests[${i}].expectedEvidence must list concrete evidence fields, not vague placeholders`)
+          errors.push(`smokeTests[${i}].expectedEvidence must list concrete evidence fields, metrics, artifacts, stdout/stderr facts, or precise failure evidence`)
+          break
         }
         evidenceAnchorTokens(String(item)).forEach(token => evidenceAnchors.add(token))
       }
