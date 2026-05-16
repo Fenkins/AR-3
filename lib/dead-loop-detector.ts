@@ -460,6 +460,49 @@ function collectSmokeTestContext(value: unknown): string[] {
   return values
 }
 
+function collectGradingContext(value: unknown): string[] {
+  if (!value || typeof value !== 'object') return []
+  const source = value as Record<string, any>
+  const values: string[] = []
+
+  for (const key of ['gradingCriteria', 'grading_criteria', 'evaluationCriteria', 'evaluation_criteria']) {
+    const criteria = source[key]
+    if (!Array.isArray(criteria)) continue
+    for (const criterion of criteria) {
+      if (typeof criterion === 'string') {
+        const normalized = normalizeProgressText(criterion)
+        if (normalized) values.push(normalized)
+        continue
+      }
+      if (!criterion || typeof criterion !== 'object') continue
+      const row = criterion as Record<string, any>
+      const text = firstString(row.name, row.criterion, row.description, row.evidence, row.metric, row.field)
+      const normalized = normalizeProgressText(text || '')
+      if (normalized) values.push(normalized)
+    }
+  }
+
+  for (const key of ['successCriteria', 'success_criteria']) {
+    const criteria = source[key]
+    if (!Array.isArray(criteria)) continue
+    for (const criterion of criteria) {
+      if (!criterion || typeof criterion !== 'object') continue
+      const row = criterion as Record<string, any>
+      const normalized = [
+        firstString(row.name) ? `name=${normalizeProgressText(firstString(row.name) || '')}` : '',
+        firstString(row.metric) ? `metric=${normalizeProgressText(firstString(row.metric) || '')}` : '',
+        firstString(row.threshold) ? `threshold=${normalizeProgressText(firstString(row.threshold) || '')}` : '',
+        firstString(row.evidence, row.expectedEvidence, row.expected_evidence, row.field)
+          ? `evidence=${normalizeProgressText(firstString(row.evidence, row.expectedEvidence, row.expected_evidence, row.field) || '')}`
+          : '',
+      ].filter(Boolean).join('|')
+      if (normalized) values.push(normalized)
+    }
+  }
+
+  return values
+}
+
 function normalizeWorkbenchContext(value: unknown): string {
   if (!value || typeof value !== 'object') return ''
   const source = value as Record<string, any>
@@ -544,6 +587,10 @@ function normalizeCommandContext(parsed: Record<string, any>): string {
     ...collectRunHistoryContext(parsed),
     ...collectRunHistoryContext(nestedManifest),
   ])
+  const normalizedGrading = normalizeStringList([
+    ...collectGradingContext(parsed),
+    ...collectGradingContext(nestedManifest),
+  ])
   const workbenchContext = normalizeWorkbenchContext(nestedManifest) || normalizeWorkbenchContext(parsed)
   return [
     normalizedDependencies ? `dependencies=${normalizedDependencies}` : '',
@@ -551,6 +598,7 @@ function normalizeCommandContext(parsed: Record<string, any>): string {
     normalizedSmokeTests ? `smoke_tests=${normalizedSmokeTests}` : '',
     normalizedArtifacts ? `artifacts=${normalizedArtifacts}` : '',
     normalizedRunHistory ? `run_history=${normalizedRunHistory}` : '',
+    normalizedGrading ? `grading=${normalizedGrading}` : '',
     workbenchContext ? `workbench=${workbenchContext}` : '',
   ].filter(Boolean).join('\n')
 }

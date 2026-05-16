@@ -623,6 +623,56 @@ const repeatedJsonCommandWithModels = (id, modelContext = {}) => ({
 }
 
 {
+  const first = variantCodeSignature(repeatedJsonCommandWithModels('a', {
+    preparation_manifest: {
+      gradingCriteria: [
+        'Require metrics.json to report accuracy and cuda_available evidence',
+        'Check stdout for model_id and dependency versions',
+      ],
+      successCriteria: [
+        { name: 'accuracy floor', metric: 'accuracy', threshold: '>= 0.42', evidence: 'metrics.json' },
+      ],
+      workbench: { reuseKey: 'shared-workbench' },
+    },
+  }))
+  const second = variantCodeSignature(repeatedJsonCommandWithModels('b', {
+    preparation_manifest: {
+      successCriteria: [
+        { evidence: 'metrics.json', threshold: '>= 0.42', metric: 'accuracy', name: 'accuracy floor' },
+      ],
+      gradingCriteria: [
+        'Check stdout for model_id and dependency versions',
+        'Require metrics.json to report accuracy and cuda_available evidence',
+      ],
+      workbench: { reuseKey: 'shared-workbench' },
+    },
+  }))
+  assert.equal(first, second, 'grading and success criteria order should not create a new executable signature')
+}
+
+{
+  const first = variantCodeSignature(repeatedJsonCommandWithModels('a', {
+    preparation_manifest: {
+      gradingCriteria: ['Require metrics.json to report accuracy and cuda_available evidence'],
+      successCriteria: [
+        { name: 'accuracy floor', metric: 'accuracy', threshold: '>= 0.42', evidence: 'metrics.json' },
+      ],
+      workbench: { reuseKey: 'shared-workbench' },
+    },
+  }))
+  const second = variantCodeSignature(repeatedJsonCommandWithModels('b', {
+    preparation_manifest: {
+      gradingCriteria: ['Require metrics.json to report loss and cuda_available evidence'],
+      successCriteria: [
+        { name: 'loss ceiling', metric: 'loss', threshold: '<= 0.31', evidence: 'metrics.json' },
+      ],
+      workbench: { reuseKey: 'shared-workbench' },
+    },
+  }))
+  assert.notEqual(first, second, 'changed grading and success criteria should reset repeated executable signatures')
+}
+
+{
   const assessment = assessDeadLoop([
     repeatedJsonCommandFailure('a', ['torch==2.4.0']),
     repeatedJsonCommandFailure('b', ['torch==2.5.0']),
