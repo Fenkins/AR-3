@@ -58,6 +58,9 @@ assert.equal(isValidGpuJobTransition('cancelled', 'queued'), false)
   })
   assert.equal(completed.status, 'completed')
   assert.equal(completed.result.output, '{"metric": 1}')
+  assert.deepStrictEqual(completed.events.map((event) => event.toStatus), ['queued', 'validating_evidence', 'completed'])
+  assert.equal(completed.events.at(-2).fromStatus, 'queued')
+  assert.match(completed.events.at(-2).message, /validating runtime evidence/i)
   assert.equal(completed.events.at(-1).toStatus, 'completed')
 
   const failed = applyWorkerResultToJob(job, {
@@ -68,6 +71,7 @@ assert.equal(isValidGpuJobTransition('cancelled', 'queued'), false)
   })
   assert.equal(failed.status, 'failed_runtime')
   assert.equal(failed.result.error, 'Traceback: boom')
+  assert.deepStrictEqual(failed.events.map((event) => event.toStatus), ['queued', 'validating_evidence', 'failed_runtime'])
 
   const failedValidation = applyWorkerResultToJob(job, {
     jobId: job.jobId,
@@ -78,6 +82,21 @@ assert.equal(isValidGpuJobTransition('cancelled', 'queued'), false)
   })
   assert.equal(failedValidation.status, 'failed_validation')
   assert.equal(failedValidation.result.error, 'Experiment output self-reported contract_failure_reason: bad')
+}
+
+{
+  const job = buildGpuJobRecord({ spaceId: 'spaceA', stageName: 'Testing', prompt: 'p', context: '' }, new Date('2026-05-13T00:00:00Z'), 'n')
+  const validating = applyWorkerQueueStateToJob(job, {
+    jobId: job.jobId,
+    status: 'validating_evidence',
+    updatedAt: '2026-05-13T00:00:30Z',
+  })
+  const completed = applyWorkerResultToJob(validating, {
+    jobId: job.jobId,
+    output: '{"metric": 1, "cuda_available": true}',
+    completedAt: '2026-05-13T00:01:00Z',
+  })
+  assert.deepStrictEqual(completed.events.map((event) => event.toStatus), ['queued', 'validating_evidence', 'completed'])
 }
 
 {

@@ -126,11 +126,25 @@ function classifyWorkerResultStatus(result: GpuWorkerResult): GpuJobStatus {
 
 export function applyWorkerResultToJob(job: GpuJobRecord, result: GpuWorkerResult): GpuJobRecord {
   const toStatus = classifyWorkerResultStatus(result)
+  const completedAt = result.completedAt || new Date().toISOString()
   const base = ['queued', 'preparing_workbench', 'installing_dependencies', 'running_experiment'].includes(job.status)
-    ? { ...job, status: 'validating_evidence' as GpuJobStatus }
+    ? {
+        ...job,
+        status: 'validating_evidence' as GpuJobStatus,
+        updatedAt: completedAt,
+        events: [
+          ...(job.events || []),
+          {
+            at: completedAt,
+            fromStatus: job.status,
+            toStatus: 'validating_evidence' as GpuJobStatus,
+            message: WORKER_STATUS_MESSAGES.validating_evidence,
+          },
+        ],
+      }
     : job
   return {
-    ...transitionGpuJob(base, toStatus, toStatus === 'completed' ? 'GPU worker completed job' : WORKER_STATUS_MESSAGES[toStatus], result.completedAt),
+    ...transitionGpuJob(base, toStatus, toStatus === 'completed' ? 'GPU worker completed job' : WORKER_STATUS_MESSAGES[toStatus], completedAt),
     result,
   }
 }
