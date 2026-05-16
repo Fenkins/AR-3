@@ -236,4 +236,45 @@ function validManifest(overrides = {}) {
   assert(result.errors.some((e) => e.includes('workbench.expectedArtifacts') && e.includes('stable relative')), result.errors.join('\n'))
 }
 
+{
+  const result = validatePreparationManifest(validManifest({
+    smokeTests: [{
+      name: 'trajectory-threshold',
+      command: 'python smoke_test.py',
+      expectedEvidence: ['cuda_available', 'trajectory_cosine_similarity'],
+      timeoutSeconds: 300,
+    }],
+    gradingCriteria: ['trajectory_cosine_similarity metric is reported in stdout'],
+    success_criteria: [{
+      name: 'trajectory improvement',
+      metric: 'trajectory_cosine_similarity',
+      threshold: '>= 0.75',
+      evidence: 'trajectory_cosine_similarity',
+    }],
+  }))
+  assert.equal(result.ok, true, result.errors.join('\n'))
+  assert.equal(result.manifest.successCriteria[0].metric, 'trajectory_cosine_similarity')
+}
+
+{
+  const result = validatePreparationManifest(validManifest({
+    smokeTests: [{
+      name: 'cuda-only-threshold',
+      command: 'python smoke_test.py',
+      expectedEvidence: ['cuda_available'],
+      timeoutSeconds: 300,
+    }],
+    gradingCriteria: ['stdout contains cuda_available evidence'],
+    successCriteria: [{
+      name: 'vague threshold',
+      metric: 'bleu_score',
+      threshold: 'better',
+      evidence: 'bleu_score',
+    }],
+  }))
+  assert.equal(result.ok, false)
+  assert(result.errors.some((e) => e.includes('successCriteria[0].threshold')), result.errors.join('\n'))
+  assert(result.errors.some((e) => e.includes('successCriteria[0]') && e.includes('smokeTests.expectedEvidence')), result.errors.join('\n'))
+}
+
 console.log('preparation manifest tests passed')

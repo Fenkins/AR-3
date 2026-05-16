@@ -30,6 +30,13 @@ export type PreparationSmokeTest = {
   timeoutSeconds: number
 }
 
+export type PreparationSuccessCriterion = {
+  name: string
+  metric: string
+  threshold: string
+  evidence: string
+}
+
 export type PreparationManifest = {
   schemaVersion: string
   researchType: string
@@ -39,6 +46,7 @@ export type PreparationManifest = {
   resources: PreparationResource[]
   smokeTests: PreparationSmokeTest[]
   gradingCriteria: string[]
+  successCriteria?: PreparationSuccessCriterion[]
   workbench: {
     reuseKey: string
     expectedArtifacts: string[]
@@ -114,6 +122,19 @@ function validGradingCriterion(value: string): boolean {
   if (VAGUE_GRADING_CRITERIA.has(normalized)) return false
 
   return /\b(json|metric|metrics|score|loss|accuracy|acc|f1|precision|recall|latency|throughput|runtime|seconds|cuda|gpu|vram|memory|artifact|artifacts|stdout|stderr|file|path|model|dependency|dependencies|smoke|failure|error|exception|evidence|measurement|tensor|shape|count|version)\b|[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*/i.test(value)
+}
+
+function validEvidenceField(value: string): boolean {
+  const trimmed = value.trim()
+  if (trimmed.length < 3) return false
+  if (VAGUE_GRADING_CRITERIA.has(trimmed.toLowerCase())) return false
+  return /^[A-Za-z][A-Za-z0-9_.-]*$/.test(trimmed) || validGradingCriterion(trimmed)
+}
+
+function validNumericThreshold(value: string): boolean {
+  const normalized = value.trim().toLowerCase()
+  return /^(>=|>|<=|<|=|==)\s*-?\d+(?:\.\d+)?(?:e[+-]?\d+)?$/i.test(normalized) ||
+    /\b(at least|minimum|min|greater than|more than|above|at most|maximum|max|less than|below|under|no more than|equals?|equal to)\b\s*-?\d+(?:\.\d+)?(?:e[+-]?\d+)?/i.test(normalized)
 }
 
 function evidenceAnchorTokens(value: string): string[] {
@@ -236,6 +257,29 @@ function normalizePreparationManifest(value: Record<string, unknown>): Record<st
     })
   }
 
+  const successCriteria = normalized.successCriteria ?? normalized.success_criteria
+  if (Array.isArray(successCriteria)) {
+    normalized.successCriteria = successCriteria.map((criterion: unknown, i: number) => {
+      if (nonEmptyString(criterion)) {
+        return {
+          name: `success-${i + 1}`,
+          metric: criterion,
+          threshold: '',
+          evidence: criterion,
+        }
+      }
+      if (!isPlainObject(criterion)) return criterion
+      return {
+        ...criterion,
+        name: criterion.name ?? criterion.criterion ?? criterion.metric ?? `success-${i + 1}`,
+        metric: criterion.metric ?? criterion.field ?? criterion.key,
+        threshold: criterion.threshold ?? criterion.target ?? criterion.minimum ?? criterion.max,
+        evidence: criterion.evidence ?? criterion.expectedEvidence ?? criterion.expected_evidence ?? criterion.metric ?? criterion.field,
+      }
+    })
+    delete normalized.success_criteria
+  }
+
   if (!isPlainObject(normalized.workbench)) {
     normalized.workbench = {
       reuseKey: `${String(normalized.researchType || 'research')}-workbench`,
@@ -341,6 +385,27 @@ export function validatePreparationManifest(value: unknown): PreparationManifest
     })
   }
 
+  const successCriteria = Array.isArray(value.successCriteria) ? value.successCriteria : []
+  if (value.successCriteria !== undefined && !Array.isArray(value.successCriteria)) {
+    errors.push('successCriteria must be an array when provided')
+  }
+  successCriteria.forEach((criterion, i) => {
+    if (!isPlainObject(criterion)) {
+      errors.push(`successCriteria[${i}] must be an object with metric, threshold, and evidence`)
+      return
+    }
+    if (!nonEmptyString(criterion.name)) errors.push(`successCriteria[${i}].name must be a non-empty string`)
+    if (!nonEmptyString(criterion.metric) || !validEvidenceField(String(criterion.metric))) {
+      errors.push(`successCriteria[${i}].metric must name a concrete measurable output field`)
+    }
+    if (!nonEmptyString(criterion.threshold) || !validNumericThreshold(String(criterion.threshold))) {
+      errors.push(`successCriteria[${i}].threshold must be a numeric threshold like >= 0.75`)
+    }
+    if (!nonEmptyString(criterion.evidence) || !validEvidenceField(String(criterion.evidence))) {
+      errors.push(`successCriteria[${i}].evidence must name concrete output evidence`)
+    }
+  })
+
   if (!isPlainObject(value.workbench)) {
     errors.push('workbench must be an object')
   } else {
@@ -363,6 +428,16 @@ export function validatePreparationManifest(value: unknown): PreparationManifest
     value.gradingCriteria.forEach((criterion, i) => {
       if (!gradingCriterionHasEvidenceAnchor(String(criterion), evidenceAnchors)) {
         errors.push(`gradingCriteria[${i}] must reference evidence named by smokeTests.expectedEvidence or workbench.expectedArtifacts`)
+      }
+    })
+  }
+
+  if (successCriteria.length > 0) {
+    successCriteria.forEach((criterion, i) => {
+      if (!isPlainObject(criterion)) return
+      const successText = [criterion.metric, criterion.evidence].filter(nonEmptyString).join(' ')
+      if (successText && !gradingCriterionHasEvidenceAnchor(successText, evidenceAnchors)) {
+        errors.push(`successCriteria[${i}] must reference evidence named by smokeTests.expectedEvidence or workbench.expectedArtifacts`)
       }
     })
   }
@@ -433,9 +508,9 @@ export function extractPreparationManifestCandidate(text: string): unknown {
 }
 
 export function buildPreparationRetryMessage(originalGoal: string, errors: string[]): string {
-  return `Your preparation manifest was rejected by AR-3's validator.\n\nOriginal goal:\n${originalGoal}\n\nValidation errors:\n${errors.map((e) => `- ${e}`).join('\n')}\n\nReturn ONLY JSON matching schemaVersion ${PREPARATION_MANIFEST_SCHEMA_VERSION}. No markdown, no prose, no code fences. Include concrete model IDs, pip package specs, executable smokeTests, evidence fields, gradingCriteria tied to measurable evidence, and a reusable workbench key.`
+  return `Your preparation manifest was rejected by AR-3's validator.\n\nOriginal goal:\n${originalGoal}\n\nValidation errors:\n${errors.map((e) => `- ${e}`).join('\n')}\n\nReturn ONLY JSON matching schemaVersion ${PREPARATION_MANIFEST_SCHEMA_VERSION}. No markdown, no prose, no code fences. Include concrete model IDs, pip package specs, executable smokeTests, evidence fields, gradingCriteria tied to measurable evidence, optional successCriteria with numeric thresholds, and a reusable workbench key.`
 }
 
 export function buildPreparationManifestInstructions(researchGoal: string): string {
-  return `Prepare this research goal for executable GPU work:\n${researchGoal}\n\nReturn ONLY JSON with schemaVersion ${PREPARATION_MANIFEST_SCHEMA_VERSION}. Required top-level fields: researchType, objective, models, dependencies, resources, smokeTests, gradingCriteria, workbench. Every required HuggingFace model must have an owner/model id and a smokeTest. Every dependency must be a concrete pip package spec with purpose. Every smokeTest must be an executable command and list expectedEvidence. Every grading criterion must name concrete evidence, metrics, artifacts, model/dependency checks, GPU/runtime facts, or failure modes.`
+  return `Prepare this research goal for executable GPU work:\n${researchGoal}\n\nReturn ONLY JSON with schemaVersion ${PREPARATION_MANIFEST_SCHEMA_VERSION}. Required top-level fields: researchType, objective, models, dependencies, resources, smokeTests, gradingCriteria, workbench. Optional successCriteria entries must include name, metric, numeric threshold, and evidence. Every required HuggingFace model must have an owner/model id and a smokeTest. Every dependency must be a concrete pip package spec with purpose. Every smokeTest must be an executable command and list expectedEvidence. Every grading criterion must name concrete evidence, metrics, artifacts, model/dependency checks, GPU/runtime facts, or failure modes.`
 }

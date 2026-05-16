@@ -371,4 +371,89 @@ function testObjectShapedGradingCriteriaAcceptConcreteNestedEvidence() {
 
 testObjectShapedGradingCriteriaAreEnforced()
 testObjectShapedGradingCriteriaAcceptConcreteNestedEvidence()
+
+function testSnakeCaseSuccessCriteriaThresholdsAreEnforced() {
+  const result = assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    success: true,
+    output: JSON.stringify({
+      cuda_available: true,
+      gpu_name: 'Test GPU',
+      runtime_seconds: 0.02,
+      metrics: {
+        trajectory_cosine_similarity: 0.61,
+      },
+      artifacts: ['/tmp/ar3-workbenches/success-threshold/metrics.json'],
+    }),
+    preparationManifest: {
+      smoke_tests: [
+        {
+          name: 'trajectory-smoke',
+          expected_evidence: ['cuda_available', 'metrics.trajectory_cosine_similarity'],
+        },
+      ],
+      grading_criteria: [
+        'metrics.trajectory_cosine_similarity is reported in stdout',
+      ],
+      success_criteria: [
+        {
+          name: 'trajectory similarity',
+          metric: 'metrics.trajectory_cosine_similarity',
+          threshold: '>= 0.75',
+          evidence: 'metrics.trajectory_cosine_similarity',
+        },
+      ],
+      workbench: {
+        expected_artifacts: ['metrics.json'],
+      },
+    },
+  })
+
+  assert.strictEqual(result.valid, false)
+  assert.match(result.reason, /success-criteria thresholds/)
+  assert.match(result.reason, /trajectory_cosine_similarity >= 0.75/)
+}
+
+function testSuccessCriteriaThresholdsAcceptPassingMetric() {
+  const result = assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    success: true,
+    output: JSON.stringify({
+      cuda_available: true,
+      gpu_name: 'Test GPU',
+      runtime_seconds: 0.02,
+      metrics: {
+        trajectory_cosine_similarity: 0.81,
+      },
+      artifacts: ['/tmp/ar3-workbenches/success-threshold/metrics.json'],
+    }),
+    preparationManifest: {
+      smokeTests: [
+        {
+          name: 'trajectory-smoke',
+          expectedEvidence: ['cuda_available', 'metrics.trajectory_cosine_similarity'],
+        },
+      ],
+      gradingCriteria: [
+        'metrics.trajectory_cosine_similarity is reported in stdout',
+      ],
+      successCriteria: [
+        {
+          name: 'trajectory similarity',
+          metric: 'metrics.trajectory_cosine_similarity',
+          threshold: '>= 0.75',
+          evidence: 'metrics.trajectory_cosine_similarity',
+        },
+      ],
+      workbench: {
+        expectedArtifacts: ['metrics.json'],
+      },
+    },
+  })
+
+  assert.strictEqual(result.valid, true, result.reason)
+}
+
+testSnakeCaseSuccessCriteriaThresholdsAreEnforced()
+testSuccessCriteriaThresholdsAcceptPassingMetric()
 console.log('gpu-command-contract tests passed')
