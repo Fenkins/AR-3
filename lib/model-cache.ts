@@ -120,7 +120,7 @@ export async function addToCache(options: AddCacheOptions): Promise<CacheEntry> 
         const modelId = modelIdFromHuggingFaceRepoUrl(downloadUrl)
         const spaceDir = getSpaceCacheDir(spaceId)
         if (!fs.existsSync(spaceDir)) fs.mkdirSync(spaceDir, { recursive: true })
-        const invocation = buildSnapshotDownloadInvocation(modelId, spaceDir, hfToken)
+        const invocation = buildSnapshotDownloadInvocation(modelId, filePath, hfToken)
         const output = execFileSync(invocation.command, invocation.args, {
           stdio: 'pipe',
           timeout: 300000,

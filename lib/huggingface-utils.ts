@@ -94,15 +94,19 @@ export function modelIdFromHuggingFaceRepoUrl(downloadUrl: string): string {
   return normalizeHfUrl(downloadUrl).replace('https://huggingface.co/', '').replace(/\/$/, '')
 }
 
-export function buildSnapshotDownloadInvocation(modelId: string, cacheDir: string, hfToken = ''): ProcessInvocation {
-  const env: Record<string, string> = { HF_HUB_CACHE: cacheDir }
+export function buildSnapshotDownloadInvocation(modelId: string, localDir: string, hfToken = ''): ProcessInvocation {
+  const normalizedLocalDir = localDir.replace(/\/+$/, '')
+  const env: Record<string, string> = {
+    HF_HOME: `${normalizedLocalDir}/.cache/huggingface`,
+  }
   if (hfToken) env.HF_TOKEN = hfToken
   return {
     command: 'python3',
     args: [
       '-c',
-      'from huggingface_hub import snapshot_download; import sys; print(snapshot_download(repo_id=sys.argv[1], local_files_only=False))',
+      'from huggingface_hub import snapshot_download; import sys; print(snapshot_download(repo_id=sys.argv[1], local_dir=sys.argv[2], local_dir_use_symlinks=False, resume_download=True, local_files_only=False))',
       modelId,
+      normalizedLocalDir,
     ],
     env,
   }
