@@ -48,6 +48,9 @@ def test_disk_pressure_snapshot_includes_workbench_root_and_model_cache_sizes():
     try:
         context = gpu_worker.prepare_workbench({"jobId": "gpu_space-disk_1", "spaceId": "space disk"})
         Path(context["workbench_dir"], "artifact.bin").write_bytes(b"x" * 11)
+        other_workbench = Path(root, "other-space")
+        other_workbench.mkdir()
+        Path(other_workbench, "larger-artifact.bin").write_bytes(b"z" * 29)
         Path(model_cache, "model.bin").write_bytes(b"y" * 13)
 
         snapshot = gpu_worker.collect_workbench_disk_pressure(context)
@@ -57,6 +60,9 @@ def test_disk_pressure_snapshot_includes_workbench_root_and_model_cache_sizes():
         assert snapshot["modelCacheRoot"] == model_cache
         assert snapshot["workbenchBytes"] >= 11
         assert snapshot["workbenchRootBytes"] >= snapshot["workbenchBytes"]
+        assert snapshot["largestWorkbenchDirs"][0]["path"] == str(other_workbench)
+        assert snapshot["largestWorkbenchDirs"][0]["bytes"] == 29
+        assert "modifiedAt" in snapshot["largestWorkbenchDirs"][0]
         assert snapshot["modelCacheBytes"] == 13
         assert isinstance(snapshot["freeBytes"], int)
         assert isinstance(snapshot["usedPercent"], float)

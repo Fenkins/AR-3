@@ -1,4 +1,4 @@
-Total output lines: 2170
+Total output lines: 2197
 
 #!/usr/bin/env python3
 """
@@ -151,6 +151,31 @@ def _dir_size_bytes(path: Path) -> int:
     return total
 
 
+def _largest_child_dirs(path: Path, limit: int = 5) -> list:
+    """Return bounded size metadata for largest direct child directories."""
+    if not path.exists() or not path.is_dir():
+        return []
+    entries = []
+    for child in path.iterdir():
+        try:
+            if not child.is_dir():
+                continue
+            entries.append({
+                'path': str(child),
+                'bytes': _dir_size_bytes(child),
+                'modifiedAt': datetime.fromtimestamp(child.stat().st_mtime).isoformat(),
+            })
+        except FileNotFoundError:
+            continue
+        except Exception as exc:
+            entries.append({
+                'path': str(child),
+                'bytes': None,
+                'warning': f'size unavailable: {exc}',
+            })
+    return sorted(entries, key=lambda item: item.get('bytes') or 0, reverse=True)[:limit]
+
+
 def collect_workbench_disk_pressure(context: dict) -> dict:
     """Return a bounded disk pressure snapshot for job metadata and logs."""
     workbench_dir = Path(context['workbench_dir'])
@@ -171,6 +196,7 @@ def collect_workbench_disk_pressure(context: dict) -> dict:
     workbench_bytes = _dir_size_bytes(workbench_dir)
     workbench_root_bytes = _dir_size_bytes(root)
     model_cache_bytes = _dir_size_bytes(model_cache_root)
+    largest_workbench_dirs = _largest_child_dirs(root)
     warn_free = _env_int('AR3_DISK_WARN_FREE_BYTES', DEFAULT_DISK_WARN_FREE_BYTES)
     fail_free = _env_int('AR3_DISK_FAIL_FREE_BYTES', DEFAULT_DISK_FAIL_FREE_BYTES)
     warning = None
@@ -187,6 +213,7 @@ def collect_workbench_disk_pressure(context: dict) -> dict:
         'usedPercent': used_percent,
         'workbenchBytes': workbench_bytes,
         'workbenchRootBytes': workbench_root_bytes,
+        'largestWorkbenchDirs': largest_workbench_dirs,
         'modelCacheBytes': model_cache_bytes,
         'warnFreeBytes': warn_free,
         'failFreeBytes': fail_free,
@@ -480,26 +507,7 @@ def ensure_torch_cuda_workbench(context: dict, force: bool = False, timeout: int
 
     smoke2 = subprocess.run(
         [sys.executable, '-c', TORCH_CUDA_SMOKE_CODE],
-        capture_output=True, text=True, timeout=min(timeout, 120), cwd=context['workbench_dir'], env=torch_env
-    )
-    second_output = _combined_completed_output(smoke2)
-    outputs.append(f'torch_cuda_smoke after_repair exit={smoke2.returncode}\n{second_output}')
-    if smoke2.returncode != 0:
-        return {'success': False, 'repaired': True, 'output': '\n'.join(outputs), 'error': 'Torch CUDA smoke test failed after repair: ' + second_output[-1000:]}
-    return {'success': True, 'repaired': True, 'output': '\n'.join(outputs), 'error': None}
-
-
-def _code_or_deps_need_torch(code: str, dependencies=None) -> bool:
-    if re_module.search(r'(^|\n)\s*(import\s+torch|from\s+torch\b)|\btorch\.', str(code or '')):
-        return True
-    for dep in dependencies or []:
-        name = _dependency_to_pip_spec(dep)
-        dep_name = re_module.split(r'[<>=!~\[]', name, maxsplit=1)[0].strip().lower().replace('_', '-')
-        if dep_name in {'torch', 'torchvision', 'torchaudio'}:
-            return True
-    return False
-
-…13428 tokens truncated…t).strip()
+        capture_output=Tru…13678 tokens truncated…t).strip()
             return {
                 'success': True,
                 'output': output,
