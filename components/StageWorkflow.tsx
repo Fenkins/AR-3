@@ -27,6 +27,7 @@ interface Variant {
   isSelected: boolean
   order: number
   status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'PENDING_REVIEW'
+  cycleNumber?: number
 }
 
 interface Step {
@@ -94,6 +95,9 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
   const [genNumVariants, setGenNumVariants] = useState(3)
   const [genStepsPerVariant, setGenStepsPerVariant] = useState(25)
   const [cycleCount, setCycleCount] = useState(0)
+  const [selectedCycle, setSelectedCycle] = useState(1)
+  const [availableCycles, setAvailableCycles] = useState<number[]>([1])
+  const [completedCycleCount, setCompletedCycleCount] = useState(0)
 
   const serverStageSyncDone = useRef(false)
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null)
@@ -143,10 +147,20 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
         setRunStatus(data.execution?.isRunning ? 'running' : data.space.status === 'PAUSED' ? 'paused' : 'idle')
         setTotalTokens(data.space.totalTokens || 0)
         setTotalCost(data.space.totalCost || 0)
+        const cycleSummary = data.space.cycleSummary || {}
+        const cycles = Array.isArray(cycleSummary.availableCycles) && cycleSummary.availableCycles.length > 0
+          ? cycleSummary.availableCycles
+          : [data.space.displayCycle || data.space.currentCycle || 1]
+        const normalizedCycles = Array.from(new Set(cycles.map((cycle: any) => Number(cycle) || 1))).sort((a, b) => b - a)
+        const activeCycle = data.space.displayCycle || cycleSummary.activeCycle || normalizedCycles[0] || 1
+        const nextSelectedCycle = normalizedCycles.includes(selectedCycle) ? selectedCycle : activeCycle
+        setAvailableCycles(normalizedCycles)
+        setSelectedCycle(nextSelectedCycle)
+        setCompletedCycleCount(data.space.completedCycleCount || cycleSummary.completedCycleCount || 0)
 
         if (data.space.experiments) {
           setExperiments(data.space.experiments)
-          setCycleCount(data.space.displayCycle || data.space.cycleSummary?.activeCycle || data.space.currentCycle || 1)
+          setCycleCount(activeCycle)
         }
         if (data.space.breakthroughs) setBreakthroughs(data.space.breakthroughs)
 
@@ -161,7 +175,7 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
 
         const allVars = data.execution?.variants || []
         setAllVariants(allVars)
-        const stageVars = allVars.filter((v: any) => v.stageId === selectedStageId)
+        const stageVars = allVars.filter((v: any) => v.stageId === selectedStageId && (v.cycleNumber || 1) === nextSelectedCycle)
         if (stageVars.length > 0) {
           setVariants(stageVars)
         } else {
@@ -174,7 +188,7 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
     } finally {
       if (showLoading) setLoading(false)
     }
-  }, [spaceId, token, currentStageIndex])
+  }, [spaceId, token, currentStageIndex, selectedCycle])
 
   useEffect(() => {
     fetchSpaceData()
@@ -550,9 +564,10 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
   const currentStepIdx = runningVariant ? getCurrentStepIndex(runningVariant) : 0
   const totalSteps = runningVariant?.steps.length || 0
 
-  const stageVariantsCompleted = (stageId: string) => allVariants.filter(v => v.stageId === stageId && v.status === 'COMPLETED').length
+  const selectedCycleIndex = availableCycles.indexOf(selectedCycle)
+  const stageVariantsCompleted = (stageId: string) => allVariants.filter(v => v.stageId === stageId && (v.cycleNumber || 1) === selectedCycle && v.status === 'COMPLETED').length
   const currentVariantIds = new Set(variants.map(v => v.id))
-  const visibleHistoryVariants = allVariants.filter(v => !currentVariantIds.has(v.id))
+  const visibleHistoryVariants = allVariants.filter(v => (v.cycleNumber || 1) === selectedCycle && !currentVariantIds.has(v.id))
 
   const toggleHistoryExpand = (id: string) => {
     setExpandedHistoryIds(prev => {
@@ -587,7 +602,35 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
           <div className="flex items-center gap-3">
             <span className="text-xs text-dark-400">Tokens: <span className="text-dark-200 font-medium">{totalTokens.toLocaleString()}</span></span>
             <span className="text-xs text-dark-400">Cost: <span className="text-dark-200 font-medium">${totalCost.toFixed(4)}</span></span>
-            <span className="text-xs px-2 py-0.5 bg-dark-800 rounded text-dark-300">Cycle {cycleCount}</span>
+            <span className="text-xs px-2 py-0.5 bg-dark-800 rounded text-dark-300">Active Cycle {cycleCount}</span>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                disabled={selectedCycleIndex >= availableCycles.length - 1}
+                onClick={() => setSelectedCycle(availableCycles[Math.min(selectedCycleIndex + 1, availableCycles.length - 1)] || selectedCycle)}
+                className="px-2 py-0.5 bg-dark-800 hover:bg-dark-700 disabled:opacity-40 rounded text-xs text-dark-300"
+              >
+                Prev
+              </button>
+              <select
+                value={selectedCycle}
+                onChange={e => setSelectedCycle(Number(e.target.value))}
+                className="bg-dark-800 border border-dark-700 rounded px-2 py-0.5 text-xs text-dark-200"
+              >
+                {availableCycles.map(cycle => (
+                  <option key={cycle} value={cycle}>Cycle {cycle}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                disabled={selectedCycleIndex <= 0}
+                onClick={() => setSelectedCycle(availableCycles[Math.max(selectedCycleIndex - 1, 0)] || selectedCycle)}
+                className="px-2 py-0.5 bg-dark-800 hover:bg-dark-700 disabled:opacity-40 rounded text-xs text-dark-300"
+              >
+                Next
+              </button>
+            </div>
+            <span className="text-xs text-dark-500">Completed: {completedCycleCount}</span>
           </div>
           <div className="flex items-center gap-2">
             {runStatus === 'idle' && (
@@ -773,7 +816,10 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
 
         {/* RIGHT PANEL — Variant History (35%) */}
         <div className="bg-dark-900 rounded-xl border border-dark-700 p-4 flex flex-col max-h-[calc(100vh-220px)]">
-          <h3 className="text-sm font-bold text-dark-300 mb-3 uppercase tracking-wider">Variant History</h3>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-bold text-dark-300 uppercase tracking-wider">Variant History</h3>
+            <span className="text-xs text-dark-500">Cycle {selectedCycle}</span>
+          </div>
           <div className="flex-1 overflow-y-auto space-y-2">
             {visibleHistoryVariants.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-12 text-dark-400">
