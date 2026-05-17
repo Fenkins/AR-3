@@ -912,7 +912,7 @@ def extract_gpu_command(prompt: str) -> dict:
     """
     import re
 
-    # ââ Strategy 0: Direct JSON from LLM (structured output) âââââââââââââââââ
+    # ── Strategy 0: Direct JSON from LLM (structured output) ─────────────────
     # Strip any surrounding markdown fences
     stripped = re_module.sub(
         r'^```(json|python)?\s*(.*?)\s*```$',
@@ -931,7 +931,7 @@ def extract_gpu_command(prompt: str) -> dict:
 
     gpu_command = None
 
-    # ââ Strategy 1: Largest ```python block (not JSON) âââââââââââââââââââââââ
+    # ── Strategy 1: Largest ```python block (not JSON) ───────────────────────
     code_blocks = re_module.findall(
         r'```python\s*(.*?)\s*```',
         prompt,
@@ -939,14 +939,14 @@ def extract_gpu_command(prompt: str) -> dict:
     )
     if code_blocks:
         best = max(code_blocks, key=lambda b: len(b.strip())).strip()
-        # Remove non-ASCII characters (em-dash â, curly quotes, etc.) from extracted code
+        # Remove non-ASCII characters (em-dash —, curly quotes, etc.) from extracted code
         best_clean = ''.join(c if ord(c) < 128 else '?' for c in best)
         if len(best_clean) > 50 and not best_clean.startswith('{'):
             log(f"Strategy 1: Pure ```python block, {len(best_clean)} chars",
                 thread_id=threading.current_thread().name)
             return {"action": "run_python", "code": best_clean}
 
-    # ââ Strategy 2: Quote-aware brace matching for JSON objects âââââââââââââââ
+    # ── Strategy 2: Quote-aware brace matching for JSON objects ───────────────
     # Collect all top-level JSON objects containing 'action' and 'code'
     in_str = False
     escape_next = False
@@ -988,17 +988,17 @@ def extract_gpu_command(prompt: str) -> dict:
         except Exception:
             pass
 
-    # ââ Strategy 3: Bare ```python blocks âââââââââââââââââââââââââââââââââââââ
+    # ── Strategy 3: Bare ```python blocks ─────────────────────────────────────
     for block in code_blocks:
         block = block.strip()
-        # Remove non-ASCII characters (em-dash â, curly quotes, etc.)
+        # Remove non-ASCII characters (em-dash —, curly quotes, etc.)
         block_clean = ''.join(c if ord(c) < 128 else '?' for c in block)
         if len(block_clean) > 50 and re_module.search(r'\b(import |from |torch|cuda|tensor|def |class )', block_clean):
             log(f"Strategy 3: Bare ```python block with code, {len(block_clean)} chars",
                 thread_id=threading.current_thread().name)
             return {"action": "run_python", "code": block_clean}
 
-    # ââ Strategy 4: Line-by-line code assembly ââââââââââââââââââââââââââââââââ
+    # ── Strategy 4: Line-by-line code assembly ────────────────────────────────
     # AGGRESSIVE: any line with 4+ spaces indentation and alphanumeric content is code
     lines = prompt.split('\n')
     code_lines = []
@@ -1050,7 +1050,7 @@ def extract_gpu_command(prompt: str) -> dict:
             if not _skip and any(c.isalnum() for c in stripped):
                 in_code = True
                 code_lines.append(raw_line)
-                # Don't stop early â collect up to 50 lines
+                # Don't stop early — collect up to 50 lines
                 if len(code_lines) >= 50:
                     break
             continue
@@ -1063,7 +1063,7 @@ def extract_gpu_command(prompt: str) -> dict:
             if len(code_lines) >= 50:
                 break
         elif len(code_lines) > 0 and stripped:
-            # Light indentation â could be continuation
+            # Light indentation — could be continuation
             if stripped.startswith('    ') or stripped.startswith('\t'):
                 code_lines.append(raw_line)
             elif len(code_lines) > 5:
@@ -1135,8 +1135,8 @@ def extract_gpu_command(prompt: str) -> dict:
                         thread_id=threading.current_thread().name)
                     return {"action": "run_python", "code": code}
 
-    # ââ No valid GPU command: fail fast instead of masking bad model output as nvidia-smi success ââ
-    log(f"ERROR: No valid GPU command found â refusing nvidia-smi fallback for research jobs",
+    # ── No valid GPU command: fail fast instead of masking bad model output as nvidia-smi success ──
+    log(f"ERROR: No valid GPU command found — refusing nvidia-smi fallback for research jobs",
         thread_id=threading.current_thread().name)
     log(f"  Prompt preview (200 chars): {prompt[:200]}",
         thread_id=threading.current_thread().name)
@@ -1149,7 +1149,7 @@ def execute_quantized_code(code: str, timeout: int = DEFAULT_JOB_TIMEOUT) -> dic
     log(f"Executing quantized Python code ({len(code)} chars)",
         thread_id=threading.current_thread().name)
 
-    # ââ Pre-process: coerce f-string tensor.item():.Nf patterns âââââââââââââ
+    # ── Pre-process: coerce f-string tensor.item():.Nf patterns ─────────────
     fixed_code = re_module.sub(
         r"f(['\"])([^'\"]*?)\{([^{}]+?)\.item\(\):\.(\d+)f\}([^'\"]*?)\1",
         lambda m: "f'" + m.group(2) + '{float(' + m.group(3) + '.item()):.'
@@ -1157,7 +1157,7 @@ def execute_quantized_code(code: str, timeout: int = DEFAULT_JOB_TIMEOUT) -> dic
         code
     )
 
-    # ââ Patch: Handle LLaDA transformers 5.x compatibility âââââââââââââââââ
+    # ── Patch: Handle LLaDA transformers 5.x compatibility ─────────────────
     patch_wrapper = """
 import torch
 import builtins as _builtins
@@ -1610,9 +1610,9 @@ def execute_python_code(code: str, timeout: int = DEFAULT_JOB_TIMEOUT, context: 
 
     update_job_queue_status(job_id, 'running_experiment')
 
-    # ââ Pre-process: coerce f-string tensor.item():.Nf patterns ââââââââââââââââ
-    # .item() can return int/str/float â wrapping with float() prevents format errors
-    # Matches: f'{expr.item():.4f}' â f'{float(expr.item()):.4f}'
+    # ── Pre-process: coerce f-string tensor.item():.Nf patterns ────────────────
+    # .item() can return int/str/float — wrapping with float() prevents format errors
+    # Matches: f'{expr.item():.4f}' → f'{float(expr.item()):.4f}'
     fixed_code = re_module.sub(
         r"f(['\"])([^'\"]*?)\{([^{}]+?)\.item\(\):\.(\d+)f\}([^'\"]*?)\1",
         lambda m: "f'" + m.group(2) + '{float(' + m.group(3) + '.item()):.'
@@ -1626,7 +1626,7 @@ def execute_python_code(code: str, timeout: int = DEFAULT_JOB_TIMEOUT, context: 
     fixed_code = repair_malformed_dict_value_format_specs(fixed_code)
     fixed_code = inject_missing_common_stdlib_imports(fixed_code)
 
-    # ââ Patch: Handle LLaDA transformers 5.x compatibility ââââââââââââââââââââ
+    # ── Patch: Handle LLaDA transformers 5.x compatibility ────────────────────
     # LLaDA's custom model code (modeling_llada.py) is missing `all_tied_weights_keys`
     # which breaks from_pretrained in transformers 5.5+. Patch torch.nn.Module to
     # return {} (empty dict) when that attribute is missing, instead of AttributeError.
@@ -1681,7 +1681,7 @@ except ModuleNotFoundError:
                 'error': None,
             }
         else:
-            # Check for SyntaxError or IndentationError â try auto-fix once
+            # Check for SyntaxError or IndentationError — try auto-fix once
             stderr = result.stderr.strip()
             if 'SyntaxError' in stderr or 'IndentationError' in stderr:
                 log(f"Syntax/IndentationError detected, attempting auto-fix",
@@ -1693,7 +1693,7 @@ except ModuleNotFoundError:
                     with open(code_file, 'w') as f:
                         # NOTE: fixed_code already has patch_wrapper prepended.
                         # auto_fix_code was called on it, so fixed_once has both.
-                        # Write fixed_once directly â no need to re-add wrapper.
+                        # Write fixed_once directly — no need to re-add wrapper.
                         f.write(fixed_once)
                     result = subprocess.run(
                         ['python3', code_file],
@@ -1722,9 +1722,9 @@ except ModuleNotFoundError:
                 return {
                     'success': False,
                     'output': result.stdout.strip(),
-                    'error': 'SyntaxError/IndentationError â auto-fix could not resolve:\n' + stderr,
+                    'error': 'SyntaxError/IndentationError — auto-fix could not resolve:\n' + stderr,
                 }
-            # Check for missing package â auto-install and retry once
+            # Check for missing package — auto-install and retry once
             if result.returncode != 0:
                 stderr = result.stderr.strip()
                 # Detect missing module: "ModuleNotFoundError: No module named 'foo'"
