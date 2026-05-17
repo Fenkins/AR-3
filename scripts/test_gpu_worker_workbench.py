@@ -559,6 +559,25 @@ GPU: NVIDIA GeForce RTX 3060
     assert "structured runtime GPU evidence" in result["error"]
 
 
+def test_validation_accepts_preparation_probe_with_setup_metadata_json():
+    output = """
+disk_pressure={"ok": true, "freeBytes": 123456789}
+workbench_prune={"deleted": [], "errors": []}
+cuda_driver_preflight={"ok": true, "status": "cuda_compute_ready"}
+model_resolution:
+model_cache_root=/opt/AR-3/model_cache
+model_resolve GSAI-ML/LLaDA-8B-Base exit=0
+STDOUT:
+{"ok": true, "repo_id": "GSAI-ML/LLaDA-8B-Base", "local_dir": "/opt/AR-3/model_cache/llada", "downloaded_files": ["config.json"]}
+STDERR:
+model_resolution_file=/tmp/ar3-workbenches/ode/model_resolution.json
+{"type":"autonomous_preparation_manifest","contract_failure_reason":"JSON action must be run_python","gpu":{"cuda_available":true,"gpu_name":"NVIDIA GeForce RTX 3060"},"workbench":"/tmp/ar3-workbenches/ode","recommended_experiment":{"metrics":["cuda_available","trajectory_cosine_similarity"]}}
+"""
+    result = gpu_worker.validate_execution_result_evidence({"success": True, "output": output, "error": None})
+    assert result["success"] is True
+    assert result["error"] is None
+
+
 def test_process_job_marks_validation_failures_as_failed_validation():
     root = tempfile.mkdtemp(prefix="ar3-worker-status-test-")
     old_queue = gpu_worker.JOB_QUEUE_FILE
@@ -741,6 +760,8 @@ if __name__ == "__main__":
     test_execute_python_code_injects_missing_common_stdlib_imports()
     test_repair_torch_workbench_removes_poisoned_cuda_packages_and_reinstalls_cu124()
     test_validation_rejects_pretty_printed_contract_failure_after_gpu_smoke_json()
+    test_validation_rejects_preparation_probe_plus_unstructured_prose()
+    test_validation_accepts_preparation_probe_with_setup_metadata_json()
     test_process_job_marks_validation_failures_as_failed_validation()
     test_execute_gpu_command_stops_when_preparation_exhausts_disk_space()
     test_get_pending_jobs_reclaims_stale_inflight_jobs_without_results()
