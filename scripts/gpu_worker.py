@@ -35,6 +35,8 @@ DEFAULT_WORKBENCH_ROOT = '/tmp/ar3-workbenches'
 DEFAULT_MODEL_CACHE_ROOT = '/opt/AR-3/model_cache'
 DEFAULT_DISK_WARN_FREE_BYTES = 8 * 1024**3
 DEFAULT_DISK_FAIL_FREE_BYTES = 2 * 1024**3
+DEFAULT_WORKBENCH_PRUNE_MAX_BYTES = 10 * 1024**3
+DEFAULT_WORKBENCH_PRUNE_MIN_AGE_SECONDS = 6 * 3600
 
 # Thread-safe lock for queue file operations
 queue_lock = threading.Lock()
@@ -172,6 +174,96 @@ def _largest_child_dirs(path: Path, limit: int = 5) -> list:
                 'warning': f'size unavailable: {exc}',
             })
     return sorted(entries, key=lambda item: item.get('bytes') or 0, reverse=True)[:limit]
+
+
+def prune_stale_workbenches(context: dict) -> dict:
+    """Remove old sibling workbenches when the shared root exceeds limits.
+
+    The active job workbench is never pruned. Thresholds are intentionally
+    environment-controlled because small Vast disks need tighter retention than
+    larger local development machines.
+    """
+    workbench_dir = Path(context['workbench_dir']).resolve()
+    root = workbench_dir.parent
+    max_bytes = _env_int('AR3_WORKBENCH_PRUNE_MAX_BYTES', DEFAULT_WORKBENCH_PRUNE_MAX_BYTES)
+    min_age_seconds = _env_int('AR3_WORKBENCH_PRUNE_MIN_AGE_SECONDS', DEFAULT_WORKBENCH_PRUNE_MIN_AGE_SECONDS)
+    warn_free = _env_int('AR3_DISK_WARN_FREE_BYTES', DEFAULT_DISK_WARN_FREE_BYTES)
+    deleted = []
+    errors = []
+
+    if max_bytes <= 0 or not root.exists() or not root.is_dir():
+        return {'enabled': max_bytes > 0, 'deleted': deleted, 'errors': errors, 'reason': 'disabled_or_missing_root'}
+
+    try:
+        usage = shutil.disk_usage(root)
+        free_bytes = usage.free
+    except Exception:
+        free_bytes = None
+
+    root_bytes = _dir_size_bytes(root)
+    if root_bytes <= max_bytes and (free_bytes is None or free_bytes >= warn_free):
+        return {
+            'enabled': True,
+            'deleted': deleted,
+            'errors': errors,
+            'rootBytesBefore': root_bytes,
+            'maxBytes': max_bytes,
+            'reason': 'within_limits',
+        }
+
+    now = time.time()
+    candidates = []
+    for child in root.iterdir():
+        try:
+            if not child.is_dir() or child.is_symlink() or child.resolve() == workbench_dir:
+                continue
+            stat = child.stat()
+            age_seconds = max(0, int(now - stat.st_mtime))
+            if age_seconds < min_age_seconds:
+                continue
+            candidates.append({
+                'path': child,
+                'bytes': _dir_size_bytes(child),
+                'modifiedAt': datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                'ageSeconds': age_seconds,
+            })
+        except FileNotFoundError:
+            continue
+        except Exception as exc:
+            errors.append({'path': str(child), 'error': str(exc)})
+
+    for candidate in sorted(candidates, key=lambda item: item['modifiedAt']):
+        if root_bytes <= max_bytes and (free_bytes is None or free_bytes >= warn_free):
+            break
+        path = candidate['path']
+        try:
+            shutil.rmtree(path)
+            root_bytes = max(0, root_bytes - int(candidate.get('bytes') or 0))
+            if free_bytes is not None:
+                try:
+                    free_bytes = shutil.disk_usage(root).free
+                except Exception:
+                    free_bytes = None
+            deleted.append({
+                'path': str(path),
+                'bytes': candidate.get('bytes'),
+                'modifiedAt': candidate.get('modifiedAt'),
+                'ageSeconds': candidate.get('ageSeconds'),
+            })
+        except Exception as exc:
+            errors.append({'path': str(path), 'error': str(exc)})
+
+    return {
+        'enabled': True,
+        'deleted': deleted,
+        'errors': errors,
+        'rootBytesBefore': _dir_size_bytes(root) + sum(int(item.get('bytes') or 0) for item in deleted),
+        'rootBytesAfter': _dir_size_bytes(root),
+        'freeBytesAfter': free_bytes,
+        'maxBytes': max_bytes,
+        'minAgeSeconds': min_age_seconds,
+        'reason': 'pruned' if deleted else 'no_eligible_stale_workbenches',
+    }
 
 
 def collect_workbench_disk_pressure(context: dict) -> dict:
@@ -1905,6 +1997,11 @@ def execute_gpu_command(job: dict, timeout: int = DEFAULT_JOB_TIMEOUT) -> dict:
         action = gpu_command.get('action', 'run_python')
         update_job_queue_status(job_id, 'preparing_workbench')
         context_info = prepare_workbench(job)
+        workbench_prune = prune_stale_workbenches(context_info)
+        if workbench_prune.get('deleted'):
+            log('Pruned stale workbenches: ' + json.dumps(workbench_prune.get('deleted'), sort_keys=True), thread_id=tid)
+        if workbench_prune.get('errors'):
+            log('Workbench prune errors: ' + json.dumps(workbench_prune.get('errors'), sort_keys=True), thread_id=tid)
         disk_pressure = collect_workbench_disk_pressure(context_info)
         if disk_pressure.get('warning'):
             log(disk_pressure['warning'], thread_id=tid)
@@ -1915,12 +2012,14 @@ def execute_gpu_command(job: dict, timeout: int = DEFAULT_JOB_TIMEOUT) -> dict:
             'dependencies': gpu_command.get('dependencies', []),
             'preparationManifestApplied': bool(preparation_manifest),
             'diskPressure': disk_pressure,
+            'workbenchPrune': workbench_prune,
         }
         disk_pressure_output = 'disk_pressure=' + json.dumps(disk_pressure, sort_keys=True)
+        workbench_prune_output = 'workbench_prune=' + json.dumps(workbench_prune, sort_keys=True)
         if not disk_pressure.get('ok', True):
             return {
                 'success': False,
-                'output': disk_pressure_output,
+                'output': workbench_prune_output + '\n' + disk_pressure_output,
                 'error': 'Insufficient free disk space for GPU job preparation',
                 **result_metadata,
             }
@@ -2005,7 +2104,7 @@ def execute_gpu_command(job: dict, timeout: int = DEFAULT_JOB_TIMEOUT) -> dict:
             }
 
         result['code'] = gpu_command.get('code', '')
-        result['output'] = (disk_pressure_output + '\n' + result.get('output', '')).strip()
+        result['output'] = (workbench_prune_output + '\n' + disk_pressure_output + '\n' + result.get('output', '')).strip()
         if preparation_output:
             result['output'] = (preparation_output + '\n' + result.get('output', '')).strip()
         update_job_queue_status(job_id, 'validating_evidence')

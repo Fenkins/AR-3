@@ -79,6 +79,75 @@ def test_disk_pressure_snapshot_includes_workbench_root_and_model_cache_sizes():
         shutil.rmtree(model_cache, ignore_errors=True)
 
 
+def test_prune_stale_workbenches_removes_old_siblings_and_preserves_current():
+    root = tempfile.mkdtemp(prefix="ar3-worker-prune-test-")
+    old_root = os.environ.get("AR3_WORKBENCH_ROOT")
+    old_max = os.environ.get("AR3_WORKBENCH_PRUNE_MAX_BYTES")
+    old_age = os.environ.get("AR3_WORKBENCH_PRUNE_MIN_AGE_SECONDS")
+    os.environ["AR3_WORKBENCH_ROOT"] = root
+    os.environ["AR3_WORKBENCH_PRUNE_MAX_BYTES"] = "20"
+    os.environ["AR3_WORKBENCH_PRUNE_MIN_AGE_SECONDS"] = "0"
+    try:
+        context = gpu_worker.prepare_workbench({"jobId": "gpu_space-prune_1", "spaceId": "space prune"})
+        current = Path(context["workbench_dir"])
+        Path(current, "current.bin").write_bytes(b"x" * 11)
+        stale = Path(root, "old-space")
+        stale.mkdir()
+        Path(stale, "old.bin").write_bytes(b"z" * 29)
+
+        result = gpu_worker.prune_stale_workbenches(context)
+
+        assert result["enabled"] is True
+        assert result["deleted"][0]["path"] == str(stale)
+        assert current.is_dir()
+        assert not stale.exists()
+        assert result["rootBytesAfter"] >= 11
+        assert result["rootBytesAfter"] < result["rootBytesBefore"]
+    finally:
+        if old_root is None:
+            os.environ.pop("AR3_WORKBENCH_ROOT", None)
+        else:
+            os.environ["AR3_WORKBENCH_ROOT"] = old_root
+        if old_max is None:
+            os.environ.pop("AR3_WORKBENCH_PRUNE_MAX_BYTES", None)
+        else:
+            os.environ["AR3_WORKBENCH_PRUNE_MAX_BYTES"] = old_max
+        if old_age is None:
+            os.environ.pop("AR3_WORKBENCH_PRUNE_MIN_AGE_SECONDS", None)
+        else:
+            os.environ["AR3_WORKBENCH_PRUNE_MIN_AGE_SECONDS"] = old_age
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_prune_stale_workbenches_reports_within_limits_without_deleting():
+    root = tempfile.mkdtemp(prefix="ar3-worker-prune-noop-test-")
+    old_root = os.environ.get("AR3_WORKBENCH_ROOT")
+    old_max = os.environ.get("AR3_WORKBENCH_PRUNE_MAX_BYTES")
+    os.environ["AR3_WORKBENCH_ROOT"] = root
+    os.environ["AR3_WORKBENCH_PRUNE_MAX_BYTES"] = str(1024 * 1024)
+    try:
+        context = gpu_worker.prepare_workbench({"jobId": "gpu_space-prune-noop_1", "spaceId": "space prune noop"})
+        sibling = Path(root, "kept-space")
+        sibling.mkdir()
+        Path(sibling, "kept.bin").write_bytes(b"z" * 29)
+
+        result = gpu_worker.prune_stale_workbenches(context)
+
+        assert result["reason"] == "within_limits"
+        assert result["deleted"] == []
+        assert sibling.is_dir()
+    finally:
+        if old_root is None:
+            os.environ.pop("AR3_WORKBENCH_ROOT", None)
+        else:
+            os.environ["AR3_WORKBENCH_ROOT"] = old_root
+        if old_max is None:
+            os.environ.pop("AR3_WORKBENCH_PRUNE_MAX_BYTES", None)
+        else:
+            os.environ["AR3_WORKBENCH_PRUNE_MAX_BYTES"] = old_max
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def test_strategy4_line_assembly_does_not_crash_on_markdown_headers():
     prompt = """
 ### Candidate implementation
