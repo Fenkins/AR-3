@@ -1,5 +1,5 @@
-1a255f760f958bae9e491d1dfbec797e0590cd6d
-7a72218bcb67c0e7fd5ebb9fa48ed3332d9512bc
+Total output lines: 3733
+
 import { prisma } from './prisma'
 import { callAI, AIConfig, AIMessage } from './ai'
 import { generateVariants, gradeVariant, selectBestVariant, saveVariantsToDatabase, updateVariantStepDb, updateVariantDb, selectBestVariantFromDb, loadVariantsFromDb, reEvaluateStepCount, Variant, Step } from './variant-engine'
@@ -472,7 +472,10 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
   const messages = await generateStagePrompt(space, currentStage, previousExperiments, agent)
 
   debugLog(`[executeResearchCycle] Calling AI for stage: ${currentStage.name}`)
-  debugLog(`[executeResearchCycle] Agent: ${agent?.name} (${agent?.role}), Provider: ${serviceProvi…29792 tokens truncated…     } catch {}
+  debugLog(`[executeResearchCycle] Agent: ${agent?.name} (${agent?.role}), Provider: ${serviceProvider?.provider}`)
+
+  // Call LLM API
+  let response: { content: string; tokensUsed:…29695 tokens truncated…     } catch {}
           // Remove from pending variants list so pipeline moves on
           const remaining = state.variants.filter(v => v.id !== vid)
           updateExecutionState(spaceId, { variants: remaining })
