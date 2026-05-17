@@ -1238,7 +1238,7 @@ Original output preview: ${response.content.substring(0, 500)}`
       }
 
       if (useGpu) {
-        const completion = assessGpuStepCompletion(response.content)
+        const completion = assessGpuStepCompletion(response.content, { stepName: step.name, stepDescription: step.description })
         if (!completion.valid) {
           debugLog(`[executeVariant] GPU completion gate failed for "${variant.name}": ${completion.reason}`)
           step.status = 'FAILED'
