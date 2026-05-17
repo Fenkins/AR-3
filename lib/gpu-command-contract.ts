@@ -63,6 +63,11 @@ type GpuEvidenceInput = {
 
 type GpuEvidenceResult = { valid: true; reason: string } | { valid: false; reason: string }
 
+type GpuStepCompletionInput = {
+  stepDescription?: string | null
+  stepName?: string | null
+}
+
 type GpuStepCompletionResult = { valid: true; reason: string } | { valid: false; reason: string }
 
 type PersistablePreparationResult =
@@ -73,7 +78,7 @@ function strictGpuFailureReason(result: StrictGpuResult): string {
   return (result as { ok: false; reason?: string }).reason || 'invalid strict GPU command'
 }
 
-export function assessGpuStepCompletion(content: string): GpuStepCompletionResult {
+export function assessGpuStepCompletion(content: string, input: GpuStepCompletionInput = {}): GpuStepCompletionResult {
   const text = String(content || '')
   if (/\[GPU Timeout\]/i.test(text)) {
     return { valid: false, reason: 'GPU job timed out before producing executable experiment evidence' }
@@ -86,7 +91,48 @@ export function assessGpuStepCompletion(content: string): GpuStepCompletionResul
   if (!resultMatch || !resultMatch[1]?.trim()) {
     return { valid: false, reason: 'GPU-enabled step did not record a completed GPU execution result; refusing to store LLM prose as experiment evidence' }
   }
+  const stepText = `${input.stepName || ''} ${input.stepDescription || ''}`.toLowerCase()
+  if (/\b(download|verify|checksum|integrity|weights?|checkpoint|snapshot)\b/.test(stepText) && /\b(model|llada|dream|huggingface|hf|weights?|checkpoint|safetensors)\b/.test(stepText)) {
+    const parsedOutput = parseGpuEvidenceJson(resultMatch[1])
+    const hasModelDownloadEvidence = Boolean(parsedOutput && typeof parsedOutput === 'object' && !Array.isArray(parsedOutput) && (
+      outputHasConcreteKey(parsedOutput, /(^|[.[_])(downloaded_files|downloaded_file_count|local_dir|snapshot_dir|model_path|model_dir|checkpoint_path|safetensors_files|sha|checksum|model_load_attempts|model_resolution)(\]|\.|_|$)/i) ||
+      outputHasConcreteArtifactValue(parsedOutput, /\.(safetensors|bin|pt|pth|index\.json)$/i)
+    ))
+    if (!hasModelDownloadEvidence) {
+      return {
+        valid: false,
+        reason: 'GPU execution did not prove the model download/weight verification requested by this step; expected concrete model artifact, snapshot, checksum, or load-attempt evidence.',
+      }
+    }
+  }
   return { valid: true, reason: 'GPU execution result marker is present' }
+}
+
+function outputHasConcreteKey(value: unknown, keyPattern: RegExp): boolean {
+  if (!value || typeof value !== 'object') return false
+  if (Array.isArray(value)) return value.some(item => outputHasConcreteKey(item, keyPattern))
+  for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+    if (keyPattern.test(key) && hasConcreteOutputValue(nested)) return true
+    if (outputHasConcreteKey(nested, keyPattern)) return true
+  }
+  return false
+}
+
+function outputHasConcreteArtifactValue(value: unknown, valuePattern: RegExp): boolean {
+  if (typeof value === 'string') return valuePattern.test(value) && !/\b(missing|not found|failed|failure|error|absent|unavailable)\b/i.test(value)
+  if (!value || typeof value !== 'object') return false
+  if (Array.isArray(value)) return value.some(item => outputHasConcreteArtifactValue(item, valuePattern))
+  return Object.values(value as Record<string, unknown>).some(nested => outputHasConcreteArtifactValue(nested, valuePattern))
+}
+
+function hasConcreteOutputValue(value: unknown): boolean {
+  if (value === null || value === undefined) return false
+  if (typeof value === 'number') return Number.isFinite(value)
+  if (typeof value === 'boolean') return value === true
+  if (typeof value === 'string') return value.trim().length > 0 && !/\b(missing|not found|failed|failure|error|absent|unavailable)\b/i.test(value)
+  if (Array.isArray(value)) return value.some(hasConcreteOutputValue)
+  if (typeof value === 'object') return Object.values(value as Record<string, unknown>).some(hasConcreteOutputValue)
+  return false
 }
 
 export function extractPersistablePreparationManifest(output: string): PersistablePreparationResult {
