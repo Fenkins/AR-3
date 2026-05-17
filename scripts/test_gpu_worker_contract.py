@@ -118,6 +118,22 @@ def test_manifest_dependency_plain_version_becomes_valid_pip_spec():
     assert normalized['deps'] == ['transformers==4.45.2', 'accelerate>=0.33.0']
 
 
+def test_manifest_dependency_import_name_without_package_becomes_pip_package():
+    normalized = gpu_worker.normalize_declared_dependencies([
+        {'importName': 'sklearn.metrics', 'purpose': 'score model output', 'required': True},
+        {'import_name': 'matplotlib.pyplot', 'versionSpec': '>=3.8', 'purpose': 'plot metrics'},
+        {'module': 'yaml', 'purpose': 'load config'},
+    ])
+    assert normalized['success'] is True
+    assert normalized['deps'] == ['scikit-learn', 'matplotlib>=3.8', 'PyYAML']
+
+
+def test_dotted_import_dependency_string_uses_top_level_package():
+    normalized = gpu_worker.normalize_declared_dependencies(['matplotlib.pyplot', 'numpy.linalg'])
+    assert normalized['success'] is True
+    assert normalized['deps'] == ['matplotlib', 'numpy']
+
+
 def test_manifest_model_resolution_uses_shared_cache_root(monkeypatch, tmp_path):
     shared_cache = tmp_path / 'shared-model-cache'
     context = {'workbench_dir': str(tmp_path / 'workbench'), 'env': {}}
