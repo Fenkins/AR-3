@@ -192,7 +192,7 @@ export async function getSpaceCache(spaceId: string): Promise<CacheEntry[]> {
 
 export async function getSpaceCacheSize(spaceId: string): Promise<number> {
   const entries = await prisma.modelCache.findMany({
-    where: { spaceId },
+    where: { spaceId, status: 'COMPLETED' },
     select: { filePath: true, fileSize: true },
   })
   const trackedSize = entries.reduce((total, entry) => total + getCacheEntrySizeBytes(entry), 0)
