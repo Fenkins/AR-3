@@ -987,6 +987,27 @@ function testGpuStepCompletionAcceptsModelDownloadArtifactEvidence() {
   assert.equal(assessed.valid, true, assessed.reason)
 }
 
+function testGpuStepCompletionRejectsGenericMetricsForTrainingStep() {
+  const assessed = contract.assessGpuStepCompletion(
+    '[GPU Execution Result] job:gpu_test_123\n{"cuda_available":true,"gpu_name":"RTX 2060 SUPER","tensor_sum":42}',
+    {
+      stepDescription: 'Train the gasket module using a contrastive learning objective.',
+    },
+  )
+  assert.equal(assessed.valid, false)
+  assert.match(assessed.reason, /training\/model-load attempt/i)
+}
+
+function testGpuStepCompletionAcceptsTrainingHardwareLimitEvidence() {
+  const assessed = contract.assessGpuStepCompletion(
+    '[GPU Execution Result] job:gpu_test_123\n{"cuda_available":true,"gpu_name":"RTX 2060 SUPER","model_load_attempts":[{"model_id":"GSAI-ML/LLaDA-8B-Base","out_of_memory":true}],"hardware_limit":"8GB VRAM OOM before first training step"}',
+    {
+      stepDescription: 'Train the gasket module using a contrastive learning objective.',
+    },
+  )
+  assert.equal(assessed.valid, true, assessed.reason)
+}
+
 testExtractsJsonAfterUnclosedThink()
 testFallbackPreparationCommandIsExecutableAndPromptIndependent()
 testPreparationStageWithValidatedManifestSubmitsExecutableFallbackInsteadOfRawManifestJson()
@@ -1042,4 +1063,6 @@ testGpuStepCompletionRejectsGpuError()
 testGpuStepCompletionAcceptsRecordedExecutionResult()
 testGpuStepCompletionRejectsGenericMetricsForModelDownloadStep()
 testGpuStepCompletionAcceptsModelDownloadArtifactEvidence()
+testGpuStepCompletionRejectsGenericMetricsForTrainingStep()
+testGpuStepCompletionAcceptsTrainingHardwareLimitEvidence()
 console.log('strict gpu contract tests passed')
