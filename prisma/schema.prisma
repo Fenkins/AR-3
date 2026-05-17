@@ -177,6 +177,7 @@ model Space {
   totalCost              Float          @default(0)
   useEmbeddings          Boolean        @default(false)
   useGpu                 Boolean        @default(false)
+  useSystemRamOffload    Boolean        @default(false)
   strictCodeGates        Boolean        @default(false)  // If true, fail early-stage variants with no code indicators
   currentCycle           Int            @default(1)
   researchType           String?        // e.g. "diffusion_model", "autoregressive", "multi_model_ensemble"
