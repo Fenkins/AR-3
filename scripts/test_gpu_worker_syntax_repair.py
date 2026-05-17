@@ -63,6 +63,21 @@ def test_auto_fix_applies_torch_cuda_device_total_mem_alias():
     assert "props.total_mem)" not in fixed
 
 
+def test_repairs_duplicated_vram_variable_name():
+    code = (
+        "SINGLE_MODEL_VRAM_GIB = 14\n"
+        "FREE_VRAM_GIB = 8\n"
+        "MAX_CONCURRENT_INSTANCES = int(FREE_VRAM_GIB / SINGLE_MODEL_VRAM_VRAM_GIB) "
+        "if SINGLE_MODEL_VRAM_VRAM_GIB > 0 else 0\n"
+        "print(MAX_CONCURRENT_INSTANCES)\n"
+    )
+    fixed = gpu_worker.repair_common_torch_api_mistakes(code)
+    assert "SINGLE_MODEL_VRAM_VRAM_GIB" not in fixed
+    namespace = {}
+    exec(fixed, namespace)
+    assert namespace["MAX_CONCURRENT_INSTANCES"] == 0
+
+
 def test_auto_fix_repairs_malformed_dict_value_format_spec():
     broken = "metrics = {'agreement': consensus_result['avg_agreement']:.3f, 'loss': stats['loss']:.4f}\nprint(metrics)\n"
     fixed = gpu_worker.auto_fix_code(broken)
@@ -94,6 +109,7 @@ if __name__ == '__main__':
     test_leaves_normal_code_unchanged()
     test_repairs_torch_cuda_device_total_mem_alias()
     test_auto_fix_applies_torch_cuda_device_total_mem_alias()
+    test_repairs_duplicated_vram_variable_name()
     test_auto_fix_repairs_malformed_dict_value_format_spec()
     test_repairs_optional_gpu_info_boolean_lookup()
     test_injects_missing_defaultdict_import()
