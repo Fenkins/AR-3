@@ -592,6 +592,77 @@ def test_process_job_marks_validation_failures_as_failed_validation():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def test_execute_gpu_command_stops_when_preparation_exhausts_disk_space():
+    root = tempfile.mkdtemp(prefix="ar3-worker-post-prep-disk-test-")
+    old_root = os.environ.get("AR3_WORKBENCH_ROOT")
+    old_collect = gpu_worker.collect_workbench_disk_pressure
+    old_preflight = gpu_worker.run_cuda_driver_preflight
+    old_prepare_manifest = gpu_worker.prepare_manifest_environment
+    old_execute_python = gpu_worker.execute_python_code
+    os.environ["AR3_WORKBENCH_ROOT"] = root
+    calls = {"disk": 0, "executed": False}
+
+    def fake_collect(context):
+        calls["disk"] += 1
+        if calls["disk"] == 1:
+            return {"ok": True, "freeBytes": 5 * 1024**3, "phase": "before_preparation"}
+        return {
+            "ok": False,
+            "freeBytes": 512 * 1024**2,
+            "warning": "low disk space after preparation",
+            "phase": "after_preparation",
+        }
+
+    try:
+        gpu_worker.collect_workbench_disk_pressure = fake_collect
+        gpu_worker.run_cuda_driver_preflight = lambda: {"ok": True, "status": "cuda_compute_ready"}
+        gpu_worker.prepare_manifest_environment = lambda manifest, context, timeout=900, job_id='': {
+            "success": True,
+            "output": "downloaded model into cache",
+            "error": None,
+        }
+
+        def fake_execute_python(*args, **kwargs):
+            calls["executed"] = True
+            return {"success": True, "output": '{"cuda_available": true}', "error": None}
+
+        gpu_worker.execute_python_code = fake_execute_python
+        result = gpu_worker.execute_gpu_command({
+            "jobId": "gpu_space-post-prep-disk_1",
+            "spaceId": "space post prep disk",
+            "stageName": "Implementation",
+            "prompt": __import__("json").dumps({
+                "action": "run_python",
+                "dependencies": [],
+                "code": "import json\nimport torch\nprint(json.dumps({'cuda_available': True, 'gpu_name': 'unit-test'}))",
+            }),
+            "context": __import__("json").dumps({
+                "preparationManifest": {
+                    "dependencies": [],
+                    "smokeTests": [],
+                    "workbench": {"reuseKey": "post-prep-disk"},
+                }
+            }),
+        }, timeout=30)
+
+        assert result["success"] is False, result
+        assert "after GPU job preparation" in result["error"]
+        assert result["diskPressure"]["phase"] == "before_preparation"
+        assert result["diskPressureAfterPreparation"]["phase"] == "after_preparation"
+        assert "disk_pressure_after_preparation" in result["output"]
+        assert calls["executed"] is False
+    finally:
+        gpu_worker.collect_workbench_disk_pressure = old_collect
+        gpu_worker.run_cuda_driver_preflight = old_preflight
+        gpu_worker.prepare_manifest_environment = old_prepare_manifest
+        gpu_worker.execute_python_code = old_execute_python
+        if old_root is None:
+            os.environ.pop("AR3_WORKBENCH_ROOT", None)
+        else:
+            os.environ["AR3_WORKBENCH_ROOT"] = old_root
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def test_get_pending_jobs_reclaims_stale_inflight_jobs_without_results():
     root = tempfile.mkdtemp(prefix="ar3-worker-stale-claim-test-")
     old_queue = gpu_worker.JOB_QUEUE_FILE
@@ -671,6 +742,7 @@ if __name__ == "__main__":
     test_repair_torch_workbench_removes_poisoned_cuda_packages_and_reinstalls_cu124()
     test_validation_rejects_pretty_printed_contract_failure_after_gpu_smoke_json()
     test_process_job_marks_validation_failures_as_failed_validation()
+    test_execute_gpu_command_stops_when_preparation_exhausts_disk_space()
     test_get_pending_jobs_reclaims_stale_inflight_jobs_without_results()
     test_execute_python_code_rejects_placeholders_before_running()
     print("gpu worker workbench tests passed")
