@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { authMiddleware, adminMiddleware } from '../../middleware'
 import { prisma } from '@/lib/prisma'
 
+export const dynamic = 'force-dynamic'
+
 const HF_CONFIG_KEY = 'huggingface_token'
 
 export async function GET(request: NextRequest) {
