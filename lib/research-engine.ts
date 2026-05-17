@@ -47,6 +47,21 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+export function gpuJobPollTimeoutMsFromConfig(config: { jobTimeout?: unknown } | null | undefined, fallbackMs = 300000): number {
+  const configuredSeconds = Number(config?.jobTimeout)
+  if (!Number.isFinite(configuredSeconds) || configuredSeconds <= 0) return fallbackMs
+  return Math.max(fallbackMs, Math.floor(configuredSeconds * 1000))
+}
+
+function readGpuJobPollTimeoutMs(): number {
+  try {
+    const gpuConfig = JSON.parse(fs.readFileSync('/tmp/gpu_config.json', 'utf8'))
+    return gpuJobPollTimeoutMsFromConfig(gpuConfig)
+  } catch {
+    return gpuJobPollTimeoutMsFromConfig(null)
+  }
+}
+
 
 const STRICT_GPU_CODE_CONTRACT = `
 
@@ -603,8 +618,7 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
           const { jobId } = await gpuResponse.json()
           debugLog(`[executeResearchCycle] GPU job submitted: ${jobId}`)
 
-          // Poll for result (max 5 minutes)
-          const maxWait = 300000
+          const maxWait = readGpuJobPollTimeoutMs()
           const pollInterval = 5000
           let waited = 0
           while (waited < maxWait) {
@@ -642,8 +656,8 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
               }
             }
             if (waited >= maxWait) {
-              debugLog(`[executeResearchCycle] GPU job timed out`)
-              response.content += '\n\n[GPU Timeout]: Job did not complete within 5 minutes'
+              debugLog(`[executeResearchCycle] GPU job timed out after ${Math.round(maxWait / 1000)}s`)
+              response.content += `\n\n[GPU Timeout]: Job did not complete within ${Math.round(maxWait / 1000)} seconds`
               break
             }
           }
@@ -1099,8 +1113,7 @@ ${useGpu && shouldUseAutonomousPreparationFallback(stageName) ? `## Preparation 
             const { jobId } = await gpuResponse.json()
             debugLog(`[executeVariant] GPU job submitted: ${jobId}`)
 
-            // Poll for result (max 5 minutes)
-            const maxWait = 300000
+            const maxWait = readGpuJobPollTimeoutMs()
             const pollInterval = 5000
             let waited = 0
             let gpuResult = ''
@@ -1155,7 +1168,7 @@ ${useGpu && shouldUseAutonomousPreparationFallback(stageName) ? `## Preparation 
                 }
               }
               if (waited >= maxWait) {
-                gpuResult = '[GPU Timeout]: Job did not complete within 5 minutes'
+                gpuResult = `[GPU Timeout]: Job did not complete within ${Math.round(maxWait / 1000)} seconds`
                 break
               }
             }
@@ -2710,8 +2723,9 @@ export async function resumeSpace(spaceId: string) {
     stages = DEFAULT_STAGES.map((s, i) => ({ ...s, id: `stage_${i}` }))
   }
 
-  // Find current stage from execution or default to first
-  const currentStage = stages[0]
+  // Restore the persisted phase after server restarts. Falling back to the
+  // first stage caused running spaces to repeat Investigation after a restart.
+  const currentStage = stages.find(stage => stage.name === (space as any).currentPhase) || stages[0]
   const currentStageId = currentStage?.id || 'stage_0'
 
   // Load variants from DB
