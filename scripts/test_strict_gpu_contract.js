@@ -1,5 +1,3 @@
-Total output lines: 1022
-
 #!/usr/bin/env node
 const assert = require('assert')
 const childProcess = require('child_process')
@@ -514,7 +512,105 @@ function testFalseCudaAvailabilityIsNotRuntimeGpuEvidence() {
     stageName: 'Implementation',
     fallbackUsed: false,
     success: true,
-    output: JSON.stringify({ ac…1316 tokens truncated….test(metric)))
+    output: JSON.stringify({ accuracy: 0.91, loss: 0.12, cuda_available: false, device: 'cpu' }),
+  })
+  assert.equal(assessed.valid, false)
+  assert.match(assessed.reason, /runtime GPU evidence/i)
+}
+
+function testGpuIdentityCanValidateRuntimeEvidenceWhenTorchCudaIsFalse() {
+  const assessed = contract.assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    fallbackUsed: false,
+    success: true,
+    output: JSON.stringify({ accuracy: 0.91, loss: 0.12, cuda_available: false, gpu_name: 'RTX 4090', gpu_memory_gb: 24 }),
+  })
+  assert.equal(assessed.valid, true, assessed.reason)
+}
+
+function testArtifactOnlyOutputIsNotValidGpuEvidence() {
+  const assessed = contract.assessGpuExecutionEvidence({
+    stageName: 'Implementation',
+    fallbackUsed: false,
+    success: true,
+    output: 'saved metrics to /tmp/ar3-workbenches/run-1/metrics.json',
+  })
+  assert.equal(assessed.valid, false)
+  assert.match(assessed.reason, /runtime GPU evidence/i)
+}
+
+function testStrictGpuCommandRejectsCpuOnlyMetricsCode() {
+  const extracted = contract.extractStrictGpuCommand(JSON.stringify({
+    action: 'run_python',
+    dependencies: [],
+    code: 'import json\nresult = {"accuracy": 0.91, "loss": 0.12}\nprint(json.dumps(result))\nassert result["accuracy"] > 0\nprint("done")',
+  }))
+  assert.equal(extracted.ok, false)
+  assert.match(extracted.reason, /GPU\/CUDA probe/i)
+}
+
+function testStrictGpuCommandAcceptsExecutableGpuProbeCode() {
+  const extracted = contract.extractStrictGpuCommand(JSON.stringify({
+    action: 'run_python',
+    dependencies: ['torch'],
+    code: 'import json\nimport torch\ndevice = "cuda" if torch.cuda.is_available() else "cpu"\nx = torch.ones((2, 2), device=device)\nresult = {"cuda_available": torch.cuda.is_available(), "device": str(x.device), "sum": float(x.sum().item())}\nprint(json.dumps(result, sort_keys=True))',
+  }))
+  assert.equal(extracted.ok, true, extracted.reason)
+}
+
+function testStrictGpuCommandSkipsNonCommandJsonAndAcceptsLaterCommand() {
+  const response = JSON.stringify({ schemaVersion: 'ar3.preparation-manifest.v1', models: [] }) + '\n' + JSON.stringify({
+    action: 'run_python',
+    dependencies: ['torch'],
+    code: 'import json\nimport torch\ndevice = "cuda" if torch.cuda.is_available() else "cpu"\nx = torch.ones((2, 2), device=device)\nprint(json.dumps({"cuda_available": torch.cuda.is_available(), "device": str(x.device), "sum": float(x.sum().item())}))',
+  })
+  const extracted = contract.extractStrictGpuCommand(response)
+  assert.equal(extracted.ok, true, extracted.reason)
+  assert.match(extracted.command.code, /torch\.ones/)
+}
+
+function testStrictGpuCommandAcceptsPythonFenceForWeakModels() {
+  const response = 'Here is the experiment:\n```python\nimport json\nimport torch\ndevice = "cuda" if torch.cuda.is_available() else "cpu"\nx = torch.arange(4, device=device)\nprint(json.dumps({"cuda_available": torch.cuda.is_available(), "device": str(x.device), "sum": float(x.sum().item())}))\n```'
+  const extracted = contract.extractStrictGpuCommand(response)
+  assert.equal(extracted.ok, true, extracted.reason)
+  assert.equal(extracted.command.action, 'run_python')
+  assert.match(extracted.command.code, /torch\.arange/)
+}
+
+function testFallbackPreparationCommandSanitizesContractReasonMarkers() {
+  const fallback = contract.buildAutonomousPreparationCommand({
+    researchGoal: 'Any arbitrary model research goal',
+    stepDescription: 'Prepare reusable sandbox',
+    stageName: 'Investigation',
+    reason: 'code contains placeholder/pseudocode markers',
+  })
+  assert.doesNotMatch(fallback.code, /placeholder|pseudocode/i)
+  const extracted = contract.extractStrictGpuCommand(JSON.stringify(fallback))
+  assert.equal(extracted.ok, true, extracted.reason)
+}
+
+function runPythonCode(code) {
+  const script = path.join(outDir, `fallback-${Date.now()}-${Math.random().toString(16).slice(2)}.py`)
+  fs.writeFileSync(script, code)
+  const output = childProcess.execFileSync('python3', [script], { encoding: 'utf8', timeout: 120000 })
+  return JSON.parse(output)
+}
+
+function testAutonomousPreparationFallbackEmitsStepSpecificResearchPlan() {
+  const fallback = contract.buildAutonomousPreparationCommand({
+    researchGoal: 'Improve diffusion model inference with latent gasket ODE trajectory consensus.',
+    stepDescription: 'Implement projection metrics for comparing latent trajectories between two model streams.',
+    stageName: 'Investigation',
+    reason: 'JSON action must be "run_python"',
+  })
+  const manifest = runPythonCode(fallback.code)
+  assert.equal(manifest.research_goal, 'Improve diffusion model inference with latent gasket ODE trajectory consensus.')
+  assert.equal(manifest.step_description, 'Implement projection metrics for comparing latent trajectories between two model streams.')
+  assert.ok(Array.isArray(manifest.focus_terms), 'focus_terms should be present')
+  assert.ok(manifest.focus_terms.includes('latent'), `expected latent focus term, got ${manifest.focus_terms}`)
+  assert.ok(manifest.focus_terms.includes('trajectory'), `expected trajectory focus term, got ${manifest.focus_terms}`)
+  assert.ok(manifest.recommended_experiment && /projection metrics/i.test(manifest.recommended_experiment.objective))
+  assert.ok(manifest.recommended_experiment.metrics.some(metric => /trajectory/i.test(metric)))
 }
 
 function testPersistedPreparationManifestKeepsResearchSpecificObjective() {
