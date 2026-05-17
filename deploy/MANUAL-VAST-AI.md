@@ -70,7 +70,7 @@ Once running:
 
 **Admin Credentials:**
 - Email: `admin@example.com`
-- Password: `jkp93p`
+- Password: set with `ADMIN_PASSWORD` before running `npm run seed`
 
 ⚠️ **IMPORTANT**: Change these credentials immediately after first login!
 
@@ -169,7 +169,7 @@ npm start
 ```bash
 cd /tmp/AR-1
 npx prisma db push --force-reset
-npm run seed
+ADMIN_PASSWORD="choose-a-local-password" npm run seed
 systemctl restart ar1-platform
 ```
 

@@ -37,4 +37,4 @@ The JSON will contain `"public_url"` which allows you to access the dashboard gl
 
 ## Default Credentials
 - **Email:** `admin@example.com`
-- **Password:** `jkp93p`
+- **Password:** set with `ADMIN_PASSWORD` before running `npm run seed`

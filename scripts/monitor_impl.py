@@ -7,20 +7,31 @@ import subprocess
 import time
 import re
 import json
+import os
+import shlex
 
 prev_variant_stage = None
 prev_gpu_output = ""
 
 def ssh(cmd):
+    ssh_host = os.environ.get("AR3_SSH_HOST", "")
+    ssh_port = os.environ.get("AR3_SSH_PORT", "22")
+    ssh_key = os.environ.get("AR3_SSH_KEY", "")
+    if not ssh_host or not ssh_key:
+        return "AR3_SSH_HOST and AR3_SSH_KEY are required for remote monitoring"
+    quoted_key = shlex.quote(ssh_key)
+    quoted_port = shlex.quote(ssh_port)
+    quoted_host = shlex.quote(f"root@{ssh_host}")
+    quoted_cmd = shlex.quote(cmd)
     result = subprocess.run(
-        f"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15 -i /tmp/ar3_key -p 39216 root@ssh1.vast.ai '{cmd}'",
+        f"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15 -i {quoted_key} -p {quoted_port} {quoted_host} {quoted_cmd}",
         shell=True, capture_output=True, text=True, timeout=30
     )
     return result.stdout + result.stderr
 
 def check_space():
     """Get current Investigation variants from DB."""
-    cmd = """node -e "
+    cmd = r"""node -e "
 const { PrismaClient } = require('/opt/AR-3-fresh/node_modules/.prisma/client');
 const prisma = new PrismaClient();
 prisma.variant.findMany({ 

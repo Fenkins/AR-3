@@ -1,0 +1,7 @@
+{
+  "contract_id": "example-contract-id",
+  "tunnel_url": "pending",
+  "ssh_host": "ssh.example.vast.ai",
+  "ssh_port": "22",
+  "ssh_key": "~/.ssh/id_ed25519.pub"
+}

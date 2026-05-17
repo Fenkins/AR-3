@@ -44,6 +44,8 @@ service-account.json
 # Deployment
 vast-ai-*.sh
 *.secret
+deploy/active_instance.json
+deploy/active_instance.local.json
 
 # Knowledge base (large files)
 knowledge-base/

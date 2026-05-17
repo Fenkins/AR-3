@@ -77,7 +77,7 @@ docker-compose up -d
 npm install
 npx prisma generate
 npx prisma db push
-npm run seed
+ADMIN_PASSWORD="choose-a-local-password" npm run seed
 npm run dev
 ```
 

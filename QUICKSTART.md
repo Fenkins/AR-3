@@ -6,7 +6,7 @@ The platform is now running at **http://localhost:3000**
 
 ### Admin Credentials
 - **Email**: `admin@example.com`
-- **Password**: `jkp93p`
+- **Password**: set with `ADMIN_PASSWORD` before running `npm run seed`
 
 ## 📋 Setup Steps
 
@@ -135,7 +135,7 @@ npm start
 
 # Reset database (warning: deletes all data)
 npx prisma db push --force-reset
-npm run seed
+ADMIN_PASSWORD="choose-a-local-password" npm run seed
 ```
 
 ## 📊 API Endpoints

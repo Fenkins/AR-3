@@ -159,7 +159,7 @@ def main():
     print(f"  Contract ID: {contract_id}")
     print(f"  Tunnel URL: {tunnel_url or 'check /tmp/tunnel_url.txt on instance'}")
     print(f"  SSH: ssh -i {ssh_key} -p {ssh_port} root@{ssh_host}")
-    print(f"  Admin UI: {tunnel_url}/ (admin@example.com / jkp93p)")
+    print(f"  Admin UI: {tunnel_url}/ (seed with ADMIN_PASSWORD before first login)")
     print("=" * 60)
 
 if __name__ == "__main__":

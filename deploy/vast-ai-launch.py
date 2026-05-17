@@ -175,7 +175,7 @@ def main():
     print(f"  URL: http://{instance_info['ip']}:{instance_info['port']}")
     print(f"\nAdmin Credentials:")
     print(f"  Email: admin@example.com")
-    print(f"  Password: jkp93p")
+    print(f"  Password: set ADMIN_PASSWORD before running npm run seed")
     print(f"\nManage instance:")
     print(f"  Vast.ai Console: https://console.vast.ai")
     print(f"  Contract ID: {contract_id}")

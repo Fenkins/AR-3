@@ -331,8 +331,7 @@ def main():
     
     print(f"\nAdmin Credentials:")
     print(f"  Email: admin@example.com")
-    print(f"  Password: jkp93p")
-    print(f"  ⚠️  CHANGE THESE IMMEDIATELY AFTER LOGIN!")
+    print(f"  Password: set ADMIN_PASSWORD before running npm run seed")
     
     print(f"\nManage instance:")
     print(f"  Vast.ai Console: https://console.vast.ai")

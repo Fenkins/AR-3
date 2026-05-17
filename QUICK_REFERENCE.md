@@ -3,7 +3,7 @@
 ## 🔑 Login
 - **URL**: http://localhost:3000
 - **Email**: admin@example.com
-- **Password**: jkp93p
+- **Password**: set with `ADMIN_PASSWORD` before running `npm run seed`
 
 ## 🚀 Quick Start (3 Steps)
 
