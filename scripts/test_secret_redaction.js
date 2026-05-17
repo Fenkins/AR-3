@@ -21,8 +21,8 @@ const sample = [
   'HF_TOKEN=hf_1234567890abcdefghijklmnopqrstuvwxyz',
   'Authorization: Bearer hf_abcdefghijklmnopqrstuvwxyz1234567890',
   'github ghp_1234567890abcdefghijklmnopqrstuvwxyz1234',
-  'gemini AIzaSyAHliLkCiULDwG47WZU1Aohvei7X-mv78k',
-  'vast 10c0fd894b2bbcbabc693f1c79b2644c08696d6596905c9efd1ff3c1a3242d9e',
+  'gemini AIzaSyDummyRedactionOnly0000000000000',
+  'vast aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
   'api_key: should_not_survive',
 ].join('\n')
 
@@ -30,8 +30,8 @@ const redacted = redactSecrets(sample)
 assert(!redacted.includes('hf_1234567890abcdefghijklmnopqrstuvwxyz'))
 assert(!redacted.includes('hf_abcdefghijklmnopqrstuvwxyz1234567890'))
 assert(!redacted.includes('ghp_1234567890abcdefghijklmnopqrstuvwxyz1234'))
-assert(!redacted.includes('AIzaSyAHliLkCiULDwG47WZU1Aohvei7X-mv78k'))
-assert(!redacted.includes('10c0fd894b2bbcbabc693f1c79b2644c08696d6596905c9efd1ff3c1a3242d9e'))
+assert(!redacted.includes('AIzaSyDummyRedactionOnly0000000000000'))
+assert(!redacted.includes('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'))
 assert(!redacted.includes('should_not_survive'))
 assert(redacted.includes('HF_TOKEN=[REDACTED]'))
 assert(redacted.includes('Authorization: Bearer [REDACTED]'))

@@ -42,7 +42,7 @@ LAST_LOG_LINE=$(tail -1 /tmp/nextjs.log)
 echo "Last log: $LAST_LOG_LINE" >> $LOG
 
 # 5. Check if variants are PENDING but not executing
-VARIANT_STATUS=$(node /tmp/check_status.js 2>/dev/null | grep "Variant:" | head -3)
+VARIANT_STATUS=$(node /opt/AR-3/scripts/diagnostics/check_status.js 2>/dev/null | grep "Variant:" | head -3)
 if echo "$VARIANT_STATUS" | grep -q "PENDING"; then
     echo "[$(date)] Variants are PENDING — checking if pipeline is stuck..." >> $LOG
     # Check if background loop is running
@@ -70,7 +70,7 @@ fi
 
 # 8. Check DB variant count — are steps being executed?
 echo "--- DB Status ---" >> $LOG
-node /tmp/check_status.js 2>/dev/null >> $LOG || echo "check_status failed" >> $LOG
+node /opt/AR-3/scripts/diagnostics/check_status.js 2>/dev/null >> $LOG || echo "check_status failed" >> $LOG
 
 # 9. Tail the last few log lines for this cycle
 echo "--- Last 5 log lines ---" >> $LOG
