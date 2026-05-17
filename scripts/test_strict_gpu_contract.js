@@ -966,6 +966,27 @@ function testGpuStepCompletionAcceptsRecordedExecutionResult() {
   assert.equal(assessed.valid, true, assessed.reason)
 }
 
+function testGpuStepCompletionRejectsGenericMetricsForModelDownloadStep() {
+  const assessed = contract.assessGpuStepCompletion(
+    '[GPU Execution Result] job:gpu_test_123\n{"cuda_available":true,"gpu_name":"RTX 2060 SUPER","tensor_sum":42}',
+    {
+      stepDescription: 'Download and verify integrity of two identical LLaDA-8B-Base model weights from HuggingFace.',
+    },
+  )
+  assert.equal(assessed.valid, false)
+  assert.match(assessed.reason, /model download\/weight verification/i)
+}
+
+function testGpuStepCompletionAcceptsModelDownloadArtifactEvidence() {
+  const assessed = contract.assessGpuStepCompletion(
+    '[GPU Execution Result] job:gpu_test_123\n{"cuda_available":true,"gpu_name":"RTX 2060 SUPER","downloaded_files":["model-00001-of-00006.safetensors"],"local_dir":"/tmp/ar3/model"}',
+    {
+      stepDescription: 'Download and verify integrity of two identical LLaDA-8B-Base model weights from HuggingFace.',
+    },
+  )
+  assert.equal(assessed.valid, true, assessed.reason)
+}
+
 testExtractsJsonAfterUnclosedThink()
 testFallbackPreparationCommandIsExecutableAndPromptIndependent()
 testPreparationStageWithValidatedManifestSubmitsExecutableFallbackInsteadOfRawManifestJson()
@@ -1019,4 +1040,6 @@ testPreparationStagesShortCircuitWeakModelContractFailures()
 testGpuStepCompletionRejectsProseWithoutExecutionResult()
 testGpuStepCompletionRejectsGpuError()
 testGpuStepCompletionAcceptsRecordedExecutionResult()
+testGpuStepCompletionRejectsGenericMetricsForModelDownloadStep()
+testGpuStepCompletionAcceptsModelDownloadArtifactEvidence()
 console.log('strict gpu contract tests passed')
