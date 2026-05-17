@@ -1555,7 +1555,12 @@ def repair_embedded_newline_string_literals(code: str) -> str:
 
 def repair_common_torch_api_mistakes(code: str) -> str:
     """Repair narrow, observed PyTorch API hallucinations in generated experiments."""
-    return re_module.sub(r'(?<![A-Za-z0-9_])total_mem(?![A-Za-z0-9_])', 'total_memory', code)
+    fixed = re_module.sub(r'(?<![A-Za-z0-9_])total_mem(?![A-Za-z0-9_])', 'total_memory', code)
+    # Observed in live weak-model output: the model defines SINGLE_MODEL_VRAM_GIB
+    # and later references SINGLE_MODEL_VRAM_VRAM_GIB, causing a NameError before
+    # any evidence is produced. Keep the repair literal rather than fuzzy.
+    fixed = fixed.replace('SINGLE_MODEL_VRAM_VRAM_GIB', 'SINGLE_MODEL_VRAM_GIB')
+    return fixed
 
 
 def repair_common_gpu_info_key_assumptions(code: str) -> str:
