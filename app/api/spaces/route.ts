@@ -48,17 +48,33 @@ export async function GET(request: NextRequest) {
       orderBy: { updatedAt: 'desc' },
     })
 
-    // Get cache sizes for all spaces
+    // Get cache sizes for completed cache artifacts only. Failed download rows
+    // are useful diagnostics, but showing them as "0 B files" makes the UI look
+    // like empty artifacts were prepared.
     const allCaches = await prisma.modelCache.findMany({
-      select: { spaceId: true, filePath: true, fileSize: true },
+      select: { spaceId: true, filePath: true, fileSize: true, status: true },
     })
     const cacheSizeMap: Record<string, number> = {}
+    const completedCacheCountMap: Record<string, number> = {}
+    const failedCacheCountMap: Record<string, number> = {}
     for (const cache of allCaches) {
+      if (cache.status === 'FAILED') {
+        failedCacheCountMap[cache.spaceId] = (failedCacheCountMap[cache.spaceId] || 0) + 1
+        continue
+      }
+      if (cache.status !== 'COMPLETED') continue
       cacheSizeMap[cache.spaceId] = (cacheSizeMap[cache.spaceId] || 0) + getCacheEntrySizeBytes(cache)
+      completedCacheCountMap[cache.spaceId] = (completedCacheCountMap[cache.spaceId] || 0) + 1
     }
 
     const spacesWithCacheSize = spaces.map(space => normalizeSpaceForClient({
       ...space,
+      _count: {
+        ...space._count,
+        ModelCache: completedCacheCountMap[space.id] || 0,
+        modelCaches: completedCacheCountMap[space.id] || 0,
+      },
+      failedModelCacheCount: failedCacheCountMap[space.id] || 0,
       cacheSize: Math.max(cacheSizeMap[space.id] || 0, getSpaceCacheDiskSize(space.id)),
     }))
 
