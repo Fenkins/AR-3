@@ -105,6 +105,19 @@ export function assessGpuStepCompletion(content: string, input: GpuStepCompletio
       }
     }
   }
+  if (/\b(train|training|fine[- ]?tune|contrastive|objective|optimizer|epoch|backprop|gradient)\b/.test(stepText)) {
+    const parsedOutput = parseGpuEvidenceJson(resultMatch[1])
+    const hasTrainingEvidence = Boolean(parsedOutput && typeof parsedOutput === 'object' && !Array.isArray(parsedOutput) && (
+      outputHasConcreteKey(parsedOutput, /(^|[.[_])(train_loss|training_loss|loss|epoch|epochs|training_steps|optimizer_steps|gradient_norm|checkpoint_path|checkpoint_dir|model_load_attempts|oom|out_of_memory|vram_error|cuda_oom|hardware_limit)(\]|\.|_|$)/i) ||
+      outputHasConcreteArtifactValue(parsedOutput, /\.(pt|pth|safetensors|ckpt|json|csv|log)$/i)
+    ))
+    if (!hasTrainingEvidence) {
+      return {
+        valid: false,
+        reason: 'GPU execution did not prove the training/model-load attempt requested by this step; expected concrete loss, epoch/step, checkpoint, OOM/VRAM, or hardware-limit evidence.',
+      }
+    }
+  }
   return { valid: true, reason: 'GPU execution result marker is present' }
 }
 
