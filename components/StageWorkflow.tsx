@@ -1,3 +1,5 @@
+Total output lines: 1029
+
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
@@ -51,6 +53,7 @@ interface Experiment {
   userRating?: string
   createdAt: string
   status: string
+  cycleNumber?: number
 }
 
 interface StageWorkflowProps {
@@ -145,7 +148,7 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
 
         if (data.space.experiments) {
           setExperiments(data.space.experiments)
-          setCycleCount(data.space.experiments.filter((e: Experiment) => e.status === 'COMPLETED').length)
+          setCycleCount(data.space.displayCycle || data.space.cycleSummary?.activeCycle || data.space.currentCycle || 1)
         }
         if (data.space.breakthroughs) setBreakthroughs(data.space.breakthroughs)
 
@@ -520,203 +523,7 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
                   const stepProgress = setupProgress >= ((i + 1) / setupSteps.length) * 100
                   const isActive = setupProgress > (i / setupSteps.length) * 100 && !stepProgress
                   return (
-                    <div key={i} className={`flex items-center gap-3 p-3 rounded-lg transition-all ${stepProgress ? 'bg-green-500/10 text-green-300' : isActive ? 'bg-primary-500/10 text-primary-300' : 'bg-dark-800/50 text-dark-500'}`}>
-                      <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${stepProgress ? 'bg-green-500 text-white' : isActive ? 'bg-primary-500 text-white animate-pulse' : 'bg-dark-700 text-dark-400'}`}>{stepProgress ? '✓' : i + 1}</div>
-                      <span className={isActive ? 'animate-pulse' : ''}>{step}</span>
-                    </div>
-                  )
-                })}
-              </div>
-              <div className="space-y-2">
-                <div className="flex justify-between text-sm">
-                  <span className="text-dark-400">Overall Progress</span>
-                  <span className="text-primary-400 font-medium">{Math.round(setupProgress)}%</span>
-                </div>
-                <div className="h-3 bg-dark-700 rounded-full overflow-hidden">
-                  <div className="h-full bg-gradient-to-r from-primary-600 to-primary-400 transition-all duration-500 ease-out" style={{ width: `${setupProgress}%` }} />
-                </div>
-                <p className="text-xs text-dark-500 text-center">Elapsed time: {elapsed}s</p>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-    )
-  }
-
-  const runningVariant = getRunningVariant()
-  const runningStep = runningVariant ? getRunningStep(runningVariant) : null
-  const currentStepIdx = runningVariant ? getCurrentStepIndex(runningVariant) : 0
-  const totalSteps = runningVariant?.steps.length || 0
-
-  const stageVariantsCompleted = (stageId: string) => allVariants.filter(v => v.stageId === stageId && v.status === 'COMPLETED').length
-  const currentVariantIds = new Set(variants.map(v => v.id))
-  const visibleHistoryVariants = allVariants.filter(v => !currentVariantIds.has(v.id))
-
-  const toggleHistoryExpand = (id: string) => {
-    setExpandedHistoryIds(prev => {
-      const next = new Set(prev)
-      next.has(id) ? next.delete(id) : next.add(id)
-      return next
-    })
-  }
-
-  const toggleVariantExpand = (id: string) => {
-    setExpandedVariantIds(prev => {
-      const next = new Set(prev)
-      next.has(id) ? next.delete(id) : next.add(id)
-      return next
-    })
-  }
-
-  return (
-    <div className="space-y-3">
-      {/* TOP HEADER BAR */}
-      <div className="bg-dark-900 rounded-xl border border-dark-700 p-3">
-        <div className="flex items-center justify-between gap-4 flex-wrap">
-          <div className="flex items-center gap-3">
-            <h2 className="text-lg font-bold text-white">{space?.name || 'Research Space'}</h2>
-            <div className="flex items-center gap-2">
-              {runStatus === 'running' && <span className="flex items-center gap-1 text-xs text-green-400"><span className="w-2 h-2 bg-green-400 rounded-full animate-pulse" /> Running</span>}
-              {runStatus === 'paused' && <span className="flex items-center gap-1 text-xs text-yellow-400"><span className="w-2 h-2 bg-yellow-400 rounded-full" /> Paused</span>}
-              {runStatus === 'stopped' && <span className="flex items-center gap-1 text-xs text-red-400"><span className="w-2 h-2 bg-red-400 rounded-full" /> Stopped</span>}
-              {runStatus === 'idle' && <span className="flex items-center gap-1 text-xs text-dark-400"><span className="w-2 h-2 bg-dark-500 rounded-full" /> Idle</span>}
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <span className="text-xs text-dark-400">Tokens: <span className="text-dark-200 font-medium">{totalTokens.toLocaleString()}</span></span>
-            <span className="text-xs text-dark-400">Cost: <span className="text-dark-200 font-medium">${totalCost.toFixed(4)}</span></span>
-            <span className="text-xs px-2 py-0.5 bg-dark-800 rounded text-dark-300">Cycle {cycleCount}</span>
-          </div>
-          <div className="flex items-center gap-2">
-            {runStatus === 'idle' && (
-              <>
-                <button onClick={runSingleCycle} disabled={isRunning} className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 disabled:opacity-50 rounded-lg text-sm font-medium transition-all">
-                  <span>▶</span><span>Run</span>
-                </button>
-                {isAutoMode && (
-                  <button onClick={() => runResearchCycle(5)} disabled={isRunning} className="flex items-center gap-1.5 px-3 py-1.5 bg-primary-600 hover:bg-primary-700 disabled:opacity-50 rounded-lg text-sm font-medium transition-all">
-                    <span>🔥</span><span>Run 5</span>
-                  </button>
-                )}
-              </>
-            )}
-            {runStatus === 'running' && (
-              <>
-                <button onClick={pauseResearch} className="flex items-center gap-1.5 px-3 py-1.5 bg-yellow-600 hover:bg-yellow-700 rounded-lg text-sm font-medium transition-all">
-                  <span>⏸</span><span>Pause</span>
-                </button>
-                <button onClick={stopResearch} className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-700 rounded-lg text-sm font-medium transition-all">
-                  <span>⏹</span><span>Stop</span>
-                </button>
-              </>
-            )}
-            {runStatus === 'paused' && (
-              <>
-                <button onClick={resumeResearch} className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 rounded-lg text-sm font-medium transition-all">
-                  <span>▶</span><span>Resume</span>
-                </button>
-                <button onClick={stopResearch} className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-700 rounded-lg text-sm font-medium transition-all">
-                  <span>⏹</span><span>Stop</span>
-                </button>
-              </>
-            )}
-            <div className="relative group">
-              <button className="w-8 h-8 flex items-center justify-center bg-dark-700 hover:bg-dark-600 rounded-lg transition-all text-dark-300">⋮</button>
-              <div className="absolute right-0 top-full mt-1 w-44 bg-dark-800 border border-dark-700 rounded-lg shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50">
-                <button onClick={() => setShowGenerateModal(true)} disabled={generatingVariants} className="w-full px-3 py-2.5 text-left text-dark-300 hover:bg-dark-700 rounded-lg transition-colors flex items-center gap-2 text-sm disabled:opacity-50">
-                  <span>🎲</span><span>{generatingVariants ? 'Generating...' : 'Generate Variants'}</span>
-                </button>
-                <button onClick={() => { if (confirm('Delete this research space?')) handleDeleteSpace() }} className="w-full px-3 py-2.5 text-left text-red-400 hover:bg-dark-700 rounded-lg transition-colors flex items-center gap-2 text-sm">
-                  <span>🗑</span><span>Delete Space</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div className="flex items-center justify-between mt-2">
-          <span className="text-xs text-dark-500">Last updated: {secondsAgo}s ago</span>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" checked={isAutoMode} onChange={(e) => setIsAutoMode(e.target.checked)} className="sr-only" />
-            <div className={`w-9 h-5 rounded-full transition-colors ${isAutoMode ? 'bg-primary-500' : 'bg-dark-600'}`}>
-              <div className={`w-4 h-4 bg-white rounded-full shadow transform transition-transform mt-0.5 ${isAutoMode ? 'translate-x-4 ml-0.5' : 'translate-x-0.5'}`} />
-            </div>
-            <span className="text-xs text-dark-400">Auto</span>
-          </label>
-        </div>
-      </div>
-
-      {/* STAGE TABS */}
-      <div className="flex items-center gap-2 overflow-x-auto pb-1">
-        {stages.map((stage, index) => {
-          const completed = stageVariantsCompleted(stage.id)
-          const isCurrent = index === currentStageIndex
-          return (
-            <button
-              key={stage.id}
-              onClick={() => { setCurrentStageIndex(index); setSelectedVariant(null) }}
-              className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap border ${isCurrent ? 'bg-primary-500/20 border-primary-500 text-white' : 'bg-dark-800 border-dark-700 text-dark-300 hover:border-dark-500'}`}
-            >
-              <span>{getStageStatusIcon(stage.status)}</span>
-              <span>{stage.name}</span>
-              {completed > 0 && <span className="px-1.5 py-0.5 text-xs bg-dark-700 rounded-full">{completed}</span>}
-            </button>
-          )
-        })}
-      </div>
-
-      {/* SPLIT VIEW */}
-      <div className="grid grid-cols-1 lg:grid-cols-[65%_35%] gap-3">
-        {/* LEFT PANEL — Current Execution (65%) */}
-        <div className="space-y-3">
-          {/* Current Stage Info */}
-          <div className="bg-dark-900 rounded-xl border border-dark-700 p-4">
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2">
-                <h3 className="text-base font-bold text-white">{currentStage?.name}</h3>
-                <span className={`px-2 py-0.5 text-xs rounded ${currentStage?.status === 'completed' ? 'bg-green-500/20 text-green-300' : currentStage?.status === 'running' ? 'bg-yellow-500/20 text-yellow-300' : 'bg-dark-700 text-dark-400'}`}>
-                  {currentStage?.status || 'pending'}
-                </span>
-              </div>
-              <button onClick={() => setShowEditModal(currentStage?.id || null)} className="p-1.5 text-dark-400 hover:text-white hover:bg-dark-800 rounded-lg transition-colors text-sm">✏️</button>
-            </div>
-
-            {/* Progress Bar */}
-            {runningVariant && (
-              <div className="mb-4">
-                <div className="flex items-center justify-between text-xs mb-1.5">
-                  <span className="text-dark-300 font-medium">{runningVariant.name}</span>
-                  <span className="text-dark-400">Step {currentStepIdx + 1} of {totalSteps}</span>
-                </div>
-                <div className="h-2.5 bg-dark-700 rounded-full overflow-hidden">
-                  <div className="h-full bg-gradient-to-r from-primary-600 to-primary-400 transition-all duration-500 ease-out" style={{ width: `${totalSteps > 0 ? ((currentStepIdx + 1) / totalSteps) * 100 : 0}%` }} />
-                </div>
-                {runningStep && (
-                  <div className="flex items-center gap-1.5 mt-1.5">
-                    <span className="w-2 h-2 bg-primary-400 rounded-full animate-pulse" />
-                    <span className="text-xs text-primary-300">Executing: {runningStep.name}</span>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Variant Cards */}
-            {(variants.length ?? 0) > 0 ? (
-              <div className="space-y-2">
-                {variants.map((variant) => {
-                  const isExpanded = expandedVariantIds.has(variant.id)
-                  const hasRunning = variant.status === 'RUNNING'
-                  return (
-                    <div key={variant.id} className={`rounded-lg border-2 transition-all ${variant.isSelected ? 'bg-primary-500/10 border-primary-500' : 'bg-dark-800 border-dark-700'}`}>
-                      <div className="flex items-center justify-between p-3">
-                        <button onClick={() => toggleVariantExpand(variant.id)} className="flex items-center gap-2 flex-1 text-left">
-                          <span className={`w-2 h-2 rounded-full ${variant.status === 'COMPLETED' ? 'bg-green-400' : variant.status === 'RUNNING' ? 'bg-yellow-400 animate-pulse' : variant.status === 'FAILED' ? 'bg-red-400' : 'bg-dark-500'}`} />
-                          <span className="text-sm font-medium text-dark-200">{variant.name}</span>
-                          {variant.isSelected && <span className="text-xs text-primary-400">★</span>}
-                        </button>
-                        <div className="flex items-center gap-2">
-                          {variant.grade !== undefined && <span className={`px-2 py-0.5 text-xs rounded ${getGradeColor(variant.grade)}`}>{getGradeEmoji(variant.grade)} {variant.grade}</span>}
-                          <span className={`px-2 py-0.5 text-xs rounded capitalize ${variant.status === 'COMPLETED' ? 'bg-green-500/20 text-green-300' : variant.status === 'RUNNING' ? 'bg-yellow-500/20 text-yellow-300' : variant.status === 'FAILED' ? 'bg-red-500/20 text-red-300' : 'bg-dark-700 text-dark-400'}`}>{variant.status.toLowerCase()}</span>
+                    <div key={i} className={`flex items-center gap-3 p-3 rounded-lg transition-all ${stepProgress ? 'bg-green-500/10 text-green-300' : isActive ? 'bg-primary-500/10 text-primary-300' : 'bg-dark-800/50 text…3182 tokens truncated…nt.status.toLowerCase()}</span>
                           <button onClick={() => setShowVariantDetailModal(variant)} className="p-1 text-dark-400 hover:text-white transition-colors text-xs">🔍</button>
                         </div>
                       </div>
