@@ -48,7 +48,12 @@ downloads:
 {
   const invocation = buildSnapshotDownloadInvocation('owner/model-name', '/tmp/cache dir', 'secret-token')
   assert.strictEqual(invocation.command, 'python3')
-  assert.deepStrictEqual(invocation.args, ['-c', 'from huggingface_hub import snapshot_download; import sys; print(snapshot_download(repo_id=sys.argv[1], local_dir=sys.argv[2], local_dir_use_symlinks=False, resume_download=True, local_files_only=False))', 'owner/model-name', '/tmp/cache dir'])
+  assert.strictEqual(invocation.args[0], '-c')
+  assert.match(invocation.args[1], /pip", "install".*huggingface_hub>=0\.20/)
+  assert.match(invocation.args[1], /from huggingface_hub import snapshot_download/)
+  assert.match(invocation.args[1], /snapshot_download\(repo_id=sys\.argv\[1\]/)
+  assert.strictEqual(invocation.args[2], 'owner/model-name')
+  assert.strictEqual(invocation.args[3], '/tmp/cache dir')
   assert.strictEqual(invocation.env.HF_HOME, '/tmp/cache dir/.cache/huggingface')
   assert.strictEqual(invocation.env.HF_TOKEN, 'secret-token')
 }
