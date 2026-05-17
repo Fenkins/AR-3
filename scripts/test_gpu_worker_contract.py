@@ -48,6 +48,51 @@ def test_gpu_probe_experiment_is_accepted_before_execution():
     assert validation["ok"] is True
 
 
+def test_cuda_preflight_classifies_nvml_visible_cuinit_failure(monkeypatch, tmp_path):
+    class FakeCompleted:
+        returncode = 0
+        stdout = "0, GPU-test, Tesla V100, 535.288.01, 32768, 0\n"
+        stderr = ""
+
+    class FakeCall:
+        def __init__(self, value):
+            self.value = value
+            self.argtypes = None
+            self.restype = None
+
+        def __call__(self, *args):
+            if args and hasattr(args[0], "_obj"):
+                if self.value == "driver":
+                    args[0]._obj.value = 12020
+                elif self.value == "count":
+                    args[0]._obj.value = -1
+            if self.value == "driver":
+                return 0
+            if self.value == "init":
+                return 999
+            if self.value == "count":
+                return 3
+            return 0
+
+    class FakeCuda:
+        def __init__(self):
+            self.cuDriverGetVersion = FakeCall("driver")
+            self.cuInit = FakeCall("init")
+            self.cuDeviceGetCount = FakeCall("count")
+
+    monkeypatch.setattr(gpu_worker.subprocess, "run", lambda *args, **kwargs: FakeCompleted())
+    monkeypatch.setattr(gpu_worker.ctypes, "CDLL", lambda _name: FakeCuda())
+    monkeypatch.setattr(gpu_worker, "CUDA_PREFLIGHT_FILE", str(tmp_path / "preflight.json"))
+
+    result = gpu_worker.run_cuda_driver_preflight()
+
+    assert result["ok"] is False
+    assert result["status"] == "nvml_visible_cuda_init_failed"
+    assert result["cudaDriver"]["cuInit"] == 999
+    assert "do not reinstall torch" in " ".join(result["guidance"]).lower()
+    assert (tmp_path / "preflight.json").exists()
+
+
 def test_bare_torch_dependency_is_pinned_to_cuda_12_4_wheel_index():
     normalized = gpu_worker.normalize_declared_dependencies(['torch', 'transformers'])
     assert 'torch==2.5.1' in normalized['deps']

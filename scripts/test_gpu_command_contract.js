@@ -32,6 +32,8 @@ function testAutonomousPreparationUsesNvidiaSmiFallback() {
   assert.strictEqual(command.action, 'run_python')
   assert.ok(command.code.includes('nvidia-smi'), 'preparation probe must query nvidia-smi, not rely only on torch')
   assert.ok(command.code.includes('nvidia_smi'), 'preparation JSON should expose nvidia_smi evidence')
+  assert.ok(command.code.includes('cuInit'), 'preparation probe must check CUDA driver init, not only NVML')
+  assert.ok(command.code.includes('cuda_compute_available'), 'preparation JSON should distinguish CUDA compute from NVML visibility')
   assert.ok(command.code.includes('torch_cuda_available'), 'preparation JSON should distinguish torch CUDA from driver-level GPU visibility')
 }
 

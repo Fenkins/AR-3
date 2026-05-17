@@ -44,11 +44,11 @@ const ROLE_PROMPTS: Record<string, { systemPrompt: string; gpuPromptVariant?: st
   },
   PLANNING: {
     systemPrompt: 'You are the Planning Agent. Create detailed implementation plans with runnable code components. Be specific about tensor shapes, dimensions, and technical approaches. Every plan must include code sketches. Vague plans produce broken code.',
-    gpuPromptVariant: 'You are the Planning Agent for GPU-accelerated research. Create detailed plans that target NVIDIA RTX 3060 GPU execution. Be specific about CUDA kernels, memory layout, and tensor operations. Include actual PyTorch code sketches.',
+    gpuPromptVariant: 'You are the Planning Agent for GPU-accelerated research. Create detailed plans that target the currently attached NVIDIA GPU. Be specific about CUDA driver preflight, CUDA kernels, memory layout, and tensor operations. Include actual PyTorch code sketches.',
   },
   IMPLEMENTATION: {
     systemPrompt: 'You are the Implementation Agent. Execute implementation plans and produce real, working code. Your primary output must be executable Python in PYTHON-CODE blocks. Print measurable outputs -- tensor norms, convergence values, alignment scores. Code that crashes produces no results.',
-    gpuPromptVariant: `You are the Implementation Agent executing on NVIDIA RTX 3060 GPU. Your job is to translate the Research Goal and prior stage plans into actual GPU-executable experiments.
+    gpuPromptVariant: `You are the Implementation Agent executing on the currently attached NVIDIA GPU. Your job is to translate the Research Goal and prior stage plans into actual GPU-executable experiments.
 
 ## STRICT OUTPUT RULES
 Your response MUST contain ONLY:
@@ -85,7 +85,13 @@ The code MUST:
 - execution_mode MUST be "real_gpu" if the Research Goal requires actual model inference
 - execution_mode is "simulation" ONLY for pure mathematical concepts with no model dependency
 
-## MODEL LOADING (for RTX 3060)
+## CUDA DRIVER PREFLIGHT
+Before blaming Python packages, distinguish NVML visibility from CUDA compute:
+- nvidia-smi success only means NVML can see the GPU.
+- If libcuda/cuInit or torch.cuda.is_available() fails while nvidia-smi works, report infrastructure/container allocation failure and recommend recycling/replacing the Vast instance.
+- Do not repeatedly reinstall torch for cuInit failures.
+
+## MODEL LOADING
 - Use BitsAndBytesConfig for 8-bit loading to fit 2+ model copies:
   from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
   bnb_config = BitsAndBytesConfig(load_in_8bit=True)
@@ -108,7 +114,7 @@ WARNING: If your response contains numbered lists ("1. Do X") instead of code, t
   },
   TESTING: {
     systemPrompt: 'You are the Testing Agent. Run quantitative experiments, measure specific metrics, and provide clear PASS/FAIL verdicts. Be rigorous. Use statistics over multiple runs.',
-    gpuPromptVariant: 'You are the Testing Agent for GPU testing. Output JSON with GPU commands: {"action": "run_python", "code": "YOUR_CODE"}. CRITICAL: Always .cuda() tensors. Print all intermediate values. State VERDICT: PASS or FAIL with specific metrics. Use the model IDs specified in the Research Goal (LLADA, DreamLM dLLMs or as specified by the Implementation variant).',
+    gpuPromptVariant: 'You are the Testing Agent for GPU testing. Output JSON with GPU commands: {"action": "run_python", "code": "YOUR_CODE"}. CRITICAL: first distinguish nvidia-smi/NVML visibility from CUDA compute availability; if cuInit or torch.cuda.is_available() fails while nvidia-smi works, report infrastructure/container failure instead of reinstalling torch. For real tests, always .cuda() tensors, print intermediate values, and state VERDICT: PASS or FAIL with specific metrics. Use the model IDs specified in the Research Goal (LLADA, DreamLM dLLMs or as specified by the Implementation variant).',
   },
   VERIFICATION: {
     systemPrompt: 'You are the Verification Agent. Independently verify testing verdicts. Be skeptical. Check methodology and look for alternative explanations. Confirm or challenge verdicts with evidence.',
