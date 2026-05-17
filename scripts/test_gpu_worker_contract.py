@@ -231,6 +231,33 @@ def test_worker_queue_status_tracks_preparation_install_execution_and_validation
     ]
 
 
+def test_process_job_persists_disk_pressure_metadata(tmp_path, monkeypatch):
+    queue_file = tmp_path / 'gpu_jobs.json'
+    results_file = tmp_path / 'gpu_results.json'
+    job = {'jobId': 'job-disk-pressure', 'status': 'claimed'}
+    queue_file.write_text(json.dumps([job]))
+    results_file.write_text('{}')
+
+    monkeypatch.setattr(gpu_worker, 'JOB_QUEUE_FILE', str(queue_file))
+    monkeypatch.setattr(gpu_worker, 'JOB_RESULTS_FILE', str(results_file))
+    monkeypatch.setattr(gpu_worker, 'execute_gpu_command', lambda _job, timeout=30: {
+        'success': True,
+        'output': 'cuda_available=true',
+        'error': None,
+        'code': 'print("cuda_available=true")',
+        'workbenchDir': '/tmp/ar3-workbenches/space',
+        'artifactsDir': '/tmp/ar3-workbenches/space/artifacts',
+        'dependencies': [],
+        'preparationManifestApplied': False,
+        'diskPressure': {'ok': True, 'freeBytes': 1234},
+    })
+
+    gpu_worker.process_job(job, timeout=30)
+    stored = json.loads(results_file.read_text())['job-disk-pressure']
+
+    assert stored['diskPressure'] == {'ok': True, 'freeBytes': 1234}
+
+
 def test_self_reported_contract_failure_is_rejected_after_execution(tmp_path, monkeypatch):
     monkeypatch.setenv("AR3_WORKBENCH_ROOT", str(tmp_path / "workbenches"))
     code = (

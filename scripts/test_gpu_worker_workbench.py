@@ -38,6 +38,41 @@ def test_prepare_workbench_is_stable_per_space_and_sets_cache_env():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def test_disk_pressure_snapshot_includes_workbench_root_and_model_cache_sizes():
+    root = tempfile.mkdtemp(prefix="ar3-worker-disk-pressure-test-")
+    model_cache = tempfile.mkdtemp(prefix="ar3-model-cache-test-")
+    old_root = os.environ.get("AR3_WORKBENCH_ROOT")
+    old_model_cache = os.environ.get("AR3_MODEL_CACHE_ROOT")
+    os.environ["AR3_WORKBENCH_ROOT"] = root
+    os.environ["AR3_MODEL_CACHE_ROOT"] = model_cache
+    try:
+        context = gpu_worker.prepare_workbench({"jobId": "gpu_space-disk_1", "spaceId": "space disk"})
+        Path(context["workbench_dir"], "artifact.bin").write_bytes(b"x" * 11)
+        Path(model_cache, "model.bin").write_bytes(b"y" * 13)
+
+        snapshot = gpu_worker.collect_workbench_disk_pressure(context)
+
+        assert snapshot["ok"] is True
+        assert snapshot["workbenchRoot"] == root
+        assert snapshot["modelCacheRoot"] == model_cache
+        assert snapshot["workbenchBytes"] >= 11
+        assert snapshot["workbenchRootBytes"] >= snapshot["workbenchBytes"]
+        assert snapshot["modelCacheBytes"] == 13
+        assert isinstance(snapshot["freeBytes"], int)
+        assert isinstance(snapshot["usedPercent"], float)
+    finally:
+        if old_root is None:
+            os.environ.pop("AR3_WORKBENCH_ROOT", None)
+        else:
+            os.environ["AR3_WORKBENCH_ROOT"] = old_root
+        if old_model_cache is None:
+            os.environ.pop("AR3_MODEL_CACHE_ROOT", None)
+        else:
+            os.environ["AR3_MODEL_CACHE_ROOT"] = old_model_cache
+        shutil.rmtree(root, ignore_errors=True)
+        shutil.rmtree(model_cache, ignore_errors=True)
+
+
 def test_strategy4_line_assembly_does_not_crash_on_markdown_headers():
     prompt = """
 ### Candidate implementation
