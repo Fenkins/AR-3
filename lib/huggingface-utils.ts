@@ -104,7 +104,15 @@ export function buildSnapshotDownloadInvocation(modelId: string, localDir: strin
     command: 'python3',
     args: [
       '-c',
-      'from huggingface_hub import snapshot_download; import sys; print(snapshot_download(repo_id=sys.argv[1], local_dir=sys.argv[2], local_dir_use_symlinks=False, resume_download=True, local_files_only=False))',
+      [
+        'import subprocess, sys',
+        'try:',
+        '    from huggingface_hub import snapshot_download',
+        'except ModuleNotFoundError:',
+        '    subprocess.check_call([sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "--no-cache-dir", "huggingface_hub>=0.20"])',
+        '    from huggingface_hub import snapshot_download',
+        'print(snapshot_download(repo_id=sys.argv[1], local_dir=sys.argv[2], local_dir_use_symlinks=False, resume_download=True, local_files_only=False))',
+      ].join('\n'),
       modelId,
       normalizedLocalDir,
     ],
