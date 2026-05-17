@@ -118,6 +118,18 @@ def test_manifest_dependency_plain_version_becomes_valid_pip_spec():
     assert normalized['deps'] == ['transformers==4.45.2', 'accelerate>=0.33.0']
 
 
+def test_manifest_model_resolution_uses_shared_cache_root(monkeypatch, tmp_path):
+    shared_cache = tmp_path / 'shared-model-cache'
+    context = {'workbench_dir': str(tmp_path / 'workbench'), 'env': {}}
+    monkeypatch.setenv('AR3_MODEL_CACHE_ROOT', str(shared_cache))
+
+    local_dir = gpu_worker._manifest_model_local_dir('org/test-model', context)
+
+    assert local_dir.parent == shared_cache
+    assert local_dir.name.startswith('org-test-model-')
+    assert len(local_dir.name.rsplit('-', 1)[-1]) == 10
+
+
 def test_missing_module_auto_install_reuses_dependency_normalization(tmp_path):
     context = {'packages_dir': str(tmp_path / 'packages')}
     repair = gpu_worker.missing_module_install_command('torch', context)
