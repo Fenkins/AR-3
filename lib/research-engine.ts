@@ -3,7 +3,7 @@ import { callAI, AIConfig, AIMessage } from './ai'
 import { generateVariants, gradeVariant, selectBestVariant, saveVariantsToDatabase, updateVariantStepDb, updateVariantDb, selectBestVariantFromDb, loadVariantsFromDb, reEvaluateStepCount, Variant, Step } from './variant-engine'
 import { buildEmbeddingContext } from './embeddings'
 import { addToCache } from './model-cache'
-import { assessGpuExecutionEvidence, buildAutonomousPreparationCommand, buildDeterministicGpuExperimentCommand, extractPersistablePreparationManifest, extractStrictGpuCommand, selectGpuSubmissionCommand, shouldShortCircuitPreparationFallback, shouldUseAutonomousPreparationFallback } from './gpu-command-contract'
+import { assessGpuExecutionEvidence, assessGpuStepCompletion, buildAutonomousPreparationCommand, buildDeterministicGpuExperimentCommand, extractPersistablePreparationManifest, extractStrictGpuCommand, selectGpuSubmissionCommand, shouldShortCircuitPreparationFallback, shouldUseAutonomousPreparationFallback } from './gpu-command-contract'
 import { buildPreparationManifestInstructions, buildPreparationRetryMessage, extractPreparationManifestCandidate, validatePreparationManifest } from './preparation-manifest'
 import fs from 'fs'
 import { getInternalGpuApiBase } from './internal-api-base'
@@ -507,7 +507,7 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
             data: {
               setupStatus: 'VALIDATED',
               setupError: null,
-              setupStep: JSON.stringify(manifestValidation.manifest).substring(0, 8000),
+              setupStep: JSON.stringify(manifestValidation.manifest),
             },
           })
         } catch (e: any) {
@@ -517,10 +517,18 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
         const errorText = manifestValidation.errors.join('; ')
         response.content += `\n\n[PREPARATION_MANIFEST_REJECTED]: ${errorText}`
         try {
-          await prisma.space.update({
+          const currentSetup = await prisma.space.findUnique({
             where: { id: spaceId },
-            data: { setupStatus: 'FAILED', setupError: errorText.substring(0, 2000), setupStep: 'preparation-manifest-validation' },
+            select: { setupStatus: true },
           })
+          if (currentSetup?.setupStatus === 'VALIDATED') {
+            debugLog('[executeResearchCycle] Skipping failed preparation manifest downgrade because a validated manifest is already persisted')
+          } else {
+            await prisma.space.update({
+              where: { id: spaceId },
+              data: { setupStatus: 'FAILED', setupError: errorText.substring(0, 2000), setupStep: 'preparation-manifest-validation' },
+            })
+          }
         } catch {}
       }
     }
@@ -924,7 +932,7 @@ ${useGpu && shouldUseAutonomousPreparationFallback(stageName) ? `## Preparation 
                 data: {
                   setupStatus: 'VALIDATED',
                   setupError: null,
-                  setupStep: JSON.stringify(manifestValidation.manifest).substring(0, 8000),
+                  setupStep: JSON.stringify(manifestValidation.manifest),
                 },
               })
               debugLog(`[executeVariant] Persisted validated preparation manifest from ${stageName} GPU command`)
@@ -939,20 +947,16 @@ ${useGpu && shouldUseAutonomousPreparationFallback(stageName) ? `## Preparation 
         // Strict pre-submit contract: weak models must repair invalid prose/pseudocode before GPU time is spent.
         const preparationManifestForRescue = (() => {
           if (!space.setupStep) return null
-          try { return JSON.parse(space.setupStep) } catch {
-            return {
-              schemaVersion: 'ar3.preparation-probe.v1',
-              researchType: 'gpu-autonomous-research',
-              objective: `Run a concrete GPU experiment for: ${step.description}`,
-              researchGoal: space.initialPrompt,
-              stepDescription: step.description,
-              focusTerms: String(`${space.initialPrompt} ${step.description}`).toLowerCase().match(/[a-z][a-z0-9_-]{3,}/g)?.slice(0, 12) || [],
-              dependencies: [{ name: 'torch', importName: 'torch' }, { name: 'requests', importName: 'requests' }],
-              models: [],
-              gradingCriteria: ['Print JSON metrics with CUDA/GPU evidence and concrete numeric research measurements.'],
-              workbench: { reuseKey: 'prepared-research' },
-              truncatedSetupEvidence: String(space.setupStep).slice(0, 2000),
+          try {
+            const parsed = JSON.parse(space.setupStep)
+            if (parsed?.truncatedSetupEvidence) {
+              debugLog('[executeVariant] Stored preparation manifest is a truncated rescue artifact; ignoring it so the preparation fallback can refresh model/dependency evidence')
+              return null
             }
+            return parsed
+          } catch {
+            debugLog('[executeVariant] Stored preparation manifest is not parseable; ignoring it so the preparation fallback can refresh model/dependency evidence')
+            return null
           }
         })()
         let strictCommand = extractStrictGpuCommand(response.content)
@@ -974,7 +978,7 @@ ${useGpu && shouldUseAutonomousPreparationFallback(stageName) ? `## Preparation 
               try {
                 await prisma.space.update({
                   where: { id: spaceId },
-                  data: { setupStatus: 'VALIDATED', setupError: null, setupStep: JSON.stringify(retryManifest.manifest).substring(0, 8000) },
+                  data: { setupStatus: 'VALIDATED', setupError: null, setupStep: JSON.stringify(retryManifest.manifest) },
                 })
                 debugLog(`[executeVariant] Persisted validated preparation manifest from ${stageName} retry ${strictAttempts}`)
               } catch (e: any) {
@@ -1067,6 +1071,11 @@ ${useGpu && shouldUseAutonomousPreparationFallback(stageName) ? `## Preparation 
         // Submit validated LLM output to GPU worker for execution
         const internalGpuApiBase = getInternalGpuApiBase()
         try {
+          const liveSpace = await prisma.space.findUnique({ where: { id: spaceId }, select: { status: true } })
+          if (!liveSpace || liveSpace.status !== 'RUNNING') {
+            debugLog(`[executeVariant] Space ${spaceId} is no longer running before GPU submission; stopping stale variant execution`)
+            return
+          }
           const gpuResponse = await fetch(`${internalGpuApiBase}/api/jobs/gpu`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1124,11 +1133,11 @@ ${useGpu && shouldUseAutonomousPreparationFallback(stageName) ? `## Preparation 
                       try {
                         await prisma.space.update({
                           where: { id: spaceId },
-                          data: { setupStatus: 'VALIDATED', setupError: null, setupStep: manifestJson.substring(0, 8000) },
+                          data: { setupStatus: 'VALIDATED', setupError: null, setupStep: manifestJson },
                         })
                         ;(space as any).setupStatus = 'VALIDATED'
                         ;(space as any).setupError = null
-                        ;(space as any).setupStep = manifestJson.substring(0, 8000)
+                        ;(space as any).setupStep = manifestJson
                         debugLog(`[executeVariant] Persisted autonomous GPU preparation probe for ${stageName}: ${persistedManifest.reason}`)
                       } catch (e: any) {
                         debugLog(`[executeVariant] Failed to persist autonomous GPU preparation probe for ${stageName}: ${e.message}`)
@@ -1210,6 +1219,23 @@ Original output preview: ${response.content.substring(0, 500)}`
           })
           // Mark the whole variant as FAILED after all steps process
           variant.failureMode = 'FAKE_EXPERIMENT'
+          continue
+        }
+      }
+
+      if (useGpu) {
+        const completion = assessGpuStepCompletion(response.content)
+        if (!completion.valid) {
+          debugLog(`[executeVariant] GPU completion gate failed for "${variant.name}": ${completion.reason}`)
+          step.status = 'FAILED'
+          step.result = `[GPU COMPLETION INVALID]: ${completion.reason}\n\nOriginal output:\n${response.content}`
+          step.grade = 0
+          await updateVariantStepDb(step.id, {
+            result: step.result,
+            grade: 0,
+            status: 'FAILED',
+          })
+          variant.failureMode = 'GPU_COMPLETION_INVALID'
           continue
         }
       }
