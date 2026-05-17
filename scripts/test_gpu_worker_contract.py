@@ -79,6 +79,26 @@ def test_deprecated_sklearn_dependency_is_rewritten_to_scikit_learn():
     assert 'numpy' in normalized['deps']
 
 
+def test_declared_import_alias_dependencies_are_rewritten_to_pip_packages():
+    normalized = gpu_worker.normalize_declared_dependencies([
+        'PIL>=10.0',
+        'cv2',
+        'yaml',
+        'skimage',
+        'sentence_transformers>=2.7',
+        'dotenv',
+    ])
+    assert normalized['success'] is True
+    assert normalized['deps'] == [
+        'Pillow>=10.0',
+        'opencv-python-headless',
+        'PyYAML',
+        'scikit-image',
+        'sentence-transformers>=2.7',
+        'python-dotenv',
+    ]
+
+
 def test_manifest_dependency_aliases_are_normalized_like_typescript_manifest():
     normalized = gpu_worker.normalize_declared_dependencies([
         {'package': 'torch', 'version': '>=2.0.0', 'import': 'torch'},
@@ -112,6 +132,13 @@ def test_missing_module_auto_install_maps_common_import_aliases(tmp_path):
     repair = gpu_worker.missing_module_install_command('cv2', context)
     assert repair['success'] is True
     assert repair['deps'] == ['opencv-python-headless']
+
+
+def test_missing_module_auto_install_maps_ml_import_aliases(tmp_path):
+    context = {'packages_dir': str(tmp_path / 'packages')}
+    repair = gpu_worker.missing_module_install_command('sentence_transformers', context)
+    assert repair['success'] is True
+    assert repair['deps'] == ['sentence-transformers']
 
 
 def test_missing_stdlib_module_is_not_auto_installed(tmp_path):
