@@ -197,6 +197,32 @@ PY"""
     assert argv == [sys.executable, "-c", 'import json\nprint(json.dumps({"ok": True}))']
 
 
+def test_safe_smoke_command_accepts_env_wrapped_python():
+    argv, err = gpu_worker._safe_smoke_command(
+        "env CUDA_VISIBLE_DEVICES=0 python -c 'print(1)'"
+    )
+    assert err is None
+    assert argv[:3] == ["env", "CUDA_VISIBLE_DEVICES=0", sys.executable]
+    assert argv[3:] == ["-c", "print(1)"]
+
+
+def test_safe_smoke_command_accepts_timeout_wrapped_python():
+    argv, err = gpu_worker._safe_smoke_command(
+        "timeout 30s python -c 'print(1)'"
+    )
+    assert err is None
+    assert argv[:3] == ["timeout", "30s", sys.executable]
+    assert argv[3:] == ["-c", "print(1)"]
+
+
+def test_safe_smoke_command_rejects_destructive_shell_even_without_typescript_validation():
+    argv, err = gpu_worker._safe_smoke_command(
+        "bash -lc 'rm -rf /tmp/ar3-workbenches && python smoke_test.py'"
+    )
+    assert argv is None
+    assert "destructive" in err
+
+
 def test_manifest_torch_dependencies_are_smoked_and_repaired_before_manifest_smoke_tests():
     root = tempfile.mkdtemp(prefix="ar3-worker-manifest-torch-repair-test-")
     old_root = os.environ.get("AR3_WORKBENCH_ROOT")
@@ -566,6 +592,9 @@ if __name__ == "__main__":
     test_manifest_preparation_history_records_validation_failures()
     test_safe_smoke_command_uses_current_python_interpreter()
     test_safe_smoke_command_converts_python_heredoc_to_inline_code()
+    test_safe_smoke_command_accepts_env_wrapped_python()
+    test_safe_smoke_command_accepts_timeout_wrapped_python()
+    test_safe_smoke_command_rejects_destructive_shell_even_without_typescript_validation()
     test_manifest_torch_dependencies_are_smoked_and_repaired_before_manifest_smoke_tests()
     test_huggingface_models_are_resolved_into_workbench_before_smoke_tests()
     test_fstring_item_coercion_does_not_cross_other_braces()
