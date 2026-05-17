@@ -258,3 +258,15 @@ export async function buildEmbeddingContext(
 
   if (similar.length === 0) return ''
 
+  let context = '\n\nRelevant Context from Prior Experiments:\n'
+  let totalChars = context.length
+
+  for (const result of similar) {
+    const entry = `[${result.phase}][similarity:${(result.similarity * 100).toFixed(0)}%] ${result.content}`
+    if (totalChars + entry.length > maxChars) break
+    context += entry + '\n\n'
+    totalChars += entry.length
+  }
+
+  return context
+}
