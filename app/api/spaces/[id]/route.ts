@@ -63,6 +63,11 @@ export async function GET(
 
     // Get execution state
     const executionState = getExecutionState(params.id)
+    if (!executionState && space.status === 'RUNNING') {
+      resumeSpace(params.id).catch((error: any) => {
+        console.error('[Spaces API] Auto-resume failed:', error?.message || error)
+      })
+    }
 
     // Always load variants from DB to ensure fresh data, not stale in-memory state
     const dbVariants = await prisma.variant.findMany({
