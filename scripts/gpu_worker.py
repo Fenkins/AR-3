@@ -332,7 +332,7 @@ def run_cuda_driver_preflight(timeout: int = 10) -> dict:
         diagnosis['status'] = 'nvml_visible_cuda_init_failed'
         diagnosis['guidance'].extend([
             'nvidia-smi/NVML can see the GPU, but libcuda cannot initialize compute.',
-            'Do not spend cycles reinstalling torch, torchvision, CUDA wheels, or transformers for this error.',
+            'Do not reinstall torch or spend cycles reinstalling torch, torchvision, CUDA wheels, or transformers for this error.',
             'This is an infrastructure/container allocation failure. Reboot may not be enough; recycle or replace the Vast instance, then rerun this preflight before research jobs.',
         ])
     elif not smi_ok:
@@ -1150,13 +1150,15 @@ def install_declared_dependencies(dependencies, context: dict, timeout: int = 90
         write_dependency_record(True)
         return {'success': True, 'output': 'no declared dependencies', 'error': None}
 
+    update_job_queue_status(job_id, 'installing_dependencies')
+
     if record_path is not None:
         cached = _cached_dependency_install_is_valid(record_path, dependencies or [], normalized, context)
         if cached.get('success'):
             imports = ','.join(cached.get('imports') or [])
             return {
                 'success': True,
-                'output': f'cached_dependencies={record_path}\nverified_imports={imports}',
+                'output': f'cached_dependencies={record_path}\ninstalled_dependencies={record_path}\nverified_imports={imports}',
                 'error': None,
             }
         # If the exact dependency set changed but every declared import already
@@ -1170,7 +1172,7 @@ def install_declared_dependencies(dependencies, context: dict, timeout: int = 90
             imports = ','.join(availability.get('imports') or [])
             return {
                 'success': True,
-                'output': f'cached_dependencies={record_path}\nverified_imports={imports}\ncache_reconciled=imports_already_available',
+                'output': f'cached_dependencies={record_path}\ninstalled_dependencies={record_path}\nverified_imports={imports}\ncache_reconciled=imports_already_available',
                 'error': None,
             }
 
