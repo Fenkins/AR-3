@@ -19,12 +19,15 @@ gpu_worker = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gpu_worker)
 
 
-def validate(output: str, success: bool = True) -> dict:
-    return gpu_worker.validate_execution_result_evidence({
+def validate(output: str, success: bool = True, preparation_manifest: dict | None = None) -> dict:
+    payload = {
         "success": success,
         "output": output,
         "error": None if success else "already failed",
-    })
+    }
+    if preparation_manifest is not None:
+        payload["preparationManifest"] = preparation_manifest
+    return gpu_worker.validate_execution_result_evidence(payload)
 
 
 def assert_pass(name: str, output: str) -> None:
@@ -136,6 +139,51 @@ smoke_test torch_cuda_smoke exit=0
     )
 
 
+def test_preparation_manifest_expected_evidence_is_enforced() -> None:
+    manifest = {
+        "smokeTests": [
+            {"expectedEvidence": ["trajectory_cosine_similarity", "loss"]},
+        ],
+    }
+    result = validate(
+        '{"cuda_available": true, "gpu_name": "RTX 3060", "trajectory_cosine_similarity": 0.72}',
+        preparation_manifest=manifest,
+    )
+    assert result["success"] is False
+    assert "expected evidence fields" in (result.get("error") or "")
+    assert "loss" in (result.get("error") or "")
+
+
+def test_preparation_manifest_success_thresholds_are_enforced() -> None:
+    manifest = {
+        "successCriteria": [
+            {"metric": "trajectory_cosine_similarity", "threshold": ">= 0.8"},
+        ],
+    }
+    result = validate(
+        '{"cuda_available": true, "gpu_name": "RTX 3060", "trajectory_cosine_similarity": 0.72}',
+        preparation_manifest=manifest,
+    )
+    assert result["success"] is False
+    assert "success criteria thresholds" in (result.get("error") or "")
+
+
+def test_preparation_manifest_criteria_pass_with_concrete_metrics() -> None:
+    manifest = {
+        "smokeTests": [
+            {"expectedEvidence": ["trajectory_cosine_similarity", "loss"]},
+        ],
+        "successCriteria": [
+            {"metric": "trajectory_cosine_similarity", "threshold": ">= 0.7"},
+        ],
+    }
+    result = validate(
+        '{"cuda_available": true, "gpu_name": "RTX 3060", "trajectory_cosine_similarity": 0.72, "loss": 0.31}',
+        preparation_manifest=manifest,
+    )
+    assert result["success"] is True, result
+
+
 if __name__ == "__main__":
     test_failed_results_are_not_rewritten()
     test_real_structured_gpu_evidence_passes()
@@ -146,4 +194,7 @@ if __name__ == "__main__":
     test_preparation_probe_with_unknown_non_evidence_json_fails()
     test_preparation_probe_then_real_experiment_evidence_passes()
     test_non_preparation_job_cannot_pass_on_model_resolution_smoke_only()
+    test_preparation_manifest_expected_evidence_is_enforced()
+    test_preparation_manifest_success_thresholds_are_enforced()
+    test_preparation_manifest_criteria_pass_with_concrete_metrics()
     print("gpu evidence gate isolated tests passed")

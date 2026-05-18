@@ -2109,6 +2109,174 @@ def _iter_json_objects_from_output(output: str):
                         yield parsed
 
 
+def _flatten_json_evidence(value, prefix='') -> dict:
+    """Flatten structured stdout JSON so manifest evidence can be checked.
+
+    The GPU worker receives only stdout/stderr after execution, not TypeScript's
+    richer validator state. Flattening lets the worker enforce preparation
+    manifest grading/success criteria itself and fail jobs early enough for the
+    research loop to retry instead of recording a fake success.
+    """
+    flattened = {}
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            path = f'{prefix}.{key}' if prefix else str(key)
+            flattened[path] = nested
+            flattened.update(_flatten_json_evidence(nested, path))
+    elif isinstance(value, list):
+        for index, nested in enumerate(value[:50]):
+            path = f'{prefix}[{index}]' if prefix else f'[{index}]'
+            flattened[path] = nested
+            flattened.update(_flatten_json_evidence(nested, path))
+    return flattened
+
+
+def _value_is_concrete(value) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value is True
+    if isinstance(value, (int, float)):
+        return True
+    if isinstance(value, str):
+        text = value.strip().lower()
+        return bool(text) and text not in {'false', 'none', 'null', 'unknown', 'missing', 'not_found', 'failed', 'error'}
+    if isinstance(value, list):
+        return any(_value_is_concrete(item) for item in value)
+    if isinstance(value, dict):
+        return any(_value_is_concrete(item) for item in value.values())
+    return False
+
+
+def _metric_terms(text: str) -> list:
+    raw = re_module.findall(r'[A-Za-z][A-Za-z0-9_.-]*', str(text or '').lower())
+    stopwords = {
+        'and', 'are', 'artifact', 'artifacts', 'check', 'concrete', 'evidence',
+        'field', 'fields', 'include', 'includes', 'metric', 'metrics', 'must',
+        'name', 'print', 'prints', 'score', 'stdout', 'stderr', 'the', 'with',
+    }
+    terms = []
+    for item in raw:
+        item = item.replace('-', '_')
+        if item in stopwords:
+            continue
+        if '_' in item or '.' in item or item in {'accuracy', 'acc', 'cuda', 'cuda_available', 'device', 'f1', 'gpu_name', 'latency', 'loss', 'precision', 'recall', 'runtime', 'throughput', 'vram'}:
+            terms.append(item)
+    return list(dict.fromkeys(terms))
+
+
+def _path_matches_term(path: str, term: str) -> bool:
+    normalized_path = str(path or '').lower().replace('-', '_')
+    normalized_term = str(term or '').lower().replace('-', '_')
+    parts = [p for p in re_module.split(r'[.\[\]]+', normalized_path) if p]
+    return normalized_term in parts or normalized_path.endswith('.' + normalized_term) or normalized_path == normalized_term
+
+
+def _numeric_values_for_metric(flattened: dict, metric: str) -> list:
+    terms = _metric_terms(metric) or [str(metric or '').lower().replace('-', '_')]
+    values = []
+    for path, value in flattened.items():
+        if not any(_path_matches_term(path, term) for term in terms):
+            continue
+        if isinstance(value, (int, float)):
+            values.append(float(value))
+        elif isinstance(value, str):
+            match = re_module.match(r'^\s*(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)', value, flags=re_module.IGNORECASE)
+            if match:
+                values.append(float(match.group(1)))
+    return values
+
+
+def _parse_threshold(threshold: str):
+    text = str(threshold or '').strip().lower()
+    symbolic = re_module.match(r'^(>=|>|<=|<|=|==)\s*(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)', text, flags=re_module.IGNORECASE)
+    if symbolic:
+        op = '=' if symbolic.group(1) == '==' else symbolic.group(1)
+        return op, float(symbolic.group(2))
+    phrase = re_module.search(r'\b(at least|minimum|min|greater than|more than|above|at most|maximum|max|less than|below|under|no more than|equals?|equal to)\b\s*(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)', text, flags=re_module.IGNORECASE)
+    if not phrase:
+        return None
+    raw = phrase.group(1)
+    op = '>=' if raw in {'at least', 'minimum', 'min'} else '>' if raw in {'greater than', 'more than', 'above'} else '<=' if raw in {'at most', 'maximum', 'max', 'no more than'} else '<' if raw in {'less than', 'below', 'under'} else '='
+    return op, float(phrase.group(2))
+
+
+def _threshold_ok(actual: float, parsed_threshold) -> bool:
+    op, expected = parsed_threshold
+    if op == '>=':
+        return actual >= expected
+    if op == '>':
+        return actual > expected
+    if op == '<=':
+        return actual <= expected
+    if op == '<':
+        return actual < expected
+    return actual == expected
+
+
+def _validate_preparation_manifest_runtime_criteria(result: dict, json_objects: list) -> dict:
+    manifest = result.get('preparationManifest') or result.get('preparation_manifest')
+    if not isinstance(manifest, dict):
+        return {'ok': True, 'error': None}
+
+    experiment_objects = []
+    for obj in json_objects:
+        if not isinstance(obj, dict):
+            continue
+        if obj.get('type') == 'autonomous_preparation_manifest':
+            continue
+        keys = {str(k).lower() for k in obj.keys()}
+        if keys <= {'cuda_device', 'cuda_tensor_sum', 'torch_cuda_available', 'torch_cuda_version', 'torch_version'}:
+            continue
+        if keys & {'disk_pressure', 'workbench_prune', 'cuda_driver_preflight', 'model_cache_root', 'model_resolution_file'}:
+            continue
+        experiment_objects.append(obj)
+
+    flattened = {}
+    for obj in experiment_objects:
+        flattened.update(_flatten_json_evidence(obj))
+
+    missing_evidence = []
+    for smoke in (manifest.get('smokeTests') or manifest.get('smoke_tests') or [])[:20]:
+        if not isinstance(smoke, dict):
+            continue
+        for expected in (smoke.get('expectedEvidence') or smoke.get('expected_evidence') or [])[:20]:
+            terms = _metric_terms(expected) or [str(expected).lower().replace('-', '_')]
+            if any(term in {'cuda_available', 'gpu_name', 'device', 'vram'} for term in terms):
+                # Runtime GPU evidence is checked separately; do not force every
+                # experiment to repeat setup-smoke-only fields verbatim.
+                continue
+            if terms and not any(any(_path_matches_term(path, term) and _value_is_concrete(value) for path, value in flattened.items()) for term in terms):
+                missing_evidence.append(str(expected))
+
+    if missing_evidence:
+        return {
+            'ok': False,
+            'error': 'Experiment output did not satisfy preparation manifest expected evidence fields: ' + '; '.join(missing_evidence[:3]),
+        }
+
+    failed_thresholds = []
+    for criterion in (manifest.get('successCriteria') or manifest.get('success_criteria') or [])[:20]:
+        if not isinstance(criterion, dict):
+            continue
+        metric = str(criterion.get('metric') or criterion.get('field') or '').strip()
+        threshold = str(criterion.get('threshold') or criterion.get('target') or '').strip()
+        parsed = _parse_threshold(threshold)
+        if not metric or not parsed:
+            continue
+        values = _numeric_values_for_metric(flattened, metric)
+        if not values or not any(_threshold_ok(value, parsed) for value in values):
+            failed_thresholds.append(f'{metric} {threshold}')
+
+    if failed_thresholds:
+        return {
+            'ok': False,
+            'error': 'Experiment output did not satisfy preparation manifest success criteria thresholds: ' + '; '.join(failed_thresholds[:3]),
+        }
+
+    return {'ok': True, 'error': None}
+
+
 def validate_execution_result_evidence(result: dict) -> dict:
     """Reject self-reported invalid experiments after execution.
 
@@ -2128,6 +2296,11 @@ def validate_execution_result_evidence(result: dict) -> dict:
     output = result.get('output', '')
     failure_keys = ('contract_failure_reason', 'contractFailureReason', 'failure_reason')
     json_objects = list(_iter_json_objects_from_output(output))
+    manifest_criteria = _validate_preparation_manifest_runtime_criteria(result, json_objects)
+    if not manifest_criteria.get('ok'):
+        result['success'] = False
+        result['error'] = manifest_criteria.get('error')
+        return result
     for obj in json_objects:
         is_autonomous_preparation_probe = obj.get('type') == 'autonomous_preparation_manifest'
         for key in failure_keys:
@@ -2682,6 +2855,11 @@ def execute_gpu_command(job: dict, timeout: int = DEFAULT_JOB_TIMEOUT) -> dict:
             }
 
         result['code'] = gpu_command.get('code', '')
+        if preparation_manifest:
+            # Keep the manifest attached through evidence validation so the worker
+            # can enforce the dynamically discovered grading/success criteria,
+            # not just the static CUDA/prose contract.
+            result['preparationManifest'] = preparation_manifest
         result['output'] = (workbench_prune_output + '\n' + disk_pressure_output + '\n' + cuda_preflight_output + '\n' + result.get('output', '')).strip()
         if preparation_output:
             result['output'] = (preparation_output + '\n' + result.get('output', '')).strip()
@@ -2715,6 +2893,7 @@ def classify_terminal_job_status(result: dict) -> str:
         'contract_failure_reason', 'self-reported', 'validation', 'rejected',
         'no valid python code', 'executable code rejected', 'placeholder',
         'missing runtime gpu evidence', 'json action must', 'did not parse',
+        'expected evidence fields', 'success criteria thresholds', 'grading criteria',
     )
     if any(marker in error for marker in validation_markers):
         return 'failed_validation'
