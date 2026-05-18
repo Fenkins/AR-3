@@ -989,6 +989,43 @@ function testDeterministicExperimentFallbackEmitsModelLoadAttemptForModelSteps()
   assert.match(command.code, /cache_candidates_for_model/)
 }
 
+function testDeterministicExperimentFallbackInstallsTransformersForModelSteps() {
+  const command = contract.buildDeterministicGpuExperimentCommand({
+    researchGoal: 'Probe multi-stream LLaDA inference.',
+    stepDescription: 'Download and set up two identical instances of LLaDA-8B-Base, then run an inference/activation smoke test.',
+    stageName: 'Investigation',
+    reason: 'weak model emitted prose',
+    preparationManifest: {
+      models: [{ id: 'GSAI-ML/LLaDA-8B-Base', source: 'huggingface', required: true }],
+      dependencies: [{ name: 'torch', importName: 'torch' }, { name: 'requests', importName: 'requests' }],
+    },
+  })
+  assert.ok(command.dependencies.includes('transformers==4.45.2'))
+  assert.ok(command.dependencies.includes('accelerate'))
+  assert.ok(command.dependencies.includes('safetensors'))
+}
+
+function testDeterministicExperimentFallbackPrioritizesModelRuntimeDepsWhenManifestHasManyDeps() {
+  const command = contract.buildDeterministicGpuExperimentCommand({
+    researchGoal: 'Probe multi-stream LLaDA inference.',
+    stepDescription: 'Instrument the LLaDA-8B-Base model for inference activation capture.',
+    stageName: 'Investigation',
+    reason: 'weak model emitted prose',
+    preparationManifest: {
+      models: [{ id: 'GSAI-ML/LLaDA-8B-Base', source: 'huggingface', required: true }],
+      dependencies: [
+        'requests', 'numpy', 'scipy', 'pandas', 'matplotlib', 'Pillow',
+        'opencv-python-headless', 'PyYAML', 'scikit-learn', 'sentence-transformers',
+        'datasets', 'evaluate',
+      ],
+    },
+  })
+  assert.ok(command.dependencies.includes('transformers==4.45.2'))
+  assert.ok(command.dependencies.includes('accelerate'))
+  assert.ok(command.dependencies.includes('safetensors'))
+  assert.ok(command.dependencies.length <= 12)
+}
+
 function testPreparationStagesShortCircuitWeakModelContractFailures() {
   assert.equal(contract.shouldShortCircuitPreparationFallback('Investigation', 'response did not parse as the required JSON object'), true)
   assert.equal(contract.shouldShortCircuitPreparationFallback('Planning', 'JSON action must be "run_python"'), true)
@@ -1117,4 +1154,6 @@ testGpuStepCompletionAcceptsTrainingHardwareLimitEvidence()
 testGpuStepCompletionRejectsGenericMetricsForModelLoadStep()
 testGpuStepCompletionAcceptsModelLoadAttemptEvidence()
 testDeterministicExperimentFallbackEmitsModelLoadAttemptForModelSteps()
+testDeterministicExperimentFallbackInstallsTransformersForModelSteps()
+testDeterministicExperimentFallbackPrioritizesModelRuntimeDepsWhenManifestHasManyDeps()
 console.log('strict gpu contract tests passed')

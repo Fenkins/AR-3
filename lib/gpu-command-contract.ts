@@ -1133,6 +1133,34 @@ function safePipDependenciesFromManifest(manifest: unknown): string[] {
   return Array.from(deps).slice(0, 12)
 }
 
+function deterministicExperimentNeedsModelRuntimeDeps(manifest: unknown, stepDescription: string): boolean {
+  if (!manifest || typeof manifest !== 'object') return false
+  const models = Array.isArray((manifest as any).models) ? (manifest as any).models : []
+  if (models.length === 0) return false
+  const stepLower = String(stepDescription || '').toLowerCase()
+  return (
+    /\b(load|loading|set up|setup|instantiate|instrument|activation|inference|infer|train|training|fine[- ]?tune|finetune|checkpoint|generation|generate|evaluate|evaluation|experiment|benchmark|baseline)\b/.test(stepLower) &&
+    /\b(model|models|llada|dream|transformer|weights?|checkpoint|activation)\b/.test(stepLower)
+  )
+}
+
+function addDeterministicModelRuntimeDeps(dependencies: string[]): string[] {
+  const required = ['transformers==4.45.2', 'accelerate', 'safetensors']
+  const hasPackage = (rows: string[], pkg: string) => rows.some(dep => packageNameFromSpec(dep).replace(/_/g, '-').toLowerCase() === pkg)
+  const prioritized: string[] = []
+  for (const dep of required) {
+    const pkg = packageNameFromSpec(dep).replace(/_/g, '-').toLowerCase()
+    const existing = dependencies.find(row => packageNameFromSpec(row).replace(/_/g, '-').toLowerCase() === pkg)
+    prioritized.push(existing || dep)
+  }
+  for (const dep of dependencies) {
+    const pkg = packageNameFromSpec(dep).replace(/_/g, '-').toLowerCase()
+    if (!pkg || hasPackage(prioritized, pkg)) continue
+    prioritized.push(dep)
+  }
+  return prioritized.slice(0, 12)
+}
+
 function inferDependenciesFromCode(code: string): string[] {
   const deps = new Set<string>()
   const importPattern = /^\s*(?:import|from)\s+([A-Za-z_][A-Za-z0-9_]*)/gm
@@ -1186,7 +1214,9 @@ export function buildDeterministicGpuExperimentCommand(input: DeterministicExper
   const reason = asPyTripleQuoted(sanitizeReasonForGeneratedPython(input.reason || ''))
   const manifestJson = JSON.stringify(input.preparationManifest || null)
   const manifestForPython = asPyTripleQuoted(manifestJson)
-  const dependencies = safePipDependenciesFromManifest(input.preparationManifest)
+  const dependencies = deterministicExperimentNeedsModelRuntimeDeps(input.preparationManifest, input.stepDescription)
+    ? addDeterministicModelRuntimeDeps(safePipDependenciesFromManifest(input.preparationManifest))
+    : safePipDependenciesFromManifest(input.preparationManifest)
 
   const code = `import importlib.util
 import json
