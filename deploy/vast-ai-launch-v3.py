@@ -29,6 +29,12 @@ if [ ! -d AR-3 ]; then
     git clone {repo} /opt/AR-3
 fi
 cd /opt/AR-3
+cat > .env <<'ENVEOF'
+DATABASE_URL="file:./prisma/dev.db"
+JWT_SECRET="ar3-change-this-secret-after-deploy"
+NEXTAUTH_SECRET="ar3-change-this-secret-after-deploy"
+NEXTAUTH_URL="http://localhost:3000"
+ENVEOF
 npm install --silent
 npx prisma generate
 npx prisma db push
