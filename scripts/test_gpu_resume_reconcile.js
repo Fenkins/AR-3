@@ -62,6 +62,7 @@ const persistedLiveResult = mergeGpuStepResultForPersistence(
 )
 assert.ok(persistedLiveResult.startsWith('[GPU Execution Result] job:gpu_live'), 'live GPU step persistence should start with the execution marker')
 assert.ok(!persistedLiveResult.includes('{"action":"run_python"'), 'live GPU step persistence must not retain raw run_python command JSON')
+assert.ok(!fullSource.includes('job:${completedJobId}${codeBlock}\\n${statusData.result.output}'), 'live GPU completion path must tag runtime output with [OUTPUT] before persistence')
 
 const invalidEvidenceResult = mergeGpuStepResultForPersistence(
   `${rawCommandPreamble}\n\n[GPU EVIDENCE INVALID]: missing concrete metric`,

@@ -1375,9 +1375,12 @@ ${useGpu && shouldUseAutonomousPreparationFallback(stageName) ? `## Preparation 
                   const completedJobId = statusData.result.jobId || jobId
                   const code = statusData.result.code || ''
                   const codeBlock = code ? `\n[CODE]\n${code}\n[/CODE]` : ''
+                  const outputBlock = typeof statusData.result.output === 'string' && statusData.result.output.trim()
+                    ? `\n[OUTPUT]\n${statusData.result.output.trim()}`
+                    : ''
                   gpuResult = statusData.result.success
-                    ? `[GPU Execution Result] job:${completedJobId}${codeBlock}\n${statusData.result.output}`
-                    : `[GPU Execution Error] job:${completedJobId}: ${statusData.result.error}${codeBlock}`
+                    ? `[GPU Execution Result] job:${completedJobId}${codeBlock}${outputBlock}`
+                    : `[GPU Execution Error] job:${completedJobId}: ${statusData.result.error}${codeBlock}${outputBlock}`
                   const evidence = assessGpuExecutionEvidence({
                     stageName,
                     fallbackUsed: gpuSubmissionUsedFallback,
