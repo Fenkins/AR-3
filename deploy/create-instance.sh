@@ -12,6 +12,7 @@ echo "[1/6] Installing system dependencies..."
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq curl git nginx python3 python3-pip > /dev/null 2>&1
+pip3 install -q 'huggingface_hub>=0.20' 2>/dev/null || true
 
 # Install Node.js 22
 echo "[2/6] Installing Node.js 22..."
@@ -87,9 +88,51 @@ RestartSec=10
 WantedBy=multi-user.target
 EOF
 
+cat > /etc/systemd/system/ar3-search.service <<EOF
+[Unit]
+Description=AR-3 internal search service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/AR-3
+EnvironmentFile=-/opt/AR-3/.env
+ExecStart=/usr/bin/python3 /opt/AR-3/scripts/search_service.py
+Restart=always
+RestartSec=5
+StandardOutput=append:/tmp/search_service.log
+StandardError=append:/tmp/search_service.log
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+cat > /etc/systemd/system/ar3-gpu-worker.service <<EOF
+[Unit]
+Description=AR-3 GPU worker
+After=network.target ar3-platform.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/AR-3
+EnvironmentFile=-/opt/AR-3/.env
+ExecStart=/usr/bin/python3 /opt/AR-3/scripts/gpu_worker.py
+Restart=always
+RestartSec=5
+StandardOutput=append:/tmp/gpu_worker.log
+StandardError=append:/tmp/gpu_worker.log
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 systemctl daemon-reload
-systemctl enable ar3-platform
+systemctl enable ar3-platform ar3-search ar3-gpu-worker
 systemctl start ar3-platform
+systemctl start ar3-search
+systemctl start ar3-gpu-worker
 
 # Get public IP and port info
 echo "=== Setup Complete ==="
@@ -103,6 +146,9 @@ systemctl status nginx --no-pager -l | head -10
 echo ""
 echo "Listening ports:"
 ss -tlnp | grep -E '(3000|80)' || true
+echo ""
+echo "Worker Status:"
+systemctl status ar3-search ar3-gpu-worker --no-pager -l | head -40 || true
 
 # Create a status file for the launcher to read
 cat > /tmp/deployment-status.json <<EOJSON

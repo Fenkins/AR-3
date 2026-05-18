@@ -44,7 +44,11 @@ cat > /root/start-ar3.sh <<'STARTUP'
 cd /opt/AR-3
 pkill -f "npm start" 2>/dev/null || true
 pkill -f "cloudflared" 2>/dev/null || true
+pkill -f "search_service.py" 2>/dev/null || true
+pkill -f "gpu_worker.py" 2>/dev/null || true
 sleep 2
+nohup python3 scripts/search_service.py > /tmp/search_service.log 2>&1 &
+nohup python3 scripts/gpu_worker.py > /tmp/gpu_worker.log 2>&1 &
 nohup npm start > /tmp/ar3.log 2>&1 &
 sleep 3
 nohup cloudflared tunnel --url http://localhost:3000 > /tmp/tunnel.log 2>&1 &

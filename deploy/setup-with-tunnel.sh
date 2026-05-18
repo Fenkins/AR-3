@@ -9,6 +9,8 @@ echo "=== AR-3 Setup starting at $(date) ==="
 export DEBIAN_FRONTEND=noninteractive
 AR3_DIR="/opt/AR-3"
 AR3_FRESH="/opt/AR-3-fresh"
+SEARCH_SERVICE_LOG="/tmp/search_service.log"
+GPU_WORKER_LOG="/tmp/gpu_worker.log"
 
 # ── 1. System packages ─────────────────────────────────────────────────────────
 echo "[1/14] Installing system packages..."
@@ -23,6 +25,7 @@ echo "Node: $(node --version)"
 
 # ── 3. SearXNG (if not present) ────────────────────────────────────────────────
 echo "[3/14] Setting up SearXNG..."
+mkdir -p "$AR3_DIR"
 if [ ! -d "$AR3_DIR/searxng" ]; then
     git clone --depth=1 https://github.com/searxng/searxng.git "$AR3_DIR/searxng"
 fi
@@ -85,14 +88,8 @@ nohup python3 -m flask --app searx.webapp run --host 127.0.0.1 --port 4001 > /tm
 echo "SearXNG PID: $!"
 sleep 3
 
-# ── 5. Python search service (port 4000) — HF/GitHub/arXiv ──────────────────
-echo "[5/14] Setting up Python search service (port 4000)..."
-if [ -f "$AR3_DIR/scripts/search_service.py" ]; then
-    pkill -f "search_service.py" 2>/dev/null || true
-    nohup python3 "$AR3_DIR/scripts/search_service.py" > /tmp/search_service.log 2>&1 &
-    echo "Search service PID: $!"
-fi
-sleep 1
+# ── 5. Reserved for app-local services after AR-3 is cloned ────────────────────
+echo "[5/14] AR-3 app services will start after repository setup..."
 
 # ── 6. Clone / update AR-3 ─────────────────────────────────────────────────────
 echo "[6/14] Setting up AR-3..."
@@ -123,8 +120,11 @@ HF_TOKEN="$HF_TOKEN"
 ENVEOF
 if [ -n "$HF_TOKEN" ]; then
     echo ".env written (HF_TOKEN configured)"
+    printf '%s' "$HF_TOKEN" > /tmp/hf_token
+    chmod 600 /tmp/hf_token
 else
     echo ".env written (HF_TOKEN not configured)"
+    rm -f /tmp/hf_token
 fi
 
 # ── 9. Database setup ───────────────────────────────────────────────────────────
@@ -137,12 +137,25 @@ npm run seed 2>/dev/null || true
 echo "[10/14] Building Next.js..."
 npm run build
 
+# ── 10b. Python search service (port 4000) — HF/GitHub/arXiv ──────────────────
+echo "[10b/14] Starting Python search service (port 4000)..."
+if [ -f "$AR3_FRESH/scripts/search_service.py" ]; then
+    pkill -f "search_service.py" 2>/dev/null || true
+    HF_TOKEN="$HF_TOKEN" nohup python3 "$AR3_FRESH/scripts/search_service.py" > "$SEARCH_SERVICE_LOG" 2>&1 &
+    echo "Search service PID: $!"
+else
+    echo "Search service script missing: $AR3_FRESH/scripts/search_service.py"
+fi
+sleep 1
+
 # ── 11. GPU Worker setup ───────────────────────────────────────────────────────
 echo "[11/14] Setting up GPU worker..."
 if [ -f "$AR3_FRESH/scripts/gpu_worker.py" ]; then
     pkill -f "gpu_worker.py" 2>/dev/null || true
-    nohup python3 "$AR3_FRESH/scripts/gpu_worker.py" > /tmp/gpu_worker.log 2>&1 &
+    nohup python3 "$AR3_FRESH/scripts/gpu_worker.py" > "$GPU_WORKER_LOG" 2>&1 &
     echo "GPU worker PID: $!"
+else
+    echo "GPU worker script missing: $AR3_FRESH/scripts/gpu_worker.py"
 fi
 
 # ── 12. Nginx ──────────────────────────────────────────────────────────────────
