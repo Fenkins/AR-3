@@ -93,8 +93,22 @@ export function assessGpuStepCompletion(content: string, input: GpuStepCompletio
   }
   const evidenceOutput = stripGpuCodeBlocks(resultMatch[1])
   const stepText = `${input.stepName || ''} ${input.stepDescription || ''}`.toLowerCase()
+  const parsedOutput = parseGpuEvidenceJson(evidenceOutput)
+  const isPreparationProbe = Boolean(
+    parsedOutput?.type === 'autonomous_preparation_manifest' ||
+    parsedOutput?.schemaVersion === 'ar3.preparation-probe.v1' ||
+    parsedOutput?.contract_failure_reason,
+  )
+  if (isPreparationProbe) {
+    const stepRequestsPreparation = /\b(prepare|preparation|setup|set up|set-up)\b/.test(stepText)
+    if (!stepRequestsPreparation) {
+      return {
+        valid: false,
+        reason: 'GPU execution produced only an autonomous preparation probe; this is not task-specific experiment evidence for the requested step.',
+      }
+    }
+  }
   if (/\b(download|verify|checksum|integrity|weights?|checkpoint|snapshot)\b/.test(stepText) && /\b(model|llada|dream|huggingface|hf|weights?|checkpoint|safetensors)\b/.test(stepText)) {
-    const parsedOutput = parseGpuEvidenceJson(evidenceOutput)
     const hasModelDownloadEvidence = Boolean(parsedOutput && typeof parsedOutput === 'object' && !Array.isArray(parsedOutput) && (
       outputHasConcreteKey(parsedOutput, /(^|[.[_])(downloaded_files|downloaded_file_count|local_dir|snapshot_dir|model_path|model_dir|checkpoint_path|safetensors_files|sha|checksum|model_load_attempts|model_resolution)(\]|\.|_|$)/i) ||
       outputHasConcreteArtifactValue(parsedOutput, /\.(safetensors|bin|pt|pth|index\.json)$/i)

@@ -195,6 +195,52 @@ function testManifestExpectedArtifactsAcceptStructuredArtifactObject() {
 testManifestExpectedArtifactsRejectProseOnlyMentions()
 testManifestExpectedArtifactsAcceptStructuredArtifactObject()
 
+function preparationProbeOutput() {
+  return `[GPU Execution Result] job:gpu_test\n[CODE]\nprint('prep')\n[/CODE]\n${JSON.stringify({
+    type: 'autonomous_preparation_manifest',
+    gpu: { cuda_available: true, gpu_name: 'Test GPU' },
+    model_ids: ['GSAI-ML/LLaDA-8B-Base'],
+    huggingface: [{ model_id: 'GSAI-ML/LLaDA-8B-Base', status_code: 200 }],
+    installed_dependencies: ['torch==2.5.1'],
+    workbench: '/tmp/ar3-workbenches/test',
+    recommended_experiment: { metrics: ['cuda_available', 'runtime_seconds'] },
+  })}`
+}
+
+function testGpuStepCompletionRejectsPreparationProbeForExperimentStep() {
+  const result = assessGpuStepCompletion(preparationProbeOutput(), {
+    stepName: 'Measure a minimal executable case for latent alignment',
+    stepDescription: 'Run a GPU-backed probe and print JSON metrics for latent trajectory cosine similarity',
+  })
+
+  assert.strictEqual(result.valid, false)
+  assert.match(result.reason, /preparation probe/i)
+  assert.match(result.reason, /not task-specific/i)
+}
+
+function testGpuStepCompletionRejectsPreparationProbeForModelExperimentStep() {
+  const result = assessGpuStepCompletion(preparationProbeOutput(), {
+    stepName: 'Verify LLaDA model inference quality',
+    stepDescription: 'Load HuggingFace weights and run a GPU benchmark comparing latent vectors',
+  })
+
+  assert.strictEqual(result.valid, false)
+  assert.match(result.reason, /preparation probe/i)
+}
+
+function testGpuStepCompletionAllowsPreparationProbeForSetupStep() {
+  const result = assessGpuStepCompletion(preparationProbeOutput(), {
+    stepName: 'Prepare reusable GPU workbench',
+    stepDescription: 'Set up model infrastructure and validate HuggingFace/GPU dependencies',
+  })
+
+  assert.strictEqual(result.valid, true, result.reason)
+}
+
+testGpuStepCompletionRejectsPreparationProbeForExperimentStep()
+testGpuStepCompletionRejectsPreparationProbeForModelExperimentStep()
+testGpuStepCompletionAllowsPreparationProbeForSetupStep()
+
 function testObjectShapedExpectedEvidenceIsEnforced() {
   const result = assessGpuExecutionEvidence({
     stageName: 'Implementation',
