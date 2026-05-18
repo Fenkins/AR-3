@@ -577,6 +577,16 @@ function testStrictGpuCommandAcceptsPythonFenceForWeakModels() {
   assert.match(extracted.command.code, /torch\.arange/)
 }
 
+function testStrictGpuCommandRejectsPassPlaceholderCode() {
+  const extracted = contract.extractStrictGpuCommand(JSON.stringify({
+    action: 'run_python',
+    dependencies: ['torch'],
+    code: 'import json\nimport torch\ndevice = "cuda" if torch.cuda.is_available() else "cpu"\nprint(json.dumps({"cuda_available": torch.cuda.is_available(), "device": device}))\npass',
+  }))
+  assert.equal(extracted.ok, false)
+  assert.match(extracted.reason, /placeholder\/pseudocode/i)
+}
+
 function testFallbackPreparationCommandSanitizesContractReasonMarkers() {
   const fallback = contract.buildAutonomousPreparationCommand({
     researchGoal: 'Any arbitrary model research goal',
@@ -1078,6 +1088,7 @@ testStrictGpuCommandRejectsCpuOnlyMetricsCode()
 testStrictGpuCommandAcceptsExecutableGpuProbeCode()
 testStrictGpuCommandSkipsNonCommandJsonAndAcceptsLaterCommand()
 testStrictGpuCommandAcceptsPythonFenceForWeakModels()
+testStrictGpuCommandRejectsPassPlaceholderCode()
 testFallbackPreparationCommandSanitizesContractReasonMarkers()
 testAutonomousPreparationFallbackEmitsStepSpecificResearchPlan()
 testPersistedPreparationManifestKeepsResearchSpecificObjective()
