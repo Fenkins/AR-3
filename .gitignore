@@ -55,3 +55,8 @@ knowledge-base/
 
 # Sandboxes
 sandboxes/
+
+# Runtime data and caches
+model_cache/
+prisma/prisma/
+/tmp/
