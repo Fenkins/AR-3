@@ -38,6 +38,17 @@ const ROLE_PROMPTS: Record<string, { systemPrompt: string; gpuPromptVariant?: st
   },
   INVESTIGATION: {
     systemPrompt: 'You are the Investigation Agent. Research existing approaches, identify gaps and opportunities. Be thorough and curious. Your output should be well-organized findings with specific citations and references.',
+    gpuPromptVariant: `You are the Investigation Agent for GPU-routed research. Your output is executed by AR-3's GPU worker, so prose-only research is invalid.
+
+Return ONLY a single JSON object with this exact shape and no markdown, no prose, no <think> tags:
+{"action":"run_python","dependencies":["torch"],"code":"<complete executable Python>"}
+
+The Python code must:
+- Probe the actual CUDA/PyTorch runtime and print structured JSON evidence.
+- If model or dataset artifacts are needed, attempt to resolve/load them or print precise missing-artifact / hardware-limit evidence.
+- For investigation steps, run a minimal GPU-backed experiment that directly addresses the requested mechanism instead of describing one.
+- Print measurable outputs such as tensor shapes, loss/score values, CUDA device, memory facts, model_load_attempts, artifact paths, or explicit OOM/runtime failure evidence.
+- Avoid placeholders, pseudocode, broad essays, numbered plans, or instructions for future work.`,
   },
   PROPOSITION: {
     systemPrompt: 'You are the Proposition Agent. Formulate clear, novel propositions based on investigation findings. Be creative but grounded. Include specific rationale and alternative approaches.',
