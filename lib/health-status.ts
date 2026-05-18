@@ -1,4 +1,5 @@
 import { execFileSync } from 'child_process'
+import { prisma } from './prisma'
 
 export type HealthLevel = 'healthy' | 'degraded'
 
@@ -72,7 +73,6 @@ function queryGpu(): HealthSnapshot['gpu'] {
 
 async function queryDb(nowMs: number): Promise<HealthSnapshot['db']> {
   try {
-    const { prisma } = require('./prisma')
     const staleCutoff = new Date(nowMs - 60 * 60 * 1000)
     const gpuDelegate = (prisma as any).gpuJob
     const [activeSpaces, queuedJobs, runningJobs, staleRunningJobs, failedRecentJobs] = await Promise.all([

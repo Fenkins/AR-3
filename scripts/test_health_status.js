@@ -12,12 +12,22 @@ function loadTsModule(relativePath) {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
   }).outputText
   const module = { exports: {} }
-  const context = vm.createContext({ require, module, exports: module.exports, console, process })
+  function testRequire(name) {
+    if (name === './prisma') return { prisma: {} }
+    return require(name)
+  }
+  const context = vm.createContext({ require: testRequire, module, exports: module.exports, console, process })
   vm.runInContext(output, context, { filename: filePath })
   return module.exports
 }
 
 const { summarizeHealthSnapshot, publicHealthPayload } = loadTsModule('lib/health-status.ts')
+
+function testHealthStatusUsesStaticPrismaImportForBundledRoute() {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'lib/health-status.ts'), 'utf8')
+  assert.ok(source.includes("import { prisma } from './prisma'"))
+  assert.ok(!source.includes("require('./prisma')"))
+}
 
 function testHealthySnapshotRequiresWebWorkerGpuAndDb() {
   const summary = summarizeHealthSnapshot({
@@ -66,6 +76,7 @@ function testPublicHealthPayloadDoesNotExposeInternalDetails() {
   assert.strictEqual(Object.keys(payload).sort().join(','), 'ok,status')
 }
 
+testHealthStatusUsesStaticPrismaImportForBundledRoute()
 testHealthySnapshotRequiresWebWorkerGpuAndDb()
 testDegradedSnapshotFlagsMissingGpuWorkerAndStaleJobs()
 testPublicHealthPayloadDoesNotExposeInternalDetails()
