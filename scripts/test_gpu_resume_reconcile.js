@@ -49,6 +49,9 @@ const job = {
 const resultText = formatCompletedGpuJobStepResult(job)
 assert.match(resultText, /\[GPU Execution Result\] job:gpu_space_123/)
 assert.match(resultText, /\[CODE\]\nprint\("cuda_available=true"\)/)
+assert.match(resultText, /\[OUTPUT\]\n\{"cuda_available":true/)
+assert.ok(!resultText.startsWith('{"action":"run_python"'), 'step result should not start with raw run_python command JSON')
+assert.ok(resultText.indexOf('[GPU Execution Result]') < resultText.indexOf('[CODE]'), 'status marker should come before code so UI cards show useful status')
 assert.equal(assessGpuStepCompletion(resultText).valid, true)
 
 const failedRuntimeJob = {

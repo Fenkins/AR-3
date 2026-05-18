@@ -1,6 +1,12 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  staticPageGenerationTimeout: 180,
   experimental: {
+    // Vast.ai rental containers can hit OS thread limits when Next.js
+    // fans out static-generation workers. Keep production builds small
+    // and deterministic so health-restores cannot starve the live worker.
+    cpus: 1,
+    workerThreads: false,
     serverActions: {
       allowedOrigins: [
         'localhost:3000',

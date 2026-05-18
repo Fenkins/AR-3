@@ -73,11 +73,11 @@ export function formatCompletedGpuJobStepResult(job: { jobId: string; prompt?: s
   if (!result || typeof result !== 'object') return null
   const code = typeof result.code === 'string' ? result.code : ''
   const codeBlock = code ? `\n[CODE]\n${code}\n[/CODE]` : ''
-  const prompt = typeof job.prompt === 'string' ? job.prompt : ''
-  const gpuResult = result.success
-    ? `[GPU Execution Result] job:${result.jobId || job.jobId}${codeBlock}\n${result.output || ''}`
-    : `[GPU Execution Error] job:${result.jobId || job.jobId}: ${result.error || 'GPU job failed'}${codeBlock}`
-  return prompt ? `${prompt}\n\n${gpuResult}` : gpuResult
+  const outputBlock = typeof result.output === 'string' && result.output.trim() ? `\n[OUTPUT]\n${result.output.trim()}` : ''
+  return result.success
+    ? `[GPU Execution Result] job:${result.jobId || job.jobId}${codeBlock}${outputBlock}`
+    : `[GPU Execution Error] job:${result.jobId || job.jobId}: ${result.error || 'GPU job failed'}${codeBlock}${outputBlock}`
+
 }
 
 export function gpuJobMatchesRunningStep(

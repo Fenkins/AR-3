@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
+import { parseGpuStepResult, previewStepResult } from '@/lib/gpu-step-display'
 
 interface Stage {
   id: string
@@ -777,7 +778,7 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
                                   {step.grade !== undefined && <span className={`px-1.5 py-0.5 text-xs rounded ${getGradeColor(step.grade)}`}>{step.grade}</span>}
                                   {step.userRating && <span className="text-xs">{step.userRating === 'thumbs_up' ? '👍' : '👎'}</span>}
                                 </div>
-                                {step.result && <p className="text-xs text-dark-400 mt-0.5 line-clamp-2 font-mono">{step.result.substring(0, 120)}</p>}
+                                {step.result && <p className="text-xs text-dark-400 mt-0.5 line-clamp-2 font-mono">{previewStepResult(step.result, 120)}</p>}
                               </div>
                             </div>
                           ))}
@@ -867,7 +868,7 @@ export default function StageWorkflow({ spaceId, initialPrompt, onClose }: Stage
                                 {step.grade !== undefined && <span className={`px-1 py-0.5 text-xs rounded ${getGradeColor(step.grade)}`}>{step.grade}</span>}
                                 {step.userRating && <span className="text-xs">{step.userRating === 'thumbs_up' ? '👍' : '👎'}</span>}
                               </div>
-                              {step.result && <p className="text-xs text-dark-400 mt-0.5 line-clamp-2 font-mono">{step.result.substring(0, 100)}</p>}
+                              {step.result && <p className="text-xs text-dark-400 mt-0.5 line-clamp-2 font-mono">{previewStepResult(step.result, 100)}</p>}
                             </div>
                           </div>
                         ))}
@@ -1020,7 +1021,8 @@ function VariantDetailModal({ variant, onClose, onExecute, onExpandStep }: { var
         <div className="flex-1 overflow-y-auto space-y-2">
           {variant.steps.map((step, idx) => {
             const showCode = showCodeMap[step.id] ?? false
-            const isGpu = step.result && (step.result.includes('[GPU Execution Result]') || step.result.includes('[GPU Execution Error]'))
+            const gpuDisplay = parseGpuStepResult(step.result)
+            const isGpu = gpuDisplay.isGpu
             return (
               <div key={step.id} className="bg-dark-800 rounded-lg border border-dark-700 overflow-hidden">
                 <div className="flex items-center justify-between px-3 py-2 bg-dark-800 border-b border-dark-700">
@@ -1040,17 +1042,15 @@ function VariantDetailModal({ variant, onClose, onExecute, onExpandStep }: { var
                   {step.description && <p className="text-xs text-dark-400 mb-2">{step.description}</p>}
                   {step.result && !isGpu && <p className="text-xs font-mono text-dark-300 whitespace-pre-wrap line-clamp-4">{step.result.substring(0, 500)}</p>}
                   {step.result && isGpu && (() => {
-                    const codeMatch = step.result.match(/\[CODE\][\s\S]*?\n?([\s\S]*?)\n?\[\/CODE\]/)
-                    const jobIdMatch = step.result.match(/\[GPU Execution (?:Result|Error)\] job:([^:\s]+)/)
-                    const isError = step.result.includes('[GPU Execution Error]')
-                    const code = codeMatch ? codeMatch[1].trim() : null
-                    const rawOutput = step.result.replace(/\[CODE\][\s\S]*?\[\/CODE\]/, '').replace(/^\[GPU Execution (?:Result|Error)\] job:[^:\s]+:?\s*/, '').trim()
+                    const isError = !gpuDisplay.ok
+                    const code = gpuDisplay.code || null
+                    const rawOutput = gpuDisplay.output
                     const displayContent = showCode && code ? code : rawOutput
                     return (
                       <div>
                         <div className="flex items-center gap-2 mb-1">
                           <span className={`w-1.5 h-1.5 rounded-full ${isError ? 'bg-red-400' : 'bg-green-400'}`} />
-                          <span className="text-xs text-dark-400">{isError ? 'ERROR' : 'OK'}{jobIdMatch ? ` — job: ${jobIdMatch[1]}` : ''}</span>
+                          <span className="text-xs text-dark-400">{isError ? 'ERROR' : 'OK'}{gpuDisplay.jobId ? ` — job: ${gpuDisplay.jobId}` : ''}</span>
                         </div>
                         <pre className="text-xs font-mono text-dark-300 whitespace-pre-wrap break-all">{displayContent.substring(0, 2000)}{displayContent.length > 2000 && '...'}</pre>
                       </div>
