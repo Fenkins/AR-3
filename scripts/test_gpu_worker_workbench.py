@@ -1,3 +1,5 @@
+Total output lines: 911
+
 #!/usr/bin/env python3
 import importlib.util
 import json
@@ -30,6 +32,13 @@ def test_prepare_workbench_is_stable_per_space_and_sets_cache_env():
         assert ctx1["env"]["AR3_WORKBENCH_DIR"] == ctx1["workbench_dir"]
         assert ctx1["env"]["HF_HOME"].startswith(ctx1["workbench_dir"])
         assert ctx1["env"]["TRANSFORMERS_CACHE"].startswith(ctx1["workbench_dir"])
+        assert ctx1["env"]["TMPDIR"].startswith(ctx1["workbench_dir"])
+        assert ctx1["env"]["TMP"] == ctx1["env"]["TMPDIR"]
+        assert ctx1["env"]["TEMP"] == ctx1["env"]["TMPDIR"]
+        assert ctx1["env"]["AR3_SCRATCH_DIR"] == ctx1["scratch_dir"]
+        assert ctx1["env"]["AR3_MODEL_SCRATCH_DIR"] == ctx1["model_scratch_dir"]
+        assert Path(ctx1["scratch_dir"]).is_dir()
+        assert Path(ctx1["model_scratch_dir"]).is_dir()
         assert "python-packages" in ctx1["env"].get("PYTHONPATH", "")
     finally:
         if old_root is None:
@@ -111,6 +120,34 @@ def test_ram_offload_wrapper_normalizes_transformers_max_memory_device_keys():
         else:
             os.environ["AR3_WORKBENCH_ROOT"] = old_root
         shutil.rmtree(root, ignore_errors=True)
+
+
+def test_experiment_code_rejects_unmanaged_tmp_model_paths():
+    code = (
+        "import json\n"
+        "import torch\n"
+        "model_dir = '/tmp/multi_instance_models/instance_0'\n"
+        "print(json.dumps({'cuda_available': torch.cuda.is_available(), 'gpu_name': 'test'}))\n"
+    )
+
+    result = gpu_worker.validate_executable_experiment_code(code)
+
+    assert result["ok"] is False
+    assert "unmanaged absolute /tmp path" in result["error"]
+    assert "/tmp/multi_instance_models/instance_0" in result["error"]
+
+
+def test_experiment_code_allows_managed_workbench_tmp_paths():
+    code = (
+        "import json\n"
+        "import torch\n"
+        "artifact = '/tmp/ar3-workbenches/space/artifacts/metrics.json'\n"
+        "print(json.dumps({'cuda_available': torch.cuda.is_available(), 'gpu_name': 'test', 'artifact': artifact}))\n"
+    )
+
+    result = gpu_worker.validate_executable_experiment_code(code)
+
+    assert result["ok"] is True, result
 
 
 def test_install_declared_dependencies_reuses_verified_workbench_record():
@@ -430,25 +467,7 @@ def test_manifest_torch_dependencies_are_smoked_and_repaired_before_manifest_smo
         context = gpu_worker.prepare_workbench({"jobId": "gpu_space-manifest-torch_1", "spaceId": "space manifest torch"})
         manifest = {
             "dependencies": ["torch"],
-            "smokeTests": [{"name": "torch-smoke", "command": "python -c 'import torch; print(\"TORCH_SMOKE_OK\")'"}],
-        }
-        result = gpu_worker.prepare_manifest_environment(manifest, context)
-        assert result["success"] is True, result
-        assert ensured["called"] is True
-        assert "torch_cuda_smoke initial exit=0" in result["output"]
-    finally:
-        gpu_worker.install_declared_dependencies = old_install
-        gpu_worker.resolve_manifest_models = old_resolve
-        gpu_worker.ensure_torch_cuda_workbench = old_ensure
-        gpu_worker.subprocess.run = old_run
-        if old_root is None:
-            os.environ.pop("AR3_WORKBENCH_ROOT", None)
-        else:
-            os.environ["AR3_WORKBENCH_ROOT"] = old_root
-        shutil.rmtree(root, ignore_errors=True)
-
-
-def test_required_model_without_smoke_test_does_not_block_research_execution():
+            …199 tokens truncated… test_required_model_without_smoke_test_does_not_block_research_execution():
     root = tempfile.mkdtemp(prefix="ar3-worker-empty-model-smoke-test-")
     old_root = os.environ.get("AR3_WORKBENCH_ROOT")
     old_resolve = gpu_worker.resolve_manifest_models

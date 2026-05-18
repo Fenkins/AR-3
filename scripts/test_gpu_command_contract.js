@@ -68,9 +68,35 @@ function testStrictGpuExtractorStillRejectsProseInGenericFence() {
   assert.match(result.reason, /executable Python syntax|lacks enough/)
 }
 
+function testStrictGpuExtractorRejectsUnmanagedTmpModelPaths() {
+  const code = [
+    'import json',
+    'import torch',
+    'model_dir = "/tmp/multi_instance_models/instance_0"',
+    'print(json.dumps({"cuda_available": torch.cuda.is_available(), "gpu_name": "test", "model_dir": model_dir}))',
+  ].join('\n')
+  const result = extractStrictGpuCommand('```python\n' + code + '\n```')
+  assert.strictEqual(result.ok, false)
+  assert.match(result.reason, /unmanaged absolute \/tmp path/)
+  assert.match(result.reason, /multi_instance_models/)
+}
+
+function testStrictGpuExtractorAllowsManagedWorkbenchPaths() {
+  const code = [
+    'import json',
+    'import torch',
+    'artifact = "/tmp/ar3-workbenches/space/artifacts/metrics.json"',
+    'print(json.dumps({"cuda_available": torch.cuda.is_available(), "gpu_name": "test", "artifact": artifact}))',
+  ].join('\n')
+  const result = extractStrictGpuCommand('```python\n' + code + '\n```')
+  assert.strictEqual(result.ok, true, result.reason)
+}
+
 testStrictGpuExtractorAcceptsPyFence()
 testStrictGpuExtractorAcceptsGenericCodeFence()
 testStrictGpuExtractorStillRejectsProseInGenericFence()
+testStrictGpuExtractorRejectsUnmanagedTmpModelPaths()
+testStrictGpuExtractorAllowsManagedWorkbenchPaths()
 
 function manifestWithExpectedArtifacts(artifacts) {
   return {
