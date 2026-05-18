@@ -11,7 +11,7 @@ const contractPath = path.join(__dirname, '..', 'lib', 'gpu-command-contract.ts'
 const fullSource = fs.readFileSync(sourcePath, 'utf8')
 const contractSource = fs.readFileSync(contractPath, 'utf8')
 const contractStart = contractSource.indexOf('export function assessGpuStepCompletion')
-const contractEnd = contractSource.indexOf('\nexport function extractPersistablePreparationManifest', contractStart)
+const contractEnd = contractSource.indexOf('\nexport function assessGpuExecutionEvidence', contractStart)
 const helperStart = fullSource.indexOf('export function formatCompletedGpuJobStepResult')
 const helperEnd = fullSource.indexOf('\nasync function reconcileCompletedGpuJobsForRunningSteps', helperStart)
 if (contractStart === -1 || contractEnd === -1 || helperStart === -1 || helperEnd === -1) {
