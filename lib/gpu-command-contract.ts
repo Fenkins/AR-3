@@ -1134,7 +1134,7 @@ function validateStrictGpuCode(parsed: any): StrictGpuResult {
   const codeLines = code.split('\n').map((l: string) => l.trim()).filter(Boolean)
   const hasPython = /(^|\n)\s*(import|from|def|class|print\(|assert\b|[A-Za-z_][A-Za-z0-9_]*\s*=)/.test(code)
   if (!hasPython || codeLines.length < 3) return { ok: false, reason: 'code lacks enough executable Python syntax' }
-  if (/TODO|placeholder|pseudocode|\.\.\./i.test(code)) return { ok: false, reason: 'code contains placeholder/pseudocode markers' }
+  if (/TODO|FIXME|placeholder|pseudocode|your code here|\.\.\.|implement (?:this|the actual|real)|\bpass\s*(?:#.*)?$/im.test(code)) return { ok: false, reason: 'code contains placeholder/pseudocode markers' }
   const syntaxIssue = findLikelyPythonStringSyntaxIssue(code)
   if (syntaxIssue) return { ok: false, reason: 'python syntax issue: ' + syntaxIssue }
   const compileIssue = findPythonCompileSyntaxIssue(code)
