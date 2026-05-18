@@ -882,6 +882,49 @@ print('accuracy=1.0')
         shutil.rmtree(root, ignore_errors=True)
 
 
+def test_torch_cuda_env_prefers_workbench_wheel_libs_and_removes_cuda_compat():
+    root = tempfile.mkdtemp(prefix="ar3-worker-torch-ld-test-")
+    old_root = os.environ.get("AR3_WORKBENCH_ROOT")
+    old_ld = os.environ.get("LD_LIBRARY_PATH")
+    os.environ["AR3_WORKBENCH_ROOT"] = root
+    os.environ["LD_LIBRARY_PATH"] = os.pathsep.join([
+        "/usr/local/cuda/compat",
+        "/usr/local/cuda/lib64",
+        "/usr/local/cuda/targets/x86_64-linux/lib",
+        "/usr/local/nvidia/lib",
+    ])
+    try:
+        context = gpu_worker.prepare_workbench({"jobId": "gpu_space-torch-ld_1", "spaceId": "space torch ld"})
+        packages_dir = Path(context["packages_dir"])
+        expected_wheel_libs = [
+            packages_dir / "nvidia" / "nvjitlink" / "lib",
+            packages_dir / "nvidia" / "cusparse" / "lib",
+            packages_dir / "nvidia" / "cublas" / "lib",
+        ]
+        for lib_dir in expected_wheel_libs:
+            lib_dir.mkdir(parents=True, exist_ok=True)
+
+        torch_env = gpu_worker._torch_cuda_runtime_env(context)
+        ld_parts = torch_env["LD_LIBRARY_PATH"].split(os.pathsep)
+
+        assert ld_parts[:3] == [str(path) for path in expected_wheel_libs]
+        assert "/usr/local/cuda/compat" not in ld_parts
+        assert "/usr/local/cuda/lib64" not in ld_parts
+        assert "/usr/local/cuda/targets/x86_64-linux/lib" not in ld_parts
+        assert "/usr/local/nvidia/lib" in ld_parts
+    finally:
+        if old_root is None:
+            os.environ.pop("AR3_WORKBENCH_ROOT", None)
+        else:
+            os.environ["AR3_WORKBENCH_ROOT"] = old_root
+        if old_ld is None:
+            os.environ.pop("LD_LIBRARY_PATH", None)
+        else:
+            os.environ["LD_LIBRARY_PATH"] = old_ld
+        shutil.rmtree(root, ignore_errors=True)
+
+
+
 if __name__ == "__main__":
     test_prepare_workbench_is_stable_per_space_and_sets_cache_env()
     test_prepare_workbench_enables_ram_offload_from_job_context()
@@ -908,4 +951,5 @@ if __name__ == "__main__":
     test_execute_gpu_command_stops_when_preparation_exhausts_disk_space()
     test_get_pending_jobs_reclaims_stale_inflight_jobs_without_results()
     test_execute_python_code_rejects_placeholders_before_running()
+    test_torch_cuda_env_prefers_workbench_wheel_libs_and_removes_cuda_compat()
     print("gpu worker workbench tests passed")

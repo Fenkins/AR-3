@@ -889,11 +889,55 @@ def _combined_completed_output(result) -> str:
     return ((getattr(result, 'stdout', '') or '') + '\n' + (getattr(result, 'stderr', '') or '')).strip()
 
 
+CUDA_TOOLKIT_LD_LIBRARY_PATHS = {
+    '/usr/local/cuda/compat',
+    '/usr/local/cuda/lib64',
+    '/usr/local/cuda/targets/x86_64-linux/lib',
+}
+
+
 def _without_cuda_toolkit_ld_path(env: dict) -> dict:
-    """Return env with CUDA toolkit libs removed so PyTorch wheel nvidia libs win."""
+    """Return env with CUDA toolkit libs removed so PyTorch wheel nvidia libs win.
+
+    Vast images can expose toolkit/compat libraries older or newer than the
+    per-workbench PyTorch wheel stack. In particular, /usr/local/cuda/compat
+    may provide a libnvJitLink that shadows the wheel's nvidia-nvjitlink-cu12
+    library and causes libcusparse import failures. Keep driver libraries, but
+    remove toolkit paths from runtime execution environments.
+    """
     cleaned = dict(env)
-    parts = [p for p in cleaned.get('LD_LIBRARY_PATH', '').split(os.pathsep) if p and p != '/usr/local/cuda/lib64']
+    parts = [
+        part for part in cleaned.get('LD_LIBRARY_PATH', '').split(os.pathsep)
+        if part and part not in CUDA_TOOLKIT_LD_LIBRARY_PATHS
+    ]
     cleaned['LD_LIBRARY_PATH'] = os.pathsep.join(parts)
+    return cleaned
+
+
+def _torch_cuda_runtime_env(context: dict) -> dict:
+    """Build an execution env where workbench PyTorch CUDA wheel libs win.
+
+    PEP 599 CUDA wheels install shared libraries under
+    python-packages/nvidia/<component>/lib. Prepending those directories makes
+    torch import and CUDA initialization deterministic even when the container
+    has incompatible /usr/local/cuda compatibility libraries.
+    """
+    cleaned = _without_cuda_toolkit_ld_path(context['env'])
+    packages_dir = Path(context.get('packages_dir') or '')
+    wheel_libs = []
+    for component in (
+        'nvjitlink', 'cusparse', 'cublas', 'cuda_runtime', 'cuda_nvrtc',
+        'cudnn', 'cufft', 'curand', 'cusolver', 'nccl', 'nvtx',
+    ):
+        lib_dir = packages_dir / 'nvidia' / component / 'lib'
+        if lib_dir.is_dir():
+            wheel_libs.append(str(lib_dir))
+    existing = [p for p in cleaned.get('LD_LIBRARY_PATH', '').split(os.pathsep) if p]
+    merged = []
+    for part in wheel_libs + existing:
+        if part not in merged:
+            merged.append(part)
+    cleaned['LD_LIBRARY_PATH'] = os.pathsep.join(merged)
     return cleaned
 
 
@@ -935,7 +979,7 @@ def ensure_torch_cuda_workbench(context: dict, force: bool = False, timeout: int
     wheel set, then run the smoke test again and surface evidence in job output.
     """
     outputs = []
-    torch_env = _without_cuda_toolkit_ld_path(context['env'])
+    torch_env = _torch_cuda_runtime_env(context)
     smoke = subprocess.run(
         [sys.executable, '-c', TORCH_CUDA_SMOKE_CODE],
         capture_output=True, text=True, timeout=min(timeout, 120), cwd=context['workbench_dir'], env=torch_env
@@ -1384,7 +1428,7 @@ def prepare_manifest_environment(manifest: dict, context: dict, timeout: int = 9
             output_parts.append('torch_cuda_workbench:\n' + torch_result.get('output', ''))
         if not torch_result.get('success'):
             return finish(False, 'Preparation torch CUDA workbench validation failed: ' + str(torch_result.get('error', 'unknown')))
-        context['env'] = _without_cuda_toolkit_ld_path(context['env'])
+        context['env'] = _torch_cuda_runtime_env(context)
 
     model_resolution = resolve_manifest_models(manifest, context, timeout=timeout)
     if model_resolution.get('output'):
@@ -2434,7 +2478,7 @@ def execute_python_code(code: str, timeout: int = DEFAULT_JOB_TIMEOUT, context: 
                 'output': torch_prep_output,
                 'error': 'Torch CUDA workbench validation failed: ' + str(torch_result.get('error', 'unknown')),
             }
-        context['env'] = _without_cuda_toolkit_ld_path(context['env'])
+        context['env'] = _torch_cuda_runtime_env(context)
 
     update_job_queue_status(job_id, 'running_experiment')
 
