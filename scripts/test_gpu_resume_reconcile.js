@@ -33,6 +33,7 @@ const {
   gpuJobMatchesRunningStep,
   runningVariantIsStaleWithoutActiveStep,
   runningStepIsStaleWithoutGpuJob,
+  runningStepHasTerminalGpuResult,
 } = m.exports
 
 const job = {
@@ -54,6 +55,19 @@ assert.match(resultText, /\[OUTPUT\]\n\{"cuda_available":true/)
 assert.ok(!resultText.startsWith('{"action":"run_python"'), 'step result should not start with raw run_python command JSON')
 assert.ok(resultText.indexOf('[GPU Execution Result]') < resultText.indexOf('[CODE]'), 'status marker should come before code so UI cards show useful status')
 assert.equal(assessGpuStepCompletion(resultText).valid, true)
+
+assert.equal(
+  runningStepHasTerminalGpuResult({
+    status: 'RUNNING',
+    result: '[GPU Execution Result] job:gpu_already_persisted\n[CODE]\nprint(1)\n[/CODE]\n[OUTPUT]\n{"cuda_available":true,"artifact":"metrics.json"}',
+  }),
+  true,
+  'stale RUNNING steps with already persisted terminal GPU evidence must be reconciled without relying on job timestamp matching',
+)
+assert.equal(
+  runningStepHasTerminalGpuResult({ status: 'RUNNING', result: '[GPU CONTRACT FAILED]: prose rejected' }),
+  false,
+)
 
 const rawCommandPreamble = '{"action":"run_python","dependencies":["torch"],"code":"print(1)"}'
 const persistedLiveResult = mergeGpuStepResultForPersistence(

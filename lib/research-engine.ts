@@ -122,6 +122,13 @@ export function gpuJobMatchesRunningStep(
   return false
 }
 
+
+export function runningStepHasTerminalGpuResult(step: { status?: string | null; result?: string | null }): boolean {
+  if (step.status !== 'RUNNING') return false
+  const result = String(step.result || '')
+  return /\[GPU Execution (?:Result|Error)\]/.test(result) && /\[CODE\]/.test(result) && /\[OUTPUT\]/.test(result)
+}
+
 export function runningStepIsStaleWithoutGpuJob(
   step: { status?: string | null; updatedAt?: Date | string | null; description?: string | null; name?: string | null },
   jobs: Array<{ prompt?: string | null; submittedAt?: Date | string | null; status?: string | null }>,
@@ -169,6 +176,39 @@ async function reconcileCompletedGpuJobsForRunningSteps(spaceId: string): Promis
   for (const variant of runningVariants) {
     const runningSteps = variant.VariantStep.filter(step => step.status === 'RUNNING')
     for (const step of runningSteps) {
+      const persistedTerminalResult = runningStepHasTerminalGpuResult(step) ? String(step.result || '').trim() : ''
+      if (persistedTerminalResult) {
+        const completion = assessGpuStepCompletion(persistedTerminalResult, { stepName: step.name, stepDescription: step.description })
+        if (completion.valid) {
+          await prisma.variantStep.update({
+            where: { id: step.id },
+            data: { status: 'COMPLETED', result: persistedTerminalResult, grade: step.grade ?? 100 },
+          })
+          debugLog(`[reconcileCompletedGpuJobsForRunningSteps] Reconciled already-persisted terminal GPU result into completed step ${step.id}`)
+        } else {
+          await prisma.variantStep.update({
+            where: { id: step.id },
+            data: {
+              status: 'FAILED',
+              result: `[GPU COMPLETION INVALID]: ${completion.reason}\n\nOriginal output:\n${persistedTerminalResult}`,
+              grade: 0,
+            },
+          })
+          await prisma.variant.update({
+            where: { id: variant.id },
+            data: {
+              status: 'FAILED',
+              failureMode: 'GPU_COMPLETION_INVALID',
+              lastFailureReason: completion.reason,
+              feedback: `Step failure: ${completion.reason}`,
+            },
+          })
+          debugLog(`[reconcileCompletedGpuJobsForRunningSteps] Reconciled invalid already-persisted terminal GPU result into failed step ${step.id}: ${completion.reason}`)
+        }
+        reconciled++
+        continue
+      }
+
       const jobs = await gpuJobDelegate.findMany({
         where: {
           spaceId,
