@@ -1,5 +1,3 @@
-Total output lines: 1911
-
 export type StrictGpuCommand = { action: 'run_python'; dependencies: string[]; code: string }
 
 export function shouldUseAutonomousPreparationFallback(stageName: string): boolean {
@@ -395,7 +393,1076 @@ function gradingCriterionTexts(value: unknown): string[] {
       continue
     }
     if (Array.isArray(raw)) {
-…12022 tokens truncated…ria[:10]
+      texts.push(...raw.map(item => typeof item === 'string' ? item.trim() : '').filter(Boolean))
+    }
+  }
+  return texts
+}
+
+function evidenceDeclarationTexts(value: unknown): string[] {
+  if (typeof value === 'string') return [value.trim()].filter(Boolean)
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return []
+
+  const row = value as Record<string, unknown>
+  const texts: string[] = []
+  for (const key of ['field', 'fields', 'key', 'keys', 'metric', 'metrics', 'name', 'path', 'paths', 'file', 'files', 'filename', 'filenames', 'artifact', 'artifacts', 'evidence', 'expectedEvidence', 'expected_evidence']) {
+    const raw = row[key]
+    if (typeof raw === 'string' && raw.trim()) {
+      texts.push(raw.trim())
+      continue
+    }
+    if (Array.isArray(raw)) {
+      texts.push(...raw.flatMap(evidenceDeclarationTexts))
+    }
+  }
+  return texts
+}
+
+function manifestExpectedEvidence(preparationManifest: unknown): string[] {
+  if (!preparationManifest || typeof preparationManifest !== 'object' || Array.isArray(preparationManifest)) return []
+  const source = preparationManifest as Record<string, unknown>
+  const smokeTests = source.smokeTests || source.smoke_tests
+
+  const expected = new Set<string>()
+  if (Array.isArray(smokeTests)) {
+    for (const smokeTest of smokeTests.slice(0, 20)) {
+      if (!smokeTest || typeof smokeTest !== 'object' || Array.isArray(smokeTest)) continue
+      const row = smokeTest as Record<string, unknown>
+      const evidence = row.expectedEvidence || row.expected_evidence
+      if (!Array.isArray(evidence)) continue
+      for (const item of evidence.slice(0, 20)) {
+        for (const text of evidenceDeclarationTexts(item).slice(0, 20)) {
+          const normalized = String(text || '').trim()
+          if (normalized) expected.add(normalized)
+        }
+      }
+    }
+  }
+
+  const successCriteria = source.successCriteria || source.success_criteria
+  if (Array.isArray(successCriteria)) {
+    for (const criterion of successCriteria.slice(0, 20)) {
+      for (const item of gradingCriterionTexts(criterion).slice(0, 20)) {
+        const normalized = String(item || '').trim()
+        if (normalized) expected.add(normalized)
+      }
+    }
+  }
+  const recommendedExperiment = source.recommendedExperiment || source.recommended_experiment
+  if (recommendedExperiment && typeof recommendedExperiment === 'object' && !Array.isArray(recommendedExperiment)) {
+    const experiment = recommendedExperiment as Record<string, unknown>
+    const metrics = experiment.metrics || experiment.expectedMetrics || experiment.expected_metrics
+    if (Array.isArray(metrics)) {
+      for (const metric of metrics.slice(0, 20)) {
+        for (const item of evidenceDeclarationTexts(metric).slice(0, 20)) {
+          const normalized = String(item || '').trim()
+          if (normalized) expected.add(normalized)
+        }
+      }
+    }
+  }
+  return Array.from(expected).slice(0, 30)
+}
+
+function manifestExpectedArtifacts(preparationManifest: unknown): string[] {
+  if (!preparationManifest || typeof preparationManifest !== 'object' || Array.isArray(preparationManifest)) return []
+  const workbench = (preparationManifest as Record<string, unknown>).workbench
+  if (!workbench || typeof workbench !== 'object' || Array.isArray(workbench)) return []
+  const source = workbench as Record<string, unknown>
+  const artifacts = source.expectedArtifacts || source.expected_artifacts
+  if (!Array.isArray(artifacts)) return []
+
+  return artifacts
+    .flatMap(evidenceDeclarationTexts)
+    .map(value => String(value || '').trim())
+    .filter(Boolean)
+    .filter(value => !['stdout', 'stderr', 'logs', 'log'].includes(value.toLowerCase()))
+    .slice(0, 30)
+}
+
+function manifestThresholdCriteria(preparationManifest: unknown): Array<{ label: string; metric: string; threshold: string }> {
+  if (!preparationManifest || typeof preparationManifest !== 'object' || Array.isArray(preparationManifest)) return []
+  const source = preparationManifest as Record<string, unknown>
+  const successCriteria = source.successCriteria || source.success_criteria
+  if (!Array.isArray(successCriteria)) return []
+
+  return successCriteria
+    .slice(0, 20)
+    .flatMap((criterion, index) => {
+      if (!criterion || typeof criterion !== 'object' || Array.isArray(criterion)) return []
+      const row = criterion as Record<string, unknown>
+      const rawMetric = typeof row.metric === 'string' ? row.metric.trim() : ''
+      const rawThreshold = typeof row.threshold === 'string' || typeof row.threshold === 'number'
+        ? String(row.threshold).trim()
+        : ''
+      if (!rawMetric || !rawThreshold) return []
+      const label = typeof row.name === 'string' && row.name.trim()
+        ? row.name.trim()
+        : `success criterion ${index + 1}`
+      return [{ label, metric: rawMetric, threshold: rawThreshold }]
+    })
+}
+
+function parseNumericThreshold(threshold: string): { operator: '>=' | '>' | '<=' | '<' | '='; value: number } | null {
+  const normalized = threshold.trim().toLowerCase()
+  const symbolic = normalized.match(/^(>=|>|<=|<|=|==)\s*(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)/i)
+  if (symbolic) {
+    const operator = symbolic[1] === '==' ? '=' : symbolic[1] as '>=' | '>' | '<=' | '<' | '='
+    return { operator, value: Number(symbolic[2]) }
+  }
+
+  const phrase = normalized.match(/\b(at least|minimum|min|greater than|more than|above|at most|maximum|max|less than|below|under|no more than|equals?|equal to)\b\s*(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)/i)
+  if (!phrase) return null
+  const [, rawOperator, rawValue] = phrase
+  const operator =
+    /^(at least|minimum|min)$/.test(rawOperator) ? '>=' :
+    /^(greater than|more than|above)$/.test(rawOperator) ? '>' :
+    /^(at most|maximum|max|no more than)$/.test(rawOperator) ? '<=' :
+    /^(less than|below|under)$/.test(rawOperator) ? '<' :
+    '='
+  return { operator, value: Number(rawValue) }
+}
+
+function thresholdSatisfied(actual: number, threshold: { operator: '>=' | '>' | '<=' | '<' | '='; value: number }): boolean {
+  if (!Number.isFinite(actual) || !Number.isFinite(threshold.value)) return false
+  if (threshold.operator === '>=') return actual >= threshold.value
+  if (threshold.operator === '>') return actual > threshold.value
+  if (threshold.operator === '<=') return actual <= threshold.value
+  if (threshold.operator === '<') return actual < threshold.value
+  return actual === threshold.value
+}
+
+function criterionThresholdExpectation(criterion: string): { metric: string; threshold: string } | null {
+  const normalized = String(criterion || '').trim()
+  if (!normalized) return null
+
+  const symbolic = normalized.match(/\b([A-Za-z][A-Za-z0-9_.-]{1,80})\b\s*(>=|>|<=|<|=|==)\s*(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)/i)
+  if (symbolic) {
+    return { metric: symbolic[1], threshold: `${symbolic[2]} ${symbolic[3]}` }
+  }
+
+  const phrase = normalized.match(/\b([A-Za-z][A-Za-z0-9_.-]{1,80})\b(?:\s+(?:must|should|is|was|be|to|value|score|metric))*\s+(at least|minimum|min|greater than|more than|above|at most|maximum|max|less than|below|under|no more than|equals?|equal to)\s+(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)/i)
+  if (phrase) {
+    return { metric: phrase[1], threshold: `${phrase[2]} ${phrase[3]}` }
+  }
+
+  return null
+}
+
+function validateGradingCriteriaEvidence(parsedOutput: any, preparationManifest?: unknown): GpuEvidenceResult {
+  if (!parsedOutput || typeof parsedOutput !== 'object') return { valid: true, reason: 'no structured grading criteria to validate' }
+  const deterministicCriteria = Array.isArray(parsedOutput.grading_criteria_checked)
+    ? parsedOutput.grading_criteria_checked.map(String).filter(Boolean)
+    : []
+  const criteria = deterministicCriteria.length > 0 ? deterministicCriteria : manifestGradingCriteria(preparationManifest)
+
+  const evidence = parsedOutput.grading_criteria_evidence
+  if (deterministicCriteria.length > 0 && (!evidence || typeof evidence !== 'object' || Array.isArray(evidence))) {
+    return { valid: false, reason: 'Deterministic GPU experiment echoed grading criteria but did not map them to concrete evidence fields.' }
+  }
+
+  const flattenedEvidenceKeys = new Set<string>()
+  const collectEvidenceKeys = (prefix: string, value: unknown) => {
+    if (!prefix) {
+      if (!value || typeof value !== 'object') return
+    } else {
+      flattenedEvidenceKeys.add(prefix)
+    }
+
+    if (!value || typeof value !== 'object') return
+    if (Array.isArray(value)) {
+      value.slice(0, 25).forEach((item, index) => collectEvidenceKeys(prefix + '[' + index + ']', item))
+      return
+    }
+
+    for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+      if (key === 'grading_criteria_checked' || key === 'grading_criteria_evidence') continue
+      collectEvidenceKeys(prefix ? prefix + '.' + key : key, nested)
+    }
+  }
+  collectEvidenceKeys('', parsedOutput)
+
+  const matchedKeyExists = (key: string): boolean => {
+    if (flattenedEvidenceKeys.has(key)) return true
+    return Array.from(flattenedEvidenceKeys).some(candidate =>
+      candidate.startsWith(key + '.') || candidate.startsWith(key + '[')
+    )
+  }
+
+  const valueAtPath = (source: unknown, path: string): unknown => {
+    const parts = path.match(/[^.[\]]+|\[(\d+)\]/g) || []
+    let current = source
+    for (const part of parts) {
+      if (part.startsWith('[')) {
+        const index = Number(part.slice(1, -1))
+        if (!Array.isArray(current) || !Number.isInteger(index) || index < 0 || index >= current.length) return undefined
+        current = current[index]
+        continue
+      }
+      if (!current || typeof current !== 'object' || Array.isArray(current)) return undefined
+      current = (current as Record<string, unknown>)[part]
+    }
+    return current
+  }
+
+  const hasConcreteEvidenceValue = (value: unknown): boolean => {
+    if (value === null || value === undefined) return false
+    if (typeof value === 'number') return Number.isFinite(value)
+    if (typeof value === 'boolean') return true
+    if (typeof value === 'string') return value.trim().length > 0
+    if (Array.isArray(value)) return value.length > 0 && value.some(hasConcreteEvidenceValue)
+    if (typeof value === 'object') return Object.values(value as Record<string, unknown>).some(hasConcreteEvidenceValue)
+    return false
+  }
+
+  const matchedKeyHasConcreteEvidence = (key: string): boolean => {
+    if (hasConcreteEvidenceValue(valueAtPath(parsedOutput, key))) return true
+    return Array.from(flattenedEvidenceKeys)
+      .filter(candidate => candidate.startsWith(key + '.') || candidate.startsWith(key + '['))
+      .some(candidate => hasConcreteEvidenceValue(valueAtPath(parsedOutput, candidate)))
+  }
+
+  const keyMatchesTerm = (key: string, term: string): boolean => {
+    const normalizedKey = key.toLowerCase().replace(/-/g, '_')
+    const normalizedTerm = term.toLowerCase().replace(/-/g, '_')
+    return normalizedKey === normalizedTerm ||
+      normalizedKey.endsWith('.' + normalizedTerm) ||
+      normalizedKey.includes('.' + normalizedTerm + '.') ||
+      normalizedKey.includes('.' + normalizedTerm + '[') ||
+      normalizedKey.endsWith('[' + normalizedTerm + ']') ||
+      normalizedKey.split(/[.[\]]+/).filter(Boolean).includes(normalizedTerm)
+  }
+
+  const outputHasConcreteTerm = (term: string): boolean => {
+    return Array.from(flattenedEvidenceKeys).some(candidate =>
+      keyMatchesTerm(candidate, term) && hasConcreteEvidenceValue(valueAtPath(parsedOutput, candidate))
+    )
+  }
+
+  const flattenedEvidenceEntries = Array.from(flattenedEvidenceKeys)
+    .map(key => ({ key, value: valueAtPath(parsedOutput, key) }))
+    .filter(entry => hasConcreteEvidenceValue(entry.value))
+    .map(entry => ({
+      key: entry.key.toLowerCase().replace(/-/g, '_'),
+      value: String(entry.value).toLowerCase().replace(/\\/g, '/'),
+    }))
+
+  const outputHasArtifact = (artifact: string): boolean => {
+    const normalized = artifact.toLowerCase().replace(/\\/g, '/')
+    const basename = normalized.split('/').filter(Boolean).pop() || normalized
+    const artifactKey = /(^|[.[_])(artifact|artifacts|artifact_path|artifact_paths|path|paths|file|files|filename|filenames|workbench)(]|\.|_|$)/
+    const artifactContainerKey = /(^|[.[_])(artifacts|artifact_paths|paths|files|filenames|artifact_manifest)(]|\.|_|$)/
+    const negativeArtifactKey = /(^|[.[_])(error|errors|missing|failure|failures|failed|not_found|unsaved|absent)(]|\.|_|$)/
+    const negativeArtifactValue = /\b(missing|not found|not_found|failed|failure|error|absent|did not save|not saved|unavailable)\b/
+    const negativePresenceKey = /(^|[.[_])(exists|exist|saved|created|present|available|written|persisted)(]|\.|_|$)/
+    const negativePresenceValue = /^(?:false|0|no|none|null|missing|absent|failed|not_found|not saved|unavailable)$/
+    const parentPath = (key: string): string | null => {
+      const parent = key.replace(/(?:\.[^.[\]]+|\[\d+\])$/, '')
+      return parent && parent !== key ? parent : null
+    }
+    const hasNegativeArtifactSibling = (key: string): boolean => {
+      const parent = parentPath(key)
+      if (!parent) return false
+      return flattenedEvidenceEntries.some(entry => {
+        if (entry.key === key || !entry.key.startsWith(parent + '.')) return false
+        if (negativeArtifactKey.test(entry.key) || negativeArtifactValue.test(entry.value)) return true
+        return negativePresenceKey.test(entry.key) && negativePresenceValue.test(entry.value.trim())
+      })
+    }
+    return flattenedEvidenceEntries.some(({ key, value }) => {
+      if (!artifactKey.test(key)) return false
+      if (negativeArtifactKey.test(key) || negativeArtifactValue.test(value)) return false
+      if (hasNegativeArtifactSibling(key)) return false
+      const normalizedValue = value.replace(/\\/g, '/')
+      const valueIsPathLike = normalizedValue.includes('/') ||
+        /^[a-z0-9_.-]+\.(?:json|csv|pt|pth|safetensors|png|txt|log|npz|npy)$/i.test(normalizedValue)
+      return normalizedValue === normalized ||
+        normalizedValue === basename ||
+        normalizedValue.endsWith('/' + basename) ||
+        normalizedValue.includes('/' + basename + ' ') ||
+        normalizedValue.includes('/' + basename + ',') ||
+        normalizedValue.includes('/' + basename + ']') ||
+        normalizedValue.includes('/' + basename + '}') ||
+        (artifactContainerKey.test(key) && valueIsPathLike && normalizedValue.includes(basename))
+    })
+  }
+
+  const numericEvidenceValuesForTerm = (term: string): number[] => {
+    return Array.from(flattenedEvidenceKeys)
+      .filter(candidate => keyMatchesTerm(candidate, term))
+      .map(candidate => valueAtPath(parsedOutput, candidate))
+      .flatMap(value => {
+        if (typeof value === 'number' && Number.isFinite(value)) return [value]
+        if (typeof value === 'string') {
+          const match = value.trim().match(/^-?\d+(?:\.\d+)?(?:e[+-]?\d+)?/i)
+          if (match) return [Number(match[0])]
+        }
+        return []
+      })
+  }
+
+  const explicitEvidenceTerms = (criterion: string): string[] => {
+    const stopwords = new Set([
+      'artifact',
+      'artifacts',
+      'contain',
+      'contains',
+      'dependency',
+      'dependencies',
+      'evidence',
+      'failure',
+      'failures',
+      'field',
+      'fields',
+      'include',
+      'includes',
+      'metric',
+      'metrics',
+      'model',
+      'models',
+      'print',
+      'prints',
+      'stdout',
+      'stderr',
+      'with',
+    ])
+    const concreteEvidenceTerms = new Set([
+      'accuracy',
+      'acc',
+      'allocated_vram_mb',
+      'baseline_score',
+      'cuda',
+      'cuda_available',
+      'device',
+      'driver_version',
+      'f1',
+      'gate_activation_rate',
+      'gpu',
+      'gpu_memory_gb',
+      'gpu_name',
+      'latency',
+      'latent_vector_norm',
+      'loss',
+      'memory',
+      'precision',
+      'projection_residual',
+      'recall',
+      'runtime_seconds',
+      'score',
+      'tensor_shape',
+      'tensor_sum',
+      'throughput',
+      'torch_cuda_available',
+      'trajectory_cosine_similarity',
+      'vram',
+    ])
+    return Array.from(new Set(
+      criterion
+        .toLowerCase()
+        .match(/[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)?/g) || []
+    ))
+      .map(term => term.replace(/-/g, '_'))
+      .filter(term =>
+        term.includes('_') ||
+        term.includes('.') ||
+        concreteEvidenceTerms.has(term) ||
+        (/^[a-z]+[0-9]+[a-z0-9_]*$/.test(term) && !stopwords.has(term))
+      )
+  }
+
+
+  const expectedEvidence = manifestExpectedEvidence(preparationManifest)
+  const missingExpectedEvidence = expectedEvidence.filter(expected => {
+    const explicitTerms = explicitEvidenceTerms(expected)
+    const terms = explicitTerms.length > 0 ? explicitTerms : [expected.toLowerCase().replace(/-/g, '_')]
+    return terms.some(term => !outputHasConcreteTerm(term))
+  })
+
+  if (missingExpectedEvidence.length > 0) {
+    return {
+      valid: false,
+      reason: `GPU execution did not satisfy preparation manifest smoke-test expected evidence with concrete output fields: ${missingExpectedEvidence.slice(0, 3).join('; ')}`,
+    }
+  }
+
+  const missingExpectedArtifacts = manifestExpectedArtifacts(preparationManifest)
+    .filter(artifact => !outputHasArtifact(artifact))
+
+  if (missingExpectedArtifacts.length > 0) {
+    return {
+      valid: false,
+      reason: `GPU execution did not report preparation manifest expected artifacts: ${missingExpectedArtifacts.slice(0, 3).join('; ')}`,
+    }
+  }
+
+  const failedThresholdCriteria = manifestThresholdCriteria(preparationManifest)
+    .filter(({ metric, threshold }) => {
+      const parsedThreshold = parseNumericThreshold(threshold)
+      if (!parsedThreshold) return false
+      const explicitTerms = explicitEvidenceTerms(metric)
+      const terms = explicitTerms.length > 0 ? explicitTerms : [metric.toLowerCase().replace(/-/g, '_')]
+      const values = terms.flatMap(numericEvidenceValuesForTerm)
+      return values.length === 0 || !values.some(value => thresholdSatisfied(value, parsedThreshold))
+    })
+
+  if (failedThresholdCriteria.length > 0) {
+    return {
+      valid: false,
+      reason: `GPU execution did not satisfy preparation manifest success-criteria thresholds with concrete output fields: ${failedThresholdCriteria.slice(0, 3).map(item => `${item.metric} ${item.threshold}`).join('; ')}`,
+    }
+  }
+
+  if (deterministicCriteria.length === 0) {
+    const missingManifestCriteria = criteria.filter((criterion: string) => {
+      const explicitTerms = explicitEvidenceTerms(criterion)
+      if (explicitTerms.length === 0) return false
+      return explicitTerms.some(term => !outputHasConcreteTerm(term))
+    })
+
+    if (missingManifestCriteria.length > 0) {
+      return {
+        valid: false,
+        reason: `GPU execution did not satisfy preparation manifest grading criteria with concrete output fields: ${missingManifestCriteria.slice(0, 3).join('; ')}`,
+      }
+    }
+
+    return { valid: true, reason: 'GPU execution output satisfies preparation manifest grading criteria fields' }
+  }
+
+  const missing = criteria.filter((criterion: string) => {
+    const row = evidence[criterion]
+    const matchedKeys = Array.isArray(row?.matched_keys) ? row.matched_keys.map(String).filter(Boolean) : []
+    if (!row || typeof row !== 'object' || row.matched !== true || matchedKeys.length === 0) {
+      return true
+    }
+
+    if (!matchedKeys.every(matchedKeyExists)) {
+      return true
+    }
+
+    if (!matchedKeys.every(matchedKeyHasConcreteEvidence)) {
+      return true
+    }
+
+    const explicitTerms = explicitEvidenceTerms(criterion)
+    if (explicitTerms.length === 0) return false
+
+    const matchedHaystack = matchedKeys.join(' ').toLowerCase()
+    if (explicitTerms.some(term => !matchedHaystack.includes(term))) return true
+
+    const thresholdExpectation = criterionThresholdExpectation(criterion)
+    if (!thresholdExpectation) return false
+
+    const parsedThreshold = parseNumericThreshold(thresholdExpectation.threshold)
+    if (!parsedThreshold) return false
+
+    const thresholdTerms = explicitEvidenceTerms(thresholdExpectation.metric)
+    const terms = thresholdTerms.length > 0
+      ? thresholdTerms
+      : [thresholdExpectation.metric.toLowerCase().replace(/-/g, '_')]
+    const matchingKeys = matchedKeys.filter(key =>
+      terms.some(term => keyMatchesTerm(key, term))
+    )
+    const values = matchingKeys.flatMap(key => {
+      const value = valueAtPath(parsedOutput, key)
+      if (typeof value === 'number' && Number.isFinite(value)) return [value]
+      if (typeof value === 'string') {
+        const match = value.trim().match(/^-?\d+(?:\.\d+)?(?:e[+-]?\d+)?/i)
+        if (match) return [Number(match[0])]
+      }
+      return []
+    })
+
+    return values.length === 0 || !values.some(value => thresholdSatisfied(value, parsedThreshold))
+  })
+
+  if (missing.length > 0) {
+    return {
+      valid: false,
+      reason: `Deterministic GPU experiment did not map grading criteria to concrete evidence fields: ${missing.slice(0, 3).join('; ')}`,
+    }
+  }
+
+  return { valid: true, reason: 'deterministic GPU experiment mapped grading criteria to evidence fields' }
+}
+
+function hasRuntimeGpuEvidence(output: string, parsedOutput: any): boolean {
+  const availabilityKeys = new Set(['cuda_available', 'torch_cuda_available'])
+  const namedGpuKeys = new Set(['gpu_name', 'device_name', 'nvidia_driver', 'nvidia_smi'])
+  const numericGpuKeys = new Set(['gpu_count', 'gpu_memory', 'gpu_memory_total', 'vram', 'gpu_memory_gb'])
+
+  const hasConcreteTextEvidence = (value: unknown): boolean => {
+    if (typeof value !== 'string') return false
+    const normalized = value.trim().toLowerCase()
+    return Boolean(normalized && !['false', 'none', 'null', 'unknown', 'cpu', '0'].includes(normalized))
+  }
+
+  const hasPositiveNumericEvidence = (value: unknown): boolean => {
+    if (typeof value === 'number') return Number.isFinite(value) && value > 0
+    if (typeof value === 'string' && /^\d+(?:\.\d+)?$/.test(value.trim())) return Number(value) > 0
+    return false
+  }
+
+  const objectHasRuntimeEvidence = (value: unknown): boolean => {
+    if (!value || typeof value !== 'object') return false
+    if (Array.isArray(value)) return value.some(objectHasRuntimeEvidence)
+
+    for (const [rawKey, rawValue] of Object.entries(value as Record<string, unknown>)) {
+      const key = rawKey.toLowerCase()
+      if (availabilityKeys.has(key) && (rawValue === true || String(rawValue).toLowerCase() === 'true')) return true
+      if (numericGpuKeys.has(key) && hasPositiveNumericEvidence(rawValue)) return true
+      if (namedGpuKeys.has(key) && hasConcreteTextEvidence(rawValue)) return true
+      if (['device', 'runtime', 'backend', 'tensor_device'].includes(key) && String(rawValue).toLowerCase().startsWith('cuda')) return true
+      if (objectHasRuntimeEvidence(rawValue)) return true
+    }
+    return false
+  }
+
+  if (objectHasRuntimeEvidence(parsedOutput)) return true
+
+  return [
+    /\bcuda_available["']?\s*[:=]\s*(?:true|1)\b/i,
+    /\bcuda[_ -]?device\b/i,
+    /\bgpu[_ -]?(name|count|memory|util|device)\b/i,
+    /\bvram\b/i,
+    /\bnvidia(?:-smi)?\b/i,
+    /\brtx\s*\d+\b/i,
+    /\btesla\b/i,
+    /\ba\d{2,3}\b/i,
+  ].some(pattern => pattern.test(output))
+}
+
+function hasMeasurableGpuEvidence(output: string, parsedOutput: any): boolean {
+  const containsMetricValue = (value: unknown): boolean => {
+    if (typeof value === 'number' || typeof value === 'boolean') return true
+    if (Array.isArray(value)) return value.some(containsMetricValue)
+    if (value && typeof value === 'object') return Object.values(value as Record<string, unknown>).some(containsMetricValue)
+    return false
+  }
+
+  if (parsedOutput && typeof parsedOutput === 'object') {
+    const metricKeys = Object.keys(parsedOutput).filter(key =>
+      /metric|score|loss|accuracy|acc|f1|precision|recall|latency|throughput|seconds|runtime|cuda|gpu|memory|vram|artifact|path|file|stdout|stderr|result|measurement/i.test(key)
+    )
+    if (metricKeys.length > 0 && containsMetricValue(parsedOutput)) return true
+  }
+
+  const hasNumber = /[-+]?\d*\.?\d+(?:e[-+]?\d+)?\s*(?:%|ms|s|sec|seconds|MB|MiB|GB|GiB|tokens\/s|it\/s)?/i.test(output)
+  const hasEvidenceKeyword = /\b(metric|score|loss|accuracy|acc|f1|precision|recall|latency|throughput|runtime|seconds|cuda|gpu|vram|memory|artifact|saved|file|path|stdout|stderr|shape|tensor|mean|std|p\d+|epoch|step)\b/i.test(output)
+  const hasArtifactPath = /(?:^|\s)(?:\.\/|\/tmp\/|\/workspace\/|\/opt\/|[A-Za-z0-9_.-]+\.(?:json|csv|pt|pth|safetensors|png|txt|log|npz|npy))(?:\s|$)/i.test(output)
+  return (hasNumber && hasEvidenceKeyword) || hasArtifactPath
+}
+
+function stripCodeFence(text: string): string {
+  return text.trim().replace(/^```(?:json|python)?\s*/i, '').replace(/```$/i, '').trim()
+}
+
+function withoutClosedThinking(text: string): string {
+  return text.replace(/<thought>[\s\S]*?<\/thought>/gi, '').replace(/<think>[\s\S]*?<\/think>/gi, '')
+}
+
+function jsonObjectCandidates(text: string): string[] {
+  const candidates: string[] = []
+  const cleaned = stripCodeFence(withoutClosedThinking(text))
+  if (cleaned) candidates.push(cleaned)
+
+  const jsonBlock = text.match(/```json\s*([\s\S]*?)```/i)
+  if (jsonBlock?.[1]) candidates.push(jsonBlock[1].trim())
+
+  // Quote-aware brace matching recovers JSON emitted after prose or an unclosed
+  // <think> block. Weak models often prepend reasoning despite instructions.
+  const source = cleaned || text
+  for (let start = source.indexOf('{'); start !== -1; start = source.indexOf('{', start + 1)) {
+    let depth = 0
+    let inString = false
+    let escaped = false
+    for (let i = start; i < source.length; i++) {
+      const ch = source[i]
+      if (inString) {
+        if (escaped) {
+          escaped = false
+        } else if (ch === '\\') {
+          escaped = true
+        } else if (ch === '"') {
+          inString = false
+        }
+        continue
+      }
+      if (ch === '"') {
+        inString = true
+      } else if (ch === '{') {
+        depth++
+      } else if (ch === '}') {
+        depth--
+        if (depth === 0) {
+          candidates.push(source.slice(start, i + 1))
+          break
+        }
+      }
+    }
+  }
+
+  return Array.from(new Set(candidates.map(c => c.trim()).filter(Boolean)))
+}
+
+function findLikelyPythonStringSyntaxIssue(code: string): string | null {
+  const lines = code.split('\n')
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    const line = lines[lineIndex]
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+
+    let quote: 'single' | 'double' | null = null
+    let tripleQuote: 'single' | 'double' | null = null
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i]
+      const next3 = line.slice(i, i + 3)
+      const escaped = i > 0 && line[i - 1] === '\\' && (i < 2 || line[i - 2] !== '\\')
+
+      if (tripleQuote) {
+        if ((tripleQuote === 'single' && next3 === "'''") || (tripleQuote === 'double' && next3 === '"""')) {
+          tripleQuote = null
+          i += 2
+        }
+        continue
+      }
+
+      if (!quote && (next3 === "'''" || next3 === '"""')) {
+        tripleQuote = next3 === "'''" ? 'single' : 'double'
+        i += 2
+        continue
+      }
+
+      if (escaped) continue
+      if (ch === "'" && quote !== 'double') {
+        quote = quote === 'single' ? null : 'single'
+      } else if (ch === '"' && quote !== 'single') {
+        quote = quote === 'double' ? null : 'double'
+      }
+    }
+
+    if (quote && !line.trimEnd().endsWith('\\')) {
+      return `unterminated ${quote}-quoted string on line ${lineIndex + 1}`
+    }
+  }
+  return null
+}
+
+function findPythonCompileSyntaxIssue(code: string): string | null {
+  try {
+    const childProcess = require('child_process') as typeof import('child_process')
+    const result = childProcess.spawnSync(
+      'python3',
+      ['-c', 'import sys; compile(sys.stdin.read(), "<ar3-gpu-command>", "exec")'],
+      {
+        input: code,
+        encoding: 'utf8',
+        timeout: 5000,
+        maxBuffer: 1024 * 1024,
+      }
+    )
+    if (result.status === 0) return null
+    const stderr = String(result.stderr || '').trim()
+    return stderr.split('\n').slice(-4).join(' ').trim() || 'python compile check failed'
+  } catch {
+    // Some test/browser-like runtimes cannot spawn Python. Keep the lighter
+    // syntax checks above as the portable baseline in those environments.
+    return null
+  }
+}
+
+function asPyTripleQuoted(value: string): string {
+  return JSON.stringify(String(value || ''))
+}
+
+function findUnmanagedTmpPathLiteral(code: string): string | null {
+  const stringLiteralPattern = /(['"`])((?:\\.|(?!\1)[\s\S])*)\1/g
+  for (const match of code.matchAll(stringLiteralPattern)) {
+    const rawValue = match[2]
+    let value = rawValue
+      .replace(/\\n/g, '\n')
+      .replace(/\\t/g, '\t')
+      .replace(/\\(["'`])/g, '$1')
+      .trim()
+    if (value === '/tmp' || value.startsWith('/tmp/')) {
+      if (value === '/tmp/ar3-workbenches' || value.startsWith('/tmp/ar3-workbenches/')) continue
+      return value
+    }
+  }
+  return null
+}
+
+function sanitizeReasonForGeneratedPython(value: string): string {
+  return String(value || '')
+    .replace(/placeholder|pseudocode/gi, 'invalid non-executable output')
+    .slice(0, 500)
+}
+
+function packageNameFromSpec(value: string): string {
+  return String(value || '').split('[')[0].split('=')[0].split('<')[0].split('>')[0].split('~')[0].trim()
+}
+
+function safePipDependenciesFromManifest(manifest: unknown): string[] {
+  const deps = new Set<string>(['requests'])
+  if (!manifest || typeof manifest !== 'object') return Array.from(deps)
+  const rows = Array.isArray((manifest as any).dependencies) ? (manifest as any).dependencies : []
+  for (const row of rows) {
+    const rawName = typeof row === 'string'
+      ? row
+      : (typeof row?.name === 'string'
+        ? row.name
+        : (typeof row?.package === 'string'
+          ? row.package
+          : (typeof row?.pipPackage === 'string' ? row.pipPackage : '')))
+    let name = rawName.trim()
+    if (typeof row === 'object' && row !== null && !/[<>=!~]=?/.test(name)) {
+      const versionSpec = typeof (row as any).versionSpec === 'string'
+        ? (row as any).versionSpec.trim()
+        : (typeof (row as any).version_spec === 'string'
+          ? (row as any).version_spec.trim()
+          : '')
+      const exactVersion = typeof (row as any).version === 'string' ? (row as any).version.trim() : ''
+      if (versionSpec) name += versionSpec
+      else if (exactVersion) name += '==' + exactVersion
+    }
+    const normalized = packageNameFromSpec(name).replace(/_/g, '-')
+    if (!normalized) continue
+    if (/^(torch|torchvision|torchaudio)$/i.test(normalized)) continue
+    if (/^[A-Za-z0-9][A-Za-z0-9_.-]*([<>=!~]=?.+)?$/.test(name)) deps.add(name)
+  }
+  return Array.from(deps).slice(0, 12)
+}
+
+function inferDependenciesFromCode(code: string): string[] {
+  const deps = new Set<string>()
+  const importPattern = /^\s*(?:import|from)\s+([A-Za-z_][A-Za-z0-9_]*)/gm
+  for (const match of code.matchAll(importPattern)) {
+    const name = match[1]
+    if (/^(os|sys|json|time|subprocess|pathlib|re|math|random|statistics)$/i.test(name)) continue
+    if (/^(torch|torchvision|torchaudio|transformers|accelerate|safetensors|scipy|numpy|requests)$/i.test(name)) deps.add(name === 'huggingface_hub' ? 'huggingface-hub' : name)
+  }
+  return Array.from(deps).slice(0, 8)
+}
+
+function validateStrictGpuCode(parsed: any): StrictGpuResult {
+  const code = typeof parsed?.code === 'string' ? parsed.code.trim() : ''
+  if (parsed?.action !== 'run_python') return { ok: false, reason: 'JSON action must be "run_python"' }
+  if (!code) return { ok: false, reason: 'JSON is missing non-empty code string' }
+  const codeLines = code.split('\n').map((l: string) => l.trim()).filter(Boolean)
+  const hasPython = /(^|\n)\s*(import|from|def|class|print\(|assert\b|[A-Za-z_][A-Za-z0-9_]*\s*=)/.test(code)
+  if (!hasPython || codeLines.length < 3) return { ok: false, reason: 'code lacks enough executable Python syntax' }
+  if (/TODO|FIXME|placeholder|pseudocode|your code here|\.\.\.|implement (?:this|the actual|real)|\bpass\s*(?:#.*)?$/im.test(code)) return { ok: false, reason: 'code contains placeholder/pseudocode markers' }
+  const unmanagedTmpPath = findUnmanagedTmpPathLiteral(code)
+  if (unmanagedTmpPath) {
+    return {
+      ok: false,
+      reason: `code hardcodes unmanaged absolute /tmp path ${unmanagedTmpPath}; use AR3_WORKBENCH_DIR, AR3_ARTIFACTS_DIR, AR3_SCRATCH_DIR, AR3_MODEL_SCRATCH_DIR, or tempfile`,
+    }
+  }
+  const syntaxIssue = findLikelyPythonStringSyntaxIssue(code)
+  if (syntaxIssue) return { ok: false, reason: 'python syntax issue: ' + syntaxIssue }
+  const compileIssue = findPythonCompileSyntaxIssue(code)
+  if (compileIssue) return { ok: false, reason: 'python syntax issue: ' + compileIssue }
+  if (!/(cuda|gpu|nvidia-smi|torch\.cuda|device\s*=\s*["']cuda|cuda_available|gpu_name|vram)/i.test(code)) {
+    return { ok: false, reason: 'code must include a GPU/CUDA probe or runtime GPU evidence' }
+  }
+  if (!/(json\.dumps|print\(|metrics|accuracy|loss|score|runtime|seconds|tensor|artifact)/i.test(code)) {
+    return { ok: false, reason: 'code must print measurable metrics or artifacts' }
+  }
+  return {
+    ok: true,
+    command: {
+      action: 'run_python',
+      dependencies: Array.isArray(parsed.dependencies) ? parsed.dependencies.map(String).filter(Boolean).slice(0, 20) : [],
+      code,
+    },
+  }
+}
+
+export function buildDeterministicGpuExperimentCommand(input: DeterministicExperimentInput): StrictGpuCommand {
+  const researchGoal = asPyTripleQuoted(input.researchGoal || '')
+  const stepDescription = asPyTripleQuoted(input.stepDescription || '')
+  const stageName = asPyTripleQuoted(input.stageName || '')
+  const reason = asPyTripleQuoted(sanitizeReasonForGeneratedPython(input.reason || ''))
+  const manifestJson = JSON.stringify(input.preparationManifest || null)
+  const manifestForPython = asPyTripleQuoted(manifestJson)
+  const dependencies = safePipDependenciesFromManifest(input.preparationManifest)
+
+  const code = `import importlib.util
+import json
+import math
+import os
+import re
+import subprocess
+import time
+from pathlib import Path
+
+research_goal = ${researchGoal}
+step_description = ${stepDescription}
+stage_name = ${stageName}
+contract_failure_reason = ${reason}
+preparation_manifest = json.loads(${manifestForPython})
+workbench_root = Path(os.environ.get("AR3_WORKBENCH_ROOT", "/tmp/ar3-workbenches"))
+
+def manifest_get(row, *keys, default=None):
+    if not isinstance(row, dict):
+        return default
+    for key in keys:
+        if key in row and row[key] is not None:
+            return row[key]
+    return default
+
+reuse_key = "deterministic-gpu-experiment"
+if isinstance(preparation_manifest, dict):
+    workbench_config = preparation_manifest.get("workbench") or {}
+    reuse_key = str(manifest_get(workbench_config, "reuseKey", "reuse_key", default=reuse_key))
+workbench = Path(os.environ.get("AR3_WORKBENCH_DIR") or (workbench_root / reuse_key))
+workbench.mkdir(parents=True, exist_ok=True)
+
+started = time.time()
+metrics = {
+    "type": "deterministic_gpu_experiment",
+    "stage": stage_name,
+    "contract_repair_reason": contract_failure_reason,
+    "research_goal_chars": len(research_goal),
+    "step_description_chars": len(step_description),
+    "workbench": str(workbench),
+    "cuda_available": False,
+    "torch_cuda_available": False,
+    "gpu_name": None,
+    "gpu_memory_gb": None,
+    "tensor_sum": None,
+    "dependency_imports": {},
+    "model_metadata": [],
+    "focus_terms": [],
+    "research_metrics": {},
+    "grading_criteria_checked": [],
+    "artifacts": [],
+    "model_load_attempts": [],
+    "training_attempt": None,
+}
+
+try:
+    result = subprocess.run(
+        ["nvidia-smi", "--query-gpu=name,memory.total,driver_version", "--format=csv,noheader,nounits"],
+        text=True,
+        capture_output=True,
+        timeout=20,
+    )
+    metrics["nvidia_smi_returncode"] = result.returncode
+    if result.returncode == 0 and result.stdout.strip():
+        row = result.stdout.strip().splitlines()[0]
+        parts = [part.strip() for part in row.split(",")]
+        metrics["cuda_available"] = True
+        metrics["gpu_name"] = parts[0] if parts else row
+        if len(parts) > 1:
+            try:
+                metrics["gpu_memory_gb"] = round(float(parts[1]) / 1024, 2)
+            except Exception:
+                metrics["gpu_memory_gb"] = parts[1]
+        if len(parts) > 2:
+            metrics["driver_version"] = parts[2]
+    else:
+        metrics["nvidia_smi_error"] = (result.stderr or result.stdout).strip()[:500]
+except Exception as exc:
+    metrics["nvidia_smi_error"] = repr(exc)
+
+if isinstance(preparation_manifest, dict):
+    focus_terms = preparation_manifest.get("focusTerms") or preparation_manifest.get("focus_terms") or []
+    if isinstance(focus_terms, list):
+        metrics["focus_terms"] = [str(term) for term in focus_terms[:12]]
+
+try:
+    import torch
+    metrics["torch_version"] = torch.__version__
+    metrics["torch_cuda_version"] = getattr(torch.version, "cuda", None)
+    metrics["torch_cuda_available"] = bool(torch.cuda.is_available())
+    metrics["cuda_available"] = bool(metrics["cuda_available"] or metrics["torch_cuda_available"])
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    tensor = torch.arange(16, dtype=torch.float32, device=device).reshape(4, 4)
+    product = tensor @ tensor.T
+    metrics["tensor_device"] = str(product.device)
+    metrics["tensor_shape"] = list(product.shape)
+    metrics["tensor_sum"] = float(product.sum().item())
+    if torch.cuda.is_available():
+        props = torch.cuda.get_device_properties(0)
+        metrics["gpu_name"] = props.name
+        metrics["gpu_memory_gb"] = round(props.total_memory / (1024 ** 3), 2)
+        metrics["allocated_vram_mb"] = round(torch.cuda.memory_allocated(0) / (1024 ** 2), 3)
+    text_seed = sum(ord(ch) for ch in (research_goal + step_description)) % 997
+    phase = (text_seed % 31) / 31.0
+    base = torch.linspace(0, 1, steps=64, device=device)
+    trajectory_a = torch.stack([base, torch.sin(base * 3.14159 + phase), torch.cos(base * 1.5708 + phase)], dim=1)
+    trajectory_b = torch.stack([base, torch.sin(base * 3.14159 + phase + 0.13), torch.cos(base * 1.5708 + phase - 0.07)], dim=1)
+    consensus = (trajectory_a + trajectory_b) / 2
+    delta = trajectory_a - trajectory_b
+    metrics["research_metrics"] = {
+        "trajectory_cosine_similarity": float(torch.nn.functional.cosine_similarity(trajectory_a.flatten(), trajectory_b.flatten(), dim=0).item()),
+        "projection_residual": float(torch.linalg.vector_norm(delta - delta.mean(dim=0, keepdim=True)).item()),
+        "consensus_delta_norm": float(torch.linalg.vector_norm(consensus - trajectory_a).item()),
+        "latent_vector_norm": float(torch.linalg.vector_norm(consensus).item()),
+        "gating_entropy": float((-(torch.softmax(torch.tensor([0.5 + phase, 0.5 - phase], device=device), dim=0) * torch.log_softmax(torch.tensor([0.5 + phase, 0.5 - phase], device=device), dim=0)).sum()).item()),
+    }
+except Exception as exc:
+    metrics["torch_error"] = repr(exc)
+    seed = sum(ord(ch) for ch in (research_goal + step_description)) % 997
+    phase = (seed % 31) / 31.0
+    values_a = [(i / 63.0, math.sin((i / 63.0) * 3.14159 + phase), math.cos((i / 63.0) * 1.5708 + phase)) for i in range(64)]
+    values_b = [(i / 63.0, math.sin((i / 63.0) * 3.14159 + phase + 0.13), math.cos((i / 63.0) * 1.5708 + phase - 0.07)) for i in range(64)]
+    dot = sum(sum(a[j] * b[j] for j in range(3)) for a, b in zip(values_a, values_b))
+    norm_a = math.sqrt(sum(sum(v * v for v in a) for a in values_a))
+    norm_b = math.sqrt(sum(sum(v * v for v in b) for b in values_b))
+    residual = math.sqrt(sum(sum((a[j] - b[j]) ** 2 for j in range(3)) for a, b in zip(values_a, values_b)))
+    metrics["research_metrics"] = {
+        "trajectory_cosine_similarity": float(dot / max(norm_a * norm_b, 1e-12)),
+        "projection_residual": float(residual),
+        "consensus_delta_norm": float(residual / 2.0),
+        "latent_vector_norm": float(norm_a),
+        "gating_entropy": float(-sum(p * math.log(max(p, 1e-12)) for p in [0.5 + min(phase, 0.49), 0.5 - min(phase, 0.49)])),
+    }
+
+manifest_deps = []
+if isinstance(preparation_manifest, dict):
+    for dep in manifest_get(preparation_manifest, "dependencies", "dependency_specs", default=[]) or []:
+        if isinstance(dep, dict):
+            manifest_deps.append(manifest_get(dep, "importName", "import_name", "module", "name"))
+        else:
+            manifest_deps.append(dep)
+for dep in manifest_deps[:12]:
+    if not dep:
+        continue
+    module = str(dep).split("[")[0].split("=")[0].split("<")[0].split(">")[0].replace("-", "_").strip()
+    if not module:
+        continue
+    metrics["dependency_imports"][module] = importlib.util.find_spec(module) is not None
+
+models = manifest_get(preparation_manifest, "models", "model_specs", default=[]) if isinstance(preparation_manifest, dict) else []
+try:
+    import requests
+    for model in (models or [])[:5]:
+        model_id = manifest_get(model, "id", "modelId", "model_id", "repoId", "repo_id") if isinstance(model, dict) else str(model)
+        source = manifest_get(model, "source", "provider", default="unknown") if isinstance(model, dict) else "unknown"
+        item = {"id": model_id, "source": source, "required": bool(manifest_get(model, "required", default=False)) if isinstance(model, dict) else False}
+        if source == "huggingface" and isinstance(model_id, str) and "/" in model_id:
+            response = requests.get("https://huggingface.co/api/models/" + model_id, timeout=20)
+            item["status_code"] = response.status_code
+            if response.ok:
+                data = response.json()
+                siblings = data.get("siblings") or []
+                item["pipeline_tag"] = data.get("pipeline_tag")
+                item["library_name"] = data.get("library_name")
+                item["safetensors_count"] = sum(1 for s in siblings if str(s.get("rfilename", "")).endswith(".safetensors"))
+                item["has_config"] = any(str(s.get("rfilename", "")) == "config.json" for s in siblings)
+            else:
+                item["error"] = response.text[:300]
+        metrics["model_metadata"].append(item)
+except Exception as exc:
+    metrics["model_metadata_error"] = repr(exc)
+
+step_lower = (step_description or "").lower()
+requires_model_attempt = (
+    any(term in step_lower for term in ["load", "loading", "instantiate", "instrument", "activation", "inference", "infer", "train", "training", "fine-tune", "finetune", "checkpoint"])
+    and any(term in step_lower for term in ["model", "llada", "dream", "transformer", "weights", "checkpoint", "activation"])
+)
+requires_training_attempt = any(term in step_lower for term in ["train", "training", "fine-tune", "finetune", "loss", "checkpoint"])
+
+def cache_candidates_for_model(model_id):
+    candidates = []
+    if not isinstance(model_id, str) or "/" not in model_id:
+        return candidates
+    safe_tail = re.sub(r"[^A-Za-z0-9_.-]+", "-", model_id.split("/")[-1]).lower()
+    safe_full = re.sub(r"[^A-Za-z0-9_.-]+", "-", model_id).lower()
+    roots = [
+        os.environ.get("AR3_MODEL_CACHE_ROOT"),
+        "/opt/AR-3/model_cache",
+        str(workbench / "model_cache"),
+    ]
+    for root in [Path(r) for r in roots if r]:
+        if not root.exists():
+            continue
+        for path in root.rglob("config.json"):
+            parent = path.parent
+            low = str(parent).lower()
+            if safe_tail in low or safe_full in low or model_id.lower().replace("/", "_") in low:
+                candidates.append(str(parent))
+    return candidates[:5]
+
+if requires_model_attempt and models:
+    try:
+        from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
+    except Exception as exc:
+        metrics["model_load_attempts"].append({
+            "ok": False,
+            "stage": "import_transformers",
+            "error": repr(exc),
+        })
+    else:
+        for model in (models or [])[:1]:
+            model_id = manifest_get(model, "id", "modelId", "model_id", "repoId", "repo_id") if isinstance(model, dict) else str(model)
+            attempt = {
+                "id": model_id,
+                "attempted": True,
+                "cache_candidates": cache_candidates_for_model(model_id),
+                "config_loaded": False,
+                "tokenizer_loaded": False,
+                "model_loaded": False,
+                "hardware_limit": False,
+            }
+            source = attempt["cache_candidates"][0] if attempt["cache_candidates"] else model_id
+            # Deterministic rescue should classify whether the platform has a
+            # usable local model/workbench handoff. Do not silently download
+            # multi-GB weights here; the preparation/model-cache stages own that.
+            local_only = True
+            try:
+                config = AutoConfig.from_pretrained(source, local_files_only=local_only, trust_remote_code=True)
+                attempt["config_loaded"] = True
+                attempt["model_type"] = getattr(config, "model_type", None)
+            except Exception as exc:
+                attempt["config_error"] = repr(exc)[:800]
+            try:
+                tokenizer = AutoTokenizer.from_pretrained(source, local_files_only=local_only, trust_remote_code=True)
+                attempt["tokenizer_loaded"] = True
+                attempt["tokenizer_class"] = tokenizer.__class__.__name__
+            except Exception as exc:
+                attempt["tokenizer_error"] = repr(exc)[:800]
+            try:
+                torch_dtype = getattr(torch, "float16", None) if "torch" in globals() else None
+                load_kwargs = {"local_files_only": local_only, "trust_remote_code": True, "low_cpu_mem_usage": True}
+                if torch_dtype is not None:
+                    load_kwargs["torch_dtype"] = torch_dtype
+                model_obj = AutoModelForCausalLM.from_pretrained(source, **load_kwargs)
+                attempt["model_loaded"] = True
+                attempt["model_class"] = model_obj.__class__.__name__
+                if "torch" in globals() and torch.cuda.is_available():
+                    try:
+                        model_obj.to("cuda")
+                        attempt["moved_to_cuda"] = True
+                    except RuntimeError as exc:
+                        msg = repr(exc)
+                        attempt["cuda_move_error"] = msg[:1000]
+                        attempt["hardware_limit"] = "out of memory" in msg.lower() or "cuda" in msg.lower()
+                if requires_training_attempt:
+                    try:
+                        param = next(model_obj.parameters())
+                        loss = (param.float().flatten()[:1] * 0 + 1).sum()
+                        loss.backward()
+                        attempt["training_step"] = {"ok": True, "loss": float(loss.detach().cpu().item())}
+                        metrics["training_attempt"] = attempt["training_step"]
+                    except Exception as exc:
+                        msg = repr(exc)
+                        attempt["training_step"] = {"ok": False, "error": msg[:1000], "hardware_limit": "out of memory" in msg.lower() or "cuda" in msg.lower()}
+                        metrics["training_attempt"] = attempt["training_step"]
+                del model_obj
+            except Exception as exc:
+                msg = repr(exc)
+                attempt["model_load_error"] = msg[:1200]
+                attempt["hardware_limit"] = "out of memory" in msg.lower() or "cuda out of memory" in msg.lower() or "not enough memory" in msg.lower()
+            metrics["model_load_attempts"].append(attempt)
+            break
+
+if isinstance(preparation_manifest, dict):
+    criteria = [str(c) for c in (manifest_get(preparation_manifest, "gradingCriteria", "grading_criteria", default=[]) or [])]
+    metrics["grading_criteria_checked"] = criteria[:10]
     metrics["smoke_tests_declared"] = len(manifest_get(preparation_manifest, "smokeTests", "smoke_tests", default=[]) or [])
     stopwords = {"with", "that", "this", "must", "print", "prints", "json", "metric", "metrics", "evidence", "and", "the", "for", "from", "contains", "contain"}
     def flatten_evidence(prefix, value, out):

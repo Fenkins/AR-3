@@ -1,5 +1,3 @@
-Total output lines: 911
-
 #!/usr/bin/env python3
 import importlib.util
 import json
@@ -467,7 +465,25 @@ def test_manifest_torch_dependencies_are_smoked_and_repaired_before_manifest_smo
         context = gpu_worker.prepare_workbench({"jobId": "gpu_space-manifest-torch_1", "spaceId": "space manifest torch"})
         manifest = {
             "dependencies": ["torch"],
-            …199 tokens truncated… test_required_model_without_smoke_test_does_not_block_research_execution():
+            "smokeTests": [{"name": "torch-smoke", "command": "python -c 'import torch; print(\"TORCH_SMOKE_OK\")'"}],
+        }
+        result = gpu_worker.prepare_manifest_environment(manifest, context)
+        assert result["success"] is True, result
+        assert ensured["called"] is True
+        assert "torch_cuda_smoke initial exit=0" in result["output"]
+    finally:
+        gpu_worker.install_declared_dependencies = old_install
+        gpu_worker.resolve_manifest_models = old_resolve
+        gpu_worker.ensure_torch_cuda_workbench = old_ensure
+        gpu_worker.subprocess.run = old_run
+        if old_root is None:
+            os.environ.pop("AR3_WORKBENCH_ROOT", None)
+        else:
+            os.environ["AR3_WORKBENCH_ROOT"] = old_root
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_required_model_without_smoke_test_does_not_block_research_execution():
     root = tempfile.mkdtemp(prefix="ar3-worker-empty-model-smoke-test-")
     old_root = os.environ.get("AR3_WORKBENCH_ROOT")
     old_resolve = gpu_worker.resolve_manifest_models
