@@ -110,12 +110,15 @@ npx prisma generate
 # ── 8. .env configuration ──────────────────────────────────────────────────────
 echo "[8/14] Writing .env configuration..."
 INTERNAL_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(16))")
+ADMIN_PASSWORD="${ADMIN_PASSWORD:-$(python3 -c "import secrets; print(secrets.token_urlsafe(18))")}"
 HF_TOKEN="${HF_TOKEN:-}"
 cat > "$AR3_FRESH/.env" <<ENVEOF
 DATABASE_URL="file:./prisma/prisma/dev.db"
 NEXTAUTH_URL="http://localhost:3000"
 NEXTAUTH_SECRET="$INTERNAL_SECRET"
 INTERNAL_API_SECRET="$INTERNAL_SECRET"
+ADMIN_EMAIL="${ADMIN_EMAIL:-admin@example.com}"
+ADMIN_PASSWORD="$ADMIN_PASSWORD"
 HF_TOKEN="$HF_TOKEN"
 ENVEOF
 if [ -n "$HF_TOKEN" ]; then
@@ -131,7 +134,7 @@ fi
 echo "[9/14] Setting up database..."
 mkdir -p "$AR3_FRESH/prisma/prisma"
 npx prisma db push --skip-generate 2>/dev/null || true
-npm run seed 2>/dev/null || true
+ADMIN_PASSWORD="$ADMIN_PASSWORD" npm run seed 2>/dev/null || true
 
 # ── 10. Build Next.js ──────────────────────────────────────────────────────────
 echo "[10/14] Building Next.js..."

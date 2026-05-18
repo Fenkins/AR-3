@@ -31,11 +31,23 @@ cd /opt/AR-3
 echo "[4/6] Installing npm packages..."
 npm install --silent
 
+INTERNAL_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(16))")
+ADMIN_PASSWORD="${ADMIN_PASSWORD:-$(python3 -c "import secrets; print(secrets.token_urlsafe(18))")}"
+cat > .env <<ENVEOF
+DATABASE_URL="file:./prisma/prisma/dev.db"
+NEXTAUTH_URL="http://localhost:3000"
+NEXTAUTH_SECRET="$INTERNAL_SECRET"
+INTERNAL_API_SECRET="$INTERNAL_SECRET"
+ADMIN_EMAIL="${ADMIN_EMAIL:-admin@example.com}"
+ADMIN_PASSWORD="$ADMIN_PASSWORD"
+ENVEOF
+
 # Setup database
 echo "[5/6] Setting up database..."
+mkdir -p prisma/prisma
 npx prisma generate
 npx prisma db push
-npm run seed
+ADMIN_PASSWORD="$ADMIN_PASSWORD" npm run seed
 
 # Build
 echo "[6/6] Building application..."
