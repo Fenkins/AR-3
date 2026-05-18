@@ -119,6 +119,23 @@ def test_preparation_probe_then_real_experiment_evidence_passes() -> None:
     )
 
 
+def test_non_preparation_job_cannot_pass_on_model_resolution_smoke_only() -> None:
+    assert_fail(
+        "model resolution smoke only",
+        """
+preparation_manifest=/tmp/ar3-workbenches/space/preparation_manifest.json
+torch_cuda_workbench:
+torch_cuda_smoke initial exit=0
+{"cuda_device": "NVIDIA GeForce RTX 2060 SUPER", "cuda_tensor_sum": 1.0, "torch_cuda_available": true}
+model_resolution:
+model_smoke GSAI-ML/LLaDA-8B-Base skipped: no smoke test command supplied; model resolution evidence accepted
+smoke_test torch_cuda_smoke exit=0
+{"cuda_available": true, "device": "cuda:0", "sum": 1.0}
+""",
+        "only showed preparation/model-resolution smoke evidence",
+    )
+
+
 if __name__ == "__main__":
     test_failed_results_are_not_rewritten()
     test_real_structured_gpu_evidence_passes()
@@ -128,4 +145,5 @@ if __name__ == "__main__":
     test_preparation_probe_with_fake_research_summary_fails()
     test_preparation_probe_with_unknown_non_evidence_json_fails()
     test_preparation_probe_then_real_experiment_evidence_passes()
+    test_non_preparation_job_cannot_pass_on_model_resolution_smoke_only()
     print("gpu evidence gate isolated tests passed")

@@ -102,6 +102,50 @@ def test_injects_missing_defaultdict_import():
     exec(fixed, namespace)
 
 
+def test_injects_json_numpy_scalar_encoder_patch():
+    code = (
+        "import json\n"
+        "import numpy as np\n"
+        "payload = {'ok': np.bool_(True), 'score': np.float32(0.25), 'shape': np.array([1, 2])}\n"
+        "encoded = json.dumps(payload, sort_keys=True)\n"
+    )
+    fixed = gpu_worker.inject_json_numpy_scalar_encoder_patch(code)
+    assert "_ar3_json_default" in fixed
+    import sys
+    import types
+
+    class FakeGeneric:
+        def __init__(self, value):
+            self.value = value
+        def item(self):
+            return self.value
+
+    class FakeArray:
+        def __init__(self, value):
+            self.value = value
+        def tolist(self):
+            return self.value
+
+    fake_numpy = types.SimpleNamespace(
+        generic=FakeGeneric,
+        ndarray=FakeArray,
+        bool_=lambda value: FakeGeneric(bool(value)),
+        float32=lambda value: FakeGeneric(float(value)),
+        array=lambda value: FakeArray(value),
+    )
+    previous_numpy = sys.modules.get('numpy')
+    sys.modules['numpy'] = fake_numpy
+    namespace = {}
+    try:
+        exec(fixed, namespace)
+        assert namespace["encoded"] == '{"ok": true, "score": 0.25, "shape": [1, 2]}'
+    finally:
+        if previous_numpy is None:
+            sys.modules.pop('numpy', None)
+        else:
+            sys.modules['numpy'] = previous_numpy
+
+
 if __name__ == '__main__':
     test_repairs_newline_join_literal()
     test_repairs_newline_concat_literal()
@@ -113,4 +157,5 @@ if __name__ == '__main__':
     test_auto_fix_repairs_malformed_dict_value_format_spec()
     test_repairs_optional_gpu_info_boolean_lookup()
     test_injects_missing_defaultdict_import()
+    test_injects_json_numpy_scalar_encoder_patch()
     print('gpu worker syntax repair tests passed')

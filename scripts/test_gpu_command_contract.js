@@ -19,7 +19,7 @@ function loadTsModule(relativePath) {
   return module.exports
 }
 
-const { assessGpuExecutionEvidence, buildAutonomousPreparationCommand, buildDeterministicGpuExperimentCommand, extractStrictGpuCommand } = loadTsModule('lib/gpu-command-contract.ts')
+const { assessGpuExecutionEvidence, assessGpuStepCompletion, buildAutonomousPreparationCommand, buildDeterministicGpuExperimentCommand, extractStrictGpuCommand, selectGpuSubmissionCommand } = loadTsModule('lib/gpu-command-contract.ts')
 
 function testAutonomousPreparationUsesNvidiaSmiFallback() {
   const command = buildAutonomousPreparationCommand({
@@ -624,4 +624,214 @@ function testDeterministicExperimentUsesManifestDependencyVersions() {
 }
 
 testDeterministicExperimentUsesManifestDependencyVersions()
+
+function testRecommendedExperimentMetricsAreRequiredEvidence() {
+  const result = assessGpuExecutionEvidence({
+    stageName: 'Investigation',
+    success: true,
+    output: JSON.stringify({
+      cuda_available: true,
+      gpu_name: 'RTX 2060 SUPER',
+      runtime_seconds: 1.2,
+    }),
+    preparationManifest: {
+      smokeTests: [{ name: 'gpu', expectedEvidence: ['cuda_available'] }],
+      recommendedExperiment: {
+        metrics: ['latent_vector_norm', 'trajectory_cosine_similarity'],
+      },
+    },
+  })
+
+  assert.strictEqual(result.valid, false)
+  assert.match(result.reason, /expected evidence/)
+  assert.match(result.reason, /latent_vector_norm/)
+}
+
+function testRecommendedExperimentMetricsAcceptConcreteOutput() {
+  const result = assessGpuExecutionEvidence({
+    stageName: 'Investigation',
+    success: true,
+    output: JSON.stringify({
+      cuda_available: true,
+      gpu_name: 'RTX 2060 SUPER',
+      runtime_seconds: 1.2,
+      latent_vector_norm: 3.14,
+      trajectory_cosine_similarity: 0.73,
+    }),
+    preparationManifest: {
+      smokeTests: [{ name: 'gpu', expectedEvidence: ['cuda_available'] }],
+      recommendedExperiment: {
+        metrics: ['latent_vector_norm', 'trajectory_cosine_similarity'],
+      },
+    },
+  })
+
+  assert.strictEqual(result.valid, true, result.reason)
+}
+
+testRecommendedExperimentMetricsAreRequiredEvidence()
+testRecommendedExperimentMetricsAcceptConcreteOutput()
+
+function testInvalidPythonFallsBackToDeterministicExperimentWhenManifestExists() {
+  const badResponse = JSON.stringify({
+    action: 'run_python',
+    dependencies: ['torch'],
+    code: [
+      'import json',
+      'import torch',
+      'metrics = {',
+      '    "cuda_available": torch.cuda.is_available(),',
+      '    "probe_timestamp": __import__("os").times()',
+      '    "gpu_name": "test"',
+      '}',
+      'print(json.dumps(metrics))',
+    ].join('\n'),
+  })
+  const selected = selectGpuSubmissionCommand({
+    stageName: 'Implementation',
+    llmResponse: badResponse,
+    researchGoal: 'verify syntax rejection',
+    stepDescription: 'run executable fallback',
+    preparationManifest: {
+      dependencies: [],
+      models: [],
+      smokeTests: [{ name: 'gpu', expectedEvidence: ['cuda_available'] }],
+      gradingCriteria: ['cuda_available metric is reported'],
+      workbench: { reuseKey: 'syntax-rejection-workbench', expectedArtifacts: ['deterministic_gpu_experiment_metrics.json'] },
+    },
+  })
+
+  assert.strictEqual(selected.ok, true, selected.reason)
+  assert.match(selected.reason, /deterministic GPU experiment/)
+  assert.doesNotMatch(selected.command.code, /probe_timestamp.*os\.times/)
+  const result = childProcess.spawnSync('python3', ['-'], {
+    input: selected.command.code,
+    encoding: 'utf8',
+    env: { ...process.env, AR3_WORKBENCH_ROOT: fs.mkdtempSync(path.join(os.tmpdir(), 'ar3-syntax-fallback-')) },
+  })
+  assert.strictEqual(result.status, 0, result.stderr)
+}
+
+testInvalidPythonFallsBackToDeterministicExperimentWhenManifestExists()
+
+function testModelExperimentStepRequiresModelExecutionEvidence() {
+  const result = assessGpuStepCompletion(
+    [
+      '[GPU Execution Result] job:gpu_live_regression',
+      JSON.stringify({
+        cuda_available: true,
+        gpu_name: 'NVIDIA GeForce RTX 2060 SUPER',
+        artifacts: ['/tmp/ar3-workbench/deterministic_gpu_experiment_metrics.json'],
+        research_metrics: {
+          latent_vector_norm: 8.1,
+          trajectory_cosine_similarity: 0.99,
+        },
+      }),
+    ].join('\n'),
+    {
+      stepName: 'Execute initial experiments with two identical LLaDA-8B-Base models on standard prompts',
+      stepDescription: 'Compare baseline generation quality with and without the gasket mechanism.',
+    },
+  )
+
+  assert.strictEqual(result.valid, false)
+  assert.match(result.reason, /model load.*experiment.*training attempt/i)
+}
+
+function testModelExperimentStepAcceptsHardwareLimitEvidence() {
+  const result = assessGpuStepCompletion(
+    [
+      '[GPU Execution Result] job:gpu_hardware_limit',
+      JSON.stringify({
+        cuda_available: true,
+        gpu_name: 'NVIDIA GeForce RTX 2060 SUPER',
+        model_load_attempts: [
+          {
+            id: 'GSAI-ML/LLaDA-8B-Base',
+            attempted: true,
+            model_loaded: false,
+            hardware_limit: true,
+            model_load_error: 'CUDA out of memory',
+          },
+        ],
+      }),
+    ].join('\n'),
+    {
+      stepName: 'Execute initial experiments with two identical LLaDA-8B-Base models on standard prompts',
+      stepDescription: 'Compare baseline generation quality with and without the gasket mechanism.',
+    },
+  )
+
+  assert.strictEqual(result.valid, true, result.reason)
+}
+
+testModelExperimentStepRequiresModelExecutionEvidence()
+testModelExperimentStepAcceptsHardwareLimitEvidence()
+
+function testModelExperimentCompletionIgnoresSubmittedCodeBlock() {
+  const result = assessGpuStepCompletion(
+    [
+      '[GPU Execution Result] job:gpu_code_block_regression',
+      '[CODE]',
+      JSON.stringify({
+        action: 'run_python',
+        code: 'print({"model_load_attempts": []})',
+      }),
+      '[/CODE]',
+      JSON.stringify({
+        cuda_available: true,
+        gpu_name: 'NVIDIA GeForce RTX 2060 SUPER',
+        model_load_attempts: [
+          {
+            id: 'GSAI-ML/LLaDA-8B-Base',
+            attempted: true,
+            model_loaded: false,
+            hardware_limit: true,
+            model_load_error: 'CUDA out of memory',
+          },
+        ],
+      }),
+    ].join('\n'),
+    {
+      stepName: 'Build a multi-model inference pipeline that runs two copies of LLaDA-8B-Base',
+      stepDescription: 'Attempt model loading and report a clear hardware limit if VRAM is insufficient.',
+    },
+  )
+
+  assert.strictEqual(result.valid, true, result.reason)
+}
+
+testModelExperimentCompletionIgnoresSubmittedCodeBlock()
+
+function testModelDownloadStepAcceptsWorkerModelResolutionLogs() {
+  const result = assessGpuStepCompletion(
+    [
+      '[GPU Execution Result] job:gpu_model_resolution_logs',
+      'preparation_manifest=/tmp/ar3-workbench/preparation_manifest.json',
+      'model_resolution:',
+      'model_resolve GSAI-ML/LLaDA-8B-Base exit=0',
+      'STDOUT:',
+      JSON.stringify({
+        downloaded_files: [
+          'config.json',
+          'model-00001-of-00006.safetensors',
+        ],
+        local_dir: '/opt/AR-3/model_cache/gsai-ml-llada-8b-base',
+        ok: true,
+        sha: '0f2787f2d87eac5eed8a087d5ecd24277e6255b2',
+      }),
+      'smoke_test torch_cuda_smoke exit=0',
+      'STDOUT:',
+      JSON.stringify({ cuda_available: true, device: 'cuda:0', sum: 1 }),
+    ].join('\n'),
+    {
+      stepName: 'Download and organize all 6 model files for LLaDA-8B-Base from the GSAI-ML repos',
+      stepDescription: 'Download and organize all 6 model files for LLaDA-8B-Base from the GSAI-ML repository into a structured directory layout for multi-instance loading.',
+    },
+  )
+
+  assert.strictEqual(result.valid, true, result.reason)
+}
+
+testModelDownloadStepAcceptsWorkerModelResolutionLogs()
 console.log('gpu-command-contract tests passed')

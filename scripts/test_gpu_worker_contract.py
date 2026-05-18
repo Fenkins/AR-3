@@ -4,6 +4,7 @@
 import importlib.util
 import json
 import pathlib
+import sqlite3
 
 ROOT = pathlib.Path(__file__).resolve().parent
 SPEC = importlib.util.spec_from_file_location("gpu_worker", ROOT / "gpu_worker.py")
@@ -97,8 +98,19 @@ def test_bare_torch_dependency_is_pinned_to_cuda_12_4_wheel_index():
     normalized = gpu_worker.normalize_declared_dependencies(['torch', 'transformers'])
     assert 'torch==2.5.1' in normalized['deps']
     assert normalized['deps'].count('torch==2.5.1') == 1
-    assert 'transformers' in normalized['deps']
+    assert 'transformers==4.45.2' in normalized['deps']
+    assert 'tokenizers==0.20.3' in normalized['deps']
     assert 'https://download.pytorch.org/whl/cu124' in normalized['pip_args']
+
+
+def test_weak_transformers_dependency_is_pinned_below_breaking_5_x():
+    normalized = gpu_worker.normalize_declared_dependencies([
+        'transformers',
+        'transformers>=4.36.0',
+        {'name': 'transformers', 'versionSpec': '>=4.40.0'},
+    ])
+    assert normalized['success'] is True
+    assert normalized['deps'] == ['transformers==4.45.2', 'tokenizers==0.20.3']
 
 
 def test_versioned_torch_dependency_is_pinned_instead_of_rejected():
@@ -160,7 +172,7 @@ def test_manifest_dependency_plain_version_becomes_valid_pip_spec():
         {'name': 'accelerate', 'versionSpec': '>=0.33.0'},
     ])
     assert normalized['success'] is True
-    assert normalized['deps'] == ['transformers==4.45.2', 'accelerate>=0.33.0']
+    assert normalized['deps'] == ['transformers==4.45.2', 'tokenizers==0.20.3', 'accelerate>=0.33.0']
 
 
 def test_manifest_dependency_import_name_without_package_becomes_pip_package():
@@ -329,6 +341,105 @@ def test_process_job_persists_disk_pressure_metadata(tmp_path, monkeypatch):
     stored = json.loads(results_file.read_text())['job-disk-pressure']
 
     assert stored['diskPressure'] == {'ok': True, 'freeBytes': 1234}
+
+
+def test_process_job_mirrors_terminal_result_to_prisma_sqlite(tmp_path, monkeypatch):
+    queue_file = tmp_path / 'gpu_jobs.json'
+    results_file = tmp_path / 'gpu_results.json'
+    db_file = tmp_path / 'dev.db'
+    job = {
+        'jobId': 'job-db-sync',
+        'spaceId': 'space-db-sync',
+        'stageName': 'Investigation',
+        'prompt': '{}',
+        'context': '',
+        'status': 'claimed',
+    }
+    queue_file.write_text(json.dumps([job]))
+    results_file.write_text('{}')
+    con = sqlite3.connect(db_file)
+    con.execute(
+        'CREATE TABLE GpuJob ('
+        'id TEXT PRIMARY KEY, jobId TEXT UNIQUE, spaceId TEXT, stageName TEXT, '
+        'prompt TEXT, context TEXT, status TEXT, resultJson TEXT, eventsJson TEXT, '
+        'submittedAt INTEGER, updatedAt INTEGER)'
+    )
+    con.execute(
+        'INSERT INTO GpuJob (id, jobId, spaceId, stageName, prompt, context, status, resultJson, eventsJson, submittedAt, updatedAt) '
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ('row1', 'job-db-sync', 'space-db-sync', 'Investigation', '{}', '', 'running_experiment', None, '[]', 1, 1),
+    )
+    con.commit()
+    con.close()
+
+    monkeypatch.setattr(gpu_worker, 'JOB_QUEUE_FILE', str(queue_file))
+    monkeypatch.setattr(gpu_worker, 'JOB_RESULTS_FILE', str(results_file))
+    monkeypatch.setenv('AR3_PRISMA_DB_PATH', str(db_file))
+    monkeypatch.setattr(gpu_worker, 'execute_gpu_command', lambda _job, timeout=30: {
+        'success': True,
+        'output': 'cuda_available=true',
+        'error': None,
+        'code': 'print("cuda_available=true")',
+        'workbenchDir': '/tmp/ar3-workbenches/space',
+        'artifactsDir': '/tmp/ar3-workbenches/space/artifacts',
+        'dependencies': [],
+        'preparationManifestApplied': False,
+        'diskPressure': {'ok': True},
+    })
+
+    gpu_worker.process_job(job, timeout=30)
+
+    con = sqlite3.connect(db_file)
+    con.row_factory = sqlite3.Row
+    row = con.execute('SELECT status, resultJson, eventsJson FROM GpuJob WHERE jobId = ?', ('job-db-sync',)).fetchone()
+    con.close()
+    result = json.loads(row['resultJson'])
+    events = json.loads(row['eventsJson'])
+
+    assert row['status'] == 'completed'
+    assert result['success'] is True
+    assert result['output'] == 'cuda_available=true'
+    assert events[-1]['toStatus'] == 'completed'
+
+
+def test_prisma_db_path_resolves_file_url_like_prisma_schema_dir(tmp_path, monkeypatch):
+    repo_root = tmp_path / 'repo'
+    prisma_dir = repo_root / 'prisma'
+    prisma_dir.mkdir(parents=True)
+    expected_db = prisma_dir / 'dev.db'
+    con = sqlite3.connect(expected_db)
+    con.execute('CREATE TABLE GpuJob (id TEXT PRIMARY KEY)')
+    con.commit()
+    con.close()
+
+    monkeypatch.chdir(repo_root)
+    monkeypatch.delenv('AR3_PRISMA_DB_PATH', raising=False)
+    monkeypatch.setenv('DATABASE_URL', 'file:./dev.db')
+
+    assert gpu_worker._prisma_db_path() == expected_db
+
+
+def test_prisma_db_path_prefers_existing_repo_relative_prisma_db_with_gpu_job_table(tmp_path, monkeypatch):
+    repo_root = tmp_path / 'repo'
+    app_prisma_dir = repo_root / 'prisma'
+    nested_prisma_dir = app_prisma_dir / 'prisma'
+    nested_prisma_dir.mkdir(parents=True)
+    expected_db = app_prisma_dir / 'dev.db'
+    wrong_db = nested_prisma_dir / 'dev.db'
+    con = sqlite3.connect(expected_db)
+    con.execute('CREATE TABLE GpuJob (id TEXT PRIMARY KEY)')
+    con.commit()
+    con.close()
+    con = sqlite3.connect(wrong_db)
+    con.execute('CREATE TABLE OtherTable (id TEXT PRIMARY KEY)')
+    con.commit()
+    con.close()
+
+    monkeypatch.chdir(repo_root)
+    monkeypatch.delenv('AR3_PRISMA_DB_PATH', raising=False)
+    monkeypatch.delenv('DATABASE_URL', raising=False)
+
+    assert gpu_worker._prisma_db_path() == expected_db
 
 
 def test_self_reported_contract_failure_is_rejected_after_execution(tmp_path, monkeypatch):
