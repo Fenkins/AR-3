@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import importlib.util
+import json
 import os
 import shutil
 import sys
@@ -55,6 +56,35 @@ def test_prepare_workbench_enables_ram_offload_from_job_context():
         assert context["env"]["AR3_RAM_OFFLOAD_DIR"] == context["ram_offload_dir"]
         assert "expandable_segments" in context["env"]["PYTORCH_CUDA_ALLOC_CONF"]
         assert '"cpu": "48GiB"' in context["env"]["AR3_TRANSFORMERS_MAX_MEMORY_JSON"]
+    finally:
+        if old_root is None:
+            os.environ.pop("AR3_WORKBENCH_ROOT", None)
+        else:
+            os.environ["AR3_WORKBENCH_ROOT"] = old_root
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_install_declared_dependencies_reuses_verified_workbench_record():
+    root = tempfile.mkdtemp(prefix="ar3-worker-dep-cache-test-")
+    old_root = os.environ.get("AR3_WORKBENCH_ROOT")
+    os.environ["AR3_WORKBENCH_ROOT"] = root
+    try:
+        context = gpu_worker.prepare_workbench({"jobId": "gpu_space-cache_1", "spaceId": "space cache"})
+        dependency = {"name": "fake-ar3-package", "importName": "ar3_fake_cached_dependency"}
+        Path(context["packages_dir"], "ar3_fake_cached_dependency.py").write_text("VALUE = 1\n")
+        Path(context["workbench_dir"], "installed_dependencies.json").write_text(json.dumps({
+            "success": False,
+            "declared": [dependency],
+            "normalized": ["fake-ar3-package"],
+            "pipArgs": [],
+            "error": "previous reinstall timed out after this dependency was already importable",
+        }))
+
+        result = gpu_worker.install_declared_dependencies([dependency], context, job_id="gpu_space-cache_1")
+
+        assert result["success"] is True
+        assert "cached_dependencies=" in result["output"]
+        assert "verified_imports=ar3_fake_cached_dependency" in result["output"]
     finally:
         if old_root is None:
             os.environ.pop("AR3_WORKBENCH_ROOT", None)
@@ -771,6 +801,7 @@ print('accuracy=1.0')
 if __name__ == "__main__":
     test_prepare_workbench_is_stable_per_space_and_sets_cache_env()
     test_prepare_workbench_enables_ram_offload_from_job_context()
+    test_install_declared_dependencies_reuses_verified_workbench_record()
     test_strategy4_line_assembly_does_not_crash_on_markdown_headers()
     test_extract_preparation_manifest_from_context_and_prompt()
     test_run_manifest_smoke_tests_executes_in_workbench_and_records_manifest_file()
