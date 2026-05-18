@@ -4,8 +4,17 @@ export function shouldUseAutonomousPreparationFallback(stageName: string): boole
   return ['Investigation', 'Planning'].includes(stageName)
 }
 
+const GPU_SPACE_ROUTED_STAGES = new Set([
+  'Investigation',
+  'Proposition',
+  'Planning',
+  'Implementation',
+  'Testing',
+  'Verification',
+])
+
 export function shouldRouteStageThroughGpu(stageName: string, stageGpuEnabled: boolean | undefined, spaceUseGpu: boolean | undefined | null): boolean {
-  return Boolean(spaceUseGpu && (stageGpuEnabled || shouldUseAutonomousPreparationFallback(stageName)))
+  return Boolean(spaceUseGpu && (stageGpuEnabled || GPU_SPACE_ROUTED_STAGES.has(stageName)))
 }
 
 export function shouldShortCircuitPreparationFallback(stageName: string, reason: string): boolean {
