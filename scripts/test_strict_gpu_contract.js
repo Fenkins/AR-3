@@ -941,6 +941,44 @@ function testDeterministicExperimentCriteriaEvidenceAcceptsSatisfiedThreshold() 
   assert.equal(assessed.valid, true, assessed.reason)
 }
 
+function testGpuStepCompletionRejectsGenericMetricsForModelLoadStep() {
+  const assessed = contract.assessGpuStepCompletion(
+    '[GPU Execution Result] job:gpu_test_123\n{"cuda_available":true,"gpu_name":"RTX 2060 SUPER","research_metrics":{"trajectory_cosine_similarity":0.9}}',
+    {
+      stepDescription: 'Instrument the LLaDA-8B-Base model to capture intermediate latent activations for inference.',
+    },
+  )
+  assert.equal(assessed.valid, false)
+  assert.match(assessed.reason, /model load, instrumentation, inference, or training attempt/i)
+}
+
+function testGpuStepCompletionAcceptsModelLoadAttemptEvidence() {
+  const assessed = contract.assessGpuStepCompletion(
+    '[GPU Execution Result] job:gpu_test_123\n{"cuda_available":true,"gpu_name":"RTX 2060 SUPER","model_load_attempts":[{"id":"GSAI-ML/LLaDA-8B-Base","attempted":true,"config_loaded":true,"model_load_error":"CUDA out of memory","hardware_limit":true}]}',
+    {
+      stepDescription: 'Instrument the LLaDA-8B-Base model to capture intermediate latent activations for inference.',
+    },
+  )
+  assert.equal(assessed.valid, true, assessed.reason)
+}
+
+function testDeterministicExperimentFallbackEmitsModelLoadAttemptForModelSteps() {
+  const command = contract.buildDeterministicGpuExperimentCommand({
+    researchGoal: 'Probe multi-stream LLaDA inference.',
+    stepDescription: 'Instrument the LLaDA-8B-Base model to capture intermediate latent activations for inference.',
+    stageName: 'Implementation',
+    reason: 'weak model emitted prose',
+    preparationManifest: {
+      models: [{ id: 'GSAI-ML/LLaDA-8B-Base', source: 'huggingface', required: true }],
+      dependencies: [{ name: 'transformers', importName: 'transformers' }, { name: 'torch', importName: 'torch' }],
+    },
+  })
+  assert.equal(command.action, 'run_python')
+  assert.match(command.code, /model_load_attempts/)
+  assert.match(command.code, /AutoModelForCausalLM\.from_pretrained/)
+  assert.match(command.code, /cache_candidates_for_model/)
+}
+
 function testPreparationStagesShortCircuitWeakModelContractFailures() {
   assert.equal(contract.shouldShortCircuitPreparationFallback('Investigation', 'response did not parse as the required JSON object'), true)
   assert.equal(contract.shouldShortCircuitPreparationFallback('Planning', 'JSON action must be "run_python"'), true)
@@ -1065,4 +1103,7 @@ testGpuStepCompletionRejectsGenericMetricsForModelDownloadStep()
 testGpuStepCompletionAcceptsModelDownloadArtifactEvidence()
 testGpuStepCompletionRejectsGenericMetricsForTrainingStep()
 testGpuStepCompletionAcceptsTrainingHardwareLimitEvidence()
+testGpuStepCompletionRejectsGenericMetricsForModelLoadStep()
+testGpuStepCompletionAcceptsModelLoadAttemptEvidence()
+testDeterministicExperimentFallbackEmitsModelLoadAttemptForModelSteps()
 console.log('strict gpu contract tests passed')
