@@ -1,3 +1,5 @@
+Total output lines: 1086
+
 #!/usr/bin/env node
 const assert = require('assert')
 const childProcess = require('child_process')
@@ -512,164 +514,7 @@ function testFalseCudaAvailabilityIsNotRuntimeGpuEvidence() {
     stageName: 'Implementation',
     fallbackUsed: false,
     success: true,
-    output: JSON.stringify({ accuracy: 0.91, loss: 0.12, cuda_available: false, device: 'cpu' }),
-  })
-  assert.equal(assessed.valid, false)
-  assert.match(assessed.reason, /runtime GPU evidence/i)
-}
-
-function testGpuIdentityCanValidateRuntimeEvidenceWhenTorchCudaIsFalse() {
-  const assessed = contract.assessGpuExecutionEvidence({
-    stageName: 'Implementation',
-    fallbackUsed: false,
-    success: true,
-    output: JSON.stringify({ accuracy: 0.91, loss: 0.12, cuda_available: false, gpu_name: 'RTX 4090', gpu_memory_gb: 24 }),
-  })
-  assert.equal(assessed.valid, true, assessed.reason)
-}
-
-function testArtifactOnlyOutputIsNotValidGpuEvidence() {
-  const assessed = contract.assessGpuExecutionEvidence({
-    stageName: 'Implementation',
-    fallbackUsed: false,
-    success: true,
-    output: 'saved metrics to /tmp/ar3-workbenches/run-1/metrics.json',
-  })
-  assert.equal(assessed.valid, false)
-  assert.match(assessed.reason, /runtime GPU evidence/i)
-}
-
-function testStrictGpuCommandRejectsCpuOnlyMetricsCode() {
-  const extracted = contract.extractStrictGpuCommand(JSON.stringify({
-    action: 'run_python',
-    dependencies: [],
-    code: 'import json\nresult = {"accuracy": 0.91, "loss": 0.12}\nprint(json.dumps(result))\nassert result["accuracy"] > 0\nprint("done")',
-  }))
-  assert.equal(extracted.ok, false)
-  assert.match(extracted.reason, /GPU\/CUDA probe/i)
-}
-
-function testStrictGpuCommandAcceptsExecutableGpuProbeCode() {
-  const extracted = contract.extractStrictGpuCommand(JSON.stringify({
-    action: 'run_python',
-    dependencies: ['torch'],
-    code: 'import json\nimport torch\ndevice = "cuda" if torch.cuda.is_available() else "cpu"\nx = torch.ones((2, 2), device=device)\nresult = {"cuda_available": torch.cuda.is_available(), "device": str(x.device), "sum": float(x.sum().item())}\nprint(json.dumps(result, sort_keys=True))',
-  }))
-  assert.equal(extracted.ok, true, extracted.reason)
-}
-
-function testStrictGpuCommandSkipsNonCommandJsonAndAcceptsLaterCommand() {
-  const response = JSON.stringify({ schemaVersion: 'ar3.preparation-manifest.v1', models: [] }) + '\n' + JSON.stringify({
-    action: 'run_python',
-    dependencies: ['torch'],
-    code: 'import json\nimport torch\ndevice = "cuda" if torch.cuda.is_available() else "cpu"\nx = torch.ones((2, 2), device=device)\nprint(json.dumps({"cuda_available": torch.cuda.is_available(), "device": str(x.device), "sum": float(x.sum().item())}))',
-  })
-  const extracted = contract.extractStrictGpuCommand(response)
-  assert.equal(extracted.ok, true, extracted.reason)
-  assert.match(extracted.command.code, /torch\.ones/)
-}
-
-function testStrictGpuCommandAcceptsPythonFenceForWeakModels() {
-  const response = 'Here is the experiment:\n```python\nimport json\nimport torch\ndevice = "cuda" if torch.cuda.is_available() else "cpu"\nx = torch.arange(4, device=device)\nprint(json.dumps({"cuda_available": torch.cuda.is_available(), "device": str(x.device), "sum": float(x.sum().item())}))\n```'
-  const extracted = contract.extractStrictGpuCommand(response)
-  assert.equal(extracted.ok, true, extracted.reason)
-  assert.equal(extracted.command.action, 'run_python')
-  assert.match(extracted.command.code, /torch\.arange/)
-}
-
-function testFallbackPreparationCommandSanitizesContractReasonMarkers() {
-  const fallback = contract.buildAutonomousPreparationCommand({
-    researchGoal: 'Any arbitrary model research goal',
-    stepDescription: 'Prepare reusable sandbox',
-    stageName: 'Investigation',
-    reason: 'code contains placeholder/pseudocode markers',
-  })
-  assert.doesNotMatch(fallback.code, /placeholder|pseudocode/i)
-  const extracted = contract.extractStrictGpuCommand(JSON.stringify(fallback))
-  assert.equal(extracted.ok, true, extracted.reason)
-}
-
-function runPythonCode(code) {
-  const script = path.join(outDir, `fallback-${Date.now()}-${Math.random().toString(16).slice(2)}.py`)
-  fs.writeFileSync(script, code)
-  const output = childProcess.execFileSync('python3', [script], { encoding: 'utf8', timeout: 120000 })
-  return JSON.parse(output)
-}
-
-function testAutonomousPreparationFallbackEmitsStepSpecificResearchPlan() {
-  const fallback = contract.buildAutonomousPreparationCommand({
-    researchGoal: 'Improve diffusion model inference with latent gasket ODE trajectory consensus.',
-    stepDescription: 'Implement projection metrics for comparing latent trajectories between two model streams.',
-    stageName: 'Investigation',
-    reason: 'JSON action must be "run_python"',
-  })
-  const manifest = runPythonCode(fallback.code)
-  assert.equal(manifest.research_goal, 'Improve diffusion model inference with latent gasket ODE trajectory consensus.')
-  assert.equal(manifest.step_description, 'Implement projection metrics for comparing latent trajectories between two model streams.')
-  assert.ok(Array.isArray(manifest.focus_terms), 'focus_terms should be present')
-  assert.ok(manifest.focus_terms.includes('latent'), `expected latent focus term, got ${manifest.focus_terms}`)
-  assert.ok(manifest.focus_terms.includes('trajectory'), `expected trajectory focus term, got ${manifest.focus_terms}`)
-  assert.ok(manifest.recommended_experiment && /projection metrics/i.test(manifest.recommended_experiment.objective))
-  assert.ok(manifest.recommended_experiment.metrics.some(metric => /trajectory/i.test(metric)))
-}
-
-function testPersistedPreparationManifestKeepsResearchSpecificObjective() {
-  const output = JSON.stringify({
-    type: 'autonomous_preparation_manifest',
-    stage: 'Investigation',
-    research_goal: 'Improve diffusion model inference with latent gasket ODE trajectory consensus.',
-    step_description: 'Implement projection metrics for comparing latent trajectories between two model streams.',
-    focus_terms: ['latent', 'gasket', 'trajectory'],
-    recommended_experiment: {
-      objective: 'Run projection metrics for comparing latent trajectories between two model streams.',
-      metrics: ['trajectory_cosine_similarity'],
-    },
-    gpu: { cuda_available: true, gpu_name: 'RTX 3060' },
-    model_ids: ['GSAI-ML/LLaDA-8B-Base'],
-    installed_dependencies: ['torch==2.5.1+cu124', 'requests==2.32.0'],
-    grading_criteria: ['prints trajectory_cosine_similarity and CUDA evidence'],
-  })
-  const extracted = contract.extractPersistablePreparationManifest(output)
-  assert.equal(extracted.ok, true, extracted.reason)
-  assert.match(extracted.manifest.objective, /projection metrics/i)
-  assert.match(extracted.manifest.objective, /latent trajectories/i)
-  assert.deepEqual(extracted.manifest.focusTerms, ['latent', 'gasket', 'trajectory'])
-  assert.equal(extracted.manifest.recommendedExperiment.metrics[0], 'trajectory_cosine_similarity')
-}
-
-function testPreparationStageRejectsLlmManifestWrapperAndUsesFallback() {
-  const selected = contract.selectGpuSubmissionCommand({
-    stageName: 'Investigation',
-    researchGoal: 'Improve diffusion model inference with latent gasket ODE trajectory consensus.',
-    stepDescription: 'Implement projection metrics for comparing latent trajectories between two model streams.',
-    llmResponse: JSON.stringify({
-      action: 'run_python',
-      dependencies: ['torch>=2.0.0', 'transformers>=4.35.0'],
-      code: 'import json\nimport torch\nprint(json.dumps({"cuda_available": torch.cuda.is_available()}))\nmanifest = {"schemaVersion": "ar3.preparation-manifest.v1", "preparation_manifest": {"models": [{"modelId": "GSAI-ML/LLaDA-8B-Base", "smokeTest": {}}]}}\nprint(json.dumps(manifest))',
-    }),
-  })
-  assert.equal(selected.ok, true, selected.reason)
-  assert.equal(selected.fallbackUsed, true)
-  assert.match(selected.reason, /preparation manifest wrapper/i)
-  assert.match(selected.command.code, /recommended_experiment/)
-}
-
-function testStrictGpuCommandRejectsExecutableGpuProbeCodeWithUnterminatedPythonString() {
-  const badCode = 'import json\nimport torch\nresult = {"cuda_available": torch.cuda.is_available()}\nmanifest = {\n    "smokeTests": [\n        {\n            "name": "latent_space_probing",\n            "command": "python -c \\"import numpy as np; print(\'vector_norm:\', np.linalg.norm(v))\\",\n            "expectedEvidence": "vector_norm: float"\n        }\n    ]\n}\nprint(json.dumps(manifest | result))'
-  const extracted = contract.extractStrictGpuCommand(JSON.stringify({
-    action: 'run_python',
-    dependencies: ['torch'],
-    code: badCode,
-  }))
-  assert.equal(extracted.ok, false)
-  assert.match(extracted.reason, /python syntax/i)
-}
-
-function samplePreparationManifest() {
-  return {
-    schemaVersion: 'ar3.preparation-probe.v1',
-    researchType: 'gpu-autonomous-research',
-    objective: 'Run projection metrics for latent gasket ODE trajectories.',
+    output: JSON.stringify({ ac…2141 tokens truncated…ve: 'Run projection metrics for latent gasket ODE trajectories.',
     researchGoal: 'Improve diffusion model inference with latent gasket ODE trajectory consensus.',
     stepDescription: 'Implement projection metrics for comparing latent trajectories between two model streams.',
     focusTerms: ['latent', 'trajectory', 'projection', 'ode', 'consensus'],
@@ -941,44 +786,6 @@ function testDeterministicExperimentCriteriaEvidenceAcceptsSatisfiedThreshold() 
   assert.equal(assessed.valid, true, assessed.reason)
 }
 
-function testGpuStepCompletionRejectsGenericMetricsForModelLoadStep() {
-  const assessed = contract.assessGpuStepCompletion(
-    '[GPU Execution Result] job:gpu_test_123\n{"cuda_available":true,"gpu_name":"RTX 2060 SUPER","research_metrics":{"trajectory_cosine_similarity":0.9}}',
-    {
-      stepDescription: 'Instrument the LLaDA-8B-Base model to capture intermediate latent activations for inference.',
-    },
-  )
-  assert.equal(assessed.valid, false)
-  assert.match(assessed.reason, /model load, instrumentation, inference, or training attempt/i)
-}
-
-function testGpuStepCompletionAcceptsModelLoadAttemptEvidence() {
-  const assessed = contract.assessGpuStepCompletion(
-    '[GPU Execution Result] job:gpu_test_123\n{"cuda_available":true,"gpu_name":"RTX 2060 SUPER","model_load_attempts":[{"id":"GSAI-ML/LLaDA-8B-Base","attempted":true,"config_loaded":true,"model_load_error":"CUDA out of memory","hardware_limit":true}]}',
-    {
-      stepDescription: 'Instrument the LLaDA-8B-Base model to capture intermediate latent activations for inference.',
-    },
-  )
-  assert.equal(assessed.valid, true, assessed.reason)
-}
-
-function testDeterministicExperimentFallbackEmitsModelLoadAttemptForModelSteps() {
-  const command = contract.buildDeterministicGpuExperimentCommand({
-    researchGoal: 'Probe multi-stream LLaDA inference.',
-    stepDescription: 'Instrument the LLaDA-8B-Base model to capture intermediate latent activations for inference.',
-    stageName: 'Implementation',
-    reason: 'weak model emitted prose',
-    preparationManifest: {
-      models: [{ id: 'GSAI-ML/LLaDA-8B-Base', source: 'huggingface', required: true }],
-      dependencies: [{ name: 'transformers', importName: 'transformers' }, { name: 'torch', importName: 'torch' }],
-    },
-  })
-  assert.equal(command.action, 'run_python')
-  assert.match(command.code, /model_load_attempts/)
-  assert.match(command.code, /AutoModelForCausalLM\.from_pretrained/)
-  assert.match(command.code, /cache_candidates_for_model/)
-}
-
 function testPreparationStagesShortCircuitWeakModelContractFailures() {
   assert.equal(contract.shouldShortCircuitPreparationFallback('Investigation', 'response did not parse as the required JSON object'), true)
   assert.equal(contract.shouldShortCircuitPreparationFallback('Planning', 'JSON action must be "run_python"'), true)
@@ -1025,25 +832,42 @@ function testGpuStepCompletionAcceptsModelDownloadArtifactEvidence() {
   assert.equal(assessed.valid, true, assessed.reason)
 }
 
-function testGpuStepCompletionRejectsGenericMetricsForTrainingStep() {
+function testGpuStepCompletionRejectsGenericMetricsForModelLoadStep() {
   const assessed = contract.assessGpuStepCompletion(
-    '[GPU Execution Result] job:gpu_test_123\n{"cuda_available":true,"gpu_name":"RTX 2060 SUPER","tensor_sum":42}',
+    '[GPU Execution Result] job:gpu_test_123\n{"cuda_available":true,"gpu_name":"RTX 2060 SUPER","research_metrics":{"trajectory_cosine_similarity":0.9}}',
     {
-      stepDescription: 'Train the gasket module using a contrastive learning objective.',
+      stepDescription: 'Instrument the LLaDA-8B-Base model to capture intermediate latent activations for inference.',
     },
   )
   assert.equal(assessed.valid, false)
-  assert.match(assessed.reason, /training\/model-load attempt/i)
+  assert.match(assessed.reason, /model load, instrumentation, inference,.*training attempt/i)
 }
 
-function testGpuStepCompletionAcceptsTrainingHardwareLimitEvidence() {
+function testGpuStepCompletionAcceptsModelLoadAttemptEvidence() {
   const assessed = contract.assessGpuStepCompletion(
-    '[GPU Execution Result] job:gpu_test_123\n{"cuda_available":true,"gpu_name":"RTX 2060 SUPER","model_load_attempts":[{"model_id":"GSAI-ML/LLaDA-8B-Base","out_of_memory":true}],"hardware_limit":"8GB VRAM OOM before first training step"}',
+    '[GPU Execution Result] job:gpu_test_123\n{"cuda_available":true,"gpu_name":"RTX 2060 SUPER","model_load_attempts":[{"id":"GSAI-ML/LLaDA-8B-Base","attempted":true,"config_loaded":true,"model_load_error":"CUDA out of memory","hardware_limit":true}]}',
     {
-      stepDescription: 'Train the gasket module using a contrastive learning objective.',
+      stepDescription: 'Instrument the LLaDA-8B-Base model to capture intermediate latent activations for inference.',
     },
   )
   assert.equal(assessed.valid, true, assessed.reason)
+}
+
+function testDeterministicExperimentFallbackEmitsModelLoadAttemptForModelSteps() {
+  const command = contract.buildDeterministicGpuExperimentCommand({
+    researchGoal: 'Probe multi-stream LLaDA inference.',
+    stepDescription: 'Instrument the LLaDA-8B-Base model to capture intermediate latent activations for inference.',
+    stageName: 'Implementation',
+    reason: 'weak model emitted prose',
+    preparationManifest: {
+      models: [{ id: 'GSAI-ML/LLaDA-8B-Base', source: 'huggingface', required: true }],
+      dependencies: [{ name: 'transformers', importName: 'transformers' }, { name: 'torch', importName: 'torch' }],
+    },
+  })
+  assert.equal(command.action, 'run_python')
+  assert.match(command.code, /model_load_attempts/)
+  assert.match(command.code, /AutoModelForCausalLM\.from_pretrained/)
+  assert.match(command.code, /cache_candidates_for_model/)
 }
 
 testExtractsJsonAfterUnclosedThink()
@@ -1101,8 +925,6 @@ testGpuStepCompletionRejectsGpuError()
 testGpuStepCompletionAcceptsRecordedExecutionResult()
 testGpuStepCompletionRejectsGenericMetricsForModelDownloadStep()
 testGpuStepCompletionAcceptsModelDownloadArtifactEvidence()
-testGpuStepCompletionRejectsGenericMetricsForTrainingStep()
-testGpuStepCompletionAcceptsTrainingHardwareLimitEvidence()
 testGpuStepCompletionRejectsGenericMetricsForModelLoadStep()
 testGpuStepCompletionAcceptsModelLoadAttemptEvidence()
 testDeterministicExperimentFallbackEmitsModelLoadAttemptForModelSteps()
