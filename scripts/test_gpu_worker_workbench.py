@@ -177,6 +177,73 @@ def test_install_declared_dependencies_reuses_verified_workbench_record():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def test_install_declared_dependencies_skips_reinstall_when_imports_already_available_after_dependency_set_changes():
+    root = tempfile.mkdtemp(prefix="ar3-worker-dep-superset-test-")
+    old_root = os.environ.get("AR3_WORKBENCH_ROOT")
+    os.environ["AR3_WORKBENCH_ROOT"] = root
+    try:
+        context = gpu_worker.prepare_workbench({"jobId": "gpu_space-superset_1", "spaceId": "space superset"})
+        Path(context["packages_dir"], "ar3_fake_cached_dependency.py").write_text("VALUE = 1\n")
+        Path(context["packages_dir"], "ar3_fake_new_dependency.py").write_text("VALUE = 2\n")
+        Path(context["workbench_dir"], "installed_dependencies.json").write_text(json.dumps({
+            "success": True,
+            "declared": [{"name": "fake-ar3-package", "importName": "ar3_fake_cached_dependency"}],
+            "normalized": ["fake-ar3-package"],
+            "pipArgs": [],
+            "error": None,
+        }))
+
+        result = gpu_worker.install_declared_dependencies([
+            {"name": "fake-ar3-package", "importName": "ar3_fake_cached_dependency"},
+            {"name": "fake-ar3-new-package", "importName": "ar3_fake_new_dependency"},
+        ], context, job_id="gpu_space-superset_1")
+
+        assert result["success"] is True
+        assert "cached_dependencies=" in result["output"]
+        assert "ar3_fake_cached_dependency" in result["output"]
+        assert "ar3_fake_new_dependency" in result["output"]
+        updated = json.loads(Path(context["workbench_dir"], "installed_dependencies.json").read_text())
+        assert updated["normalized"] == ["fake-ar3-package", "fake-ar3-new-package"]
+    finally:
+        if old_root is None:
+            os.environ.pop("AR3_WORKBENCH_ROOT", None)
+        else:
+            os.environ["AR3_WORKBENCH_ROOT"] = old_root
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_install_declared_dependencies_does_not_reconcile_changed_version_spec_from_import_only():
+    root = tempfile.mkdtemp(prefix="ar3-worker-dep-version-test-")
+    old_root = os.environ.get("AR3_WORKBENCH_ROOT")
+    os.environ["AR3_WORKBENCH_ROOT"] = root
+    try:
+        context = gpu_worker.prepare_workbench({"jobId": "gpu_space-version_1", "spaceId": "space version"})
+        Path(context["packages_dir"], "ar3_fake_versioned_dependency.py").write_text("VALUE = 1\n")
+        Path(context["workbench_dir"], "installed_dependencies.json").write_text(json.dumps({
+            "success": True,
+            "declared": [{"name": "fake-ar3-versioned-package", "importName": "ar3_fake_versioned_dependency"}],
+            "normalized": ["fake-ar3-versioned-package"],
+            "pipArgs": [],
+            "error": None,
+        }))
+
+        result = gpu_worker.install_declared_dependencies([
+            {"name": "fake-ar3-versioned-package==9.9.9", "importName": "ar3_fake_versioned_dependency"},
+        ], context, timeout=2, job_id="gpu_space-version_1")
+
+        assert result["success"] is False
+        assert "No matching distribution" in result.get("error", "") or "Could not find" in result.get("error", "")
+        updated = json.loads(Path(context["workbench_dir"], "installed_dependencies.json").read_text())
+        assert updated["success"] is False
+        assert updated["normalized"] == ["fake-ar3-versioned-package==9.9.9"]
+    finally:
+        if old_root is None:
+            os.environ.pop("AR3_WORKBENCH_ROOT", None)
+        else:
+            os.environ["AR3_WORKBENCH_ROOT"] = old_root
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def test_disk_pressure_snapshot_includes_workbench_root_and_model_cache_sizes():
     root = tempfile.mkdtemp(prefix="ar3-worker-disk-pressure-test-")
     model_cache = tempfile.mkdtemp(prefix="ar3-model-cache-test-")
@@ -930,6 +997,8 @@ if __name__ == "__main__":
     test_prepare_workbench_enables_ram_offload_from_job_context()
     test_ram_offload_wrapper_normalizes_transformers_max_memory_device_keys()
     test_install_declared_dependencies_reuses_verified_workbench_record()
+    test_install_declared_dependencies_skips_reinstall_when_imports_already_available_after_dependency_set_changes()
+    test_install_declared_dependencies_does_not_reconcile_changed_version_spec_from_import_only()
     test_strategy4_line_assembly_does_not_crash_on_markdown_headers()
     test_extract_preparation_manifest_from_context_and_prompt()
     test_run_manifest_smoke_tests_executes_in_workbench_and_records_manifest_file()

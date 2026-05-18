@@ -832,6 +832,99 @@ def _cached_dependency_install_is_valid(record_path: Path, dependencies, normali
     return {'success': True, 'reason': 'cached dependencies verified by import checks', 'imports': availability.get('imports') or []}
 
 
+def _declared_dependency_specs_satisfied(dependencies, context: dict, timeout: int = 45) -> dict:
+    """Verify imports and simple installed distribution versions for declared deps.
+
+    Importability alone is not enough after dependency specs change: a module can
+    import while an explicit ==/>=/<= requirement is not installed. This helper
+    keeps the fast path safe by requiring import availability for every declared
+    dependency and, when a version operator is present, matching installed
+    distribution metadata from the workbench Python path.
+    """
+    availability = _declared_dependency_imports_available(dependencies, context, timeout=timeout)
+    if not availability.get('success'):
+        return availability
+
+    requirements = []
+    for dep in dependencies or []:
+        dep_spec = _dependency_import_alias_to_package(_dependency_to_pip_spec(dep))
+        if not dep_spec:
+            continue
+        match = re_module.match(r'^([A-Za-z0-9_.-]+)(==|!=|~=|>=|<=|>|<)([^,;\[\s]+)', dep_spec)
+        if match:
+            requirements.append({
+                'name': match.group(1),
+                'op': match.group(2),
+                'version': match.group(3),
+            })
+    if not requirements:
+        return availability
+
+    code = r'''
+import importlib.metadata as md
+import json
+import re
+import sys
+from pathlib import Path
+packages_dir = __PACKAGES_DIR__
+if packages_dir:
+    sys.path.insert(0, packages_dir)
+requirements = __REQUIREMENTS__
+
+def parts(v):
+    nums = []
+    for part in re.split(r'[^0-9]+', str(v)):
+        if part != '':
+            nums.append(int(part))
+    return tuple(nums or [0])
+
+def cmp_versions(installed, wanted):
+    a = parts(installed)
+    b = parts(wanted)
+    max_len = max(len(a), len(b))
+    a = a + (0,) * (max_len - len(a))
+    b = b + (0,) * (max_len - len(b))
+    return (a > b) - (a < b)
+
+def ok(installed, op, wanted):
+    c = cmp_versions(installed, wanted)
+    if op == '==': return c == 0
+    if op == '!=': return c != 0
+    if op == '>=': return c >= 0
+    if op == '<=': return c <= 0
+    if op == '>': return c > 0
+    if op == '<': return c < 0
+    if op == '~=': return c >= 0
+    return False
+
+failures = []
+versions = {}
+for req in requirements:
+    name = req['name']
+    try:
+        installed = md.version(name)
+    except Exception as exc:
+        failures.append({'name': name, 'reason': 'metadata_missing', 'error': repr(exc)})
+        continue
+    versions[name] = installed
+    if not ok(installed, req['op'], req['version']):
+        failures.append({'name': name, 'reason': 'version_mismatch', 'installed': installed, 'required': req['op'] + req['version']})
+print(json.dumps({'ok': not failures, 'failures': failures, 'versions': versions}, sort_keys=True))
+raise SystemExit(0 if not failures else 2)
+'''.replace('__PACKAGES_DIR__', repr(str(context.get('packages_dir') or ''))).replace('__REQUIREMENTS__', repr(requirements))
+    try:
+        result = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, timeout=timeout, env=context.get('env'))
+    except subprocess.TimeoutExpired:
+        return {'success': False, 'reason': 'dependency version check timed out', 'imports': availability.get('imports') or []}
+    if result.returncode != 0:
+        return {
+            'success': False,
+            'reason': 'dependency version requirements not satisfied: ' + (result.stdout.strip() or result.stderr.strip()),
+            'imports': availability.get('imports') or [],
+        }
+    return availability
+
+
 def missing_module_install_command(module_name: str, context: dict) -> dict:
     """Build a safe workbench-local pip install command for ModuleNotFoundError repair."""
     module_name = str(module_name or '').strip()
@@ -1064,6 +1157,20 @@ def install_declared_dependencies(dependencies, context: dict, timeout: int = 90
             return {
                 'success': True,
                 'output': f'cached_dependencies={record_path}\nverified_imports={imports}',
+                'error': None,
+            }
+        # If the exact dependency set changed but every declared import already
+        # resolves from the workbench/global environment, avoid another expensive
+        # --target --upgrade pip pass. Reinstalling torch-family wheels into the
+        # same target on every autonomous step can monopolize the worker for
+        # minutes while producing no new capability.
+        availability = _declared_dependency_specs_satisfied(dependencies or [], context)
+        if availability.get('success'):
+            write_dependency_record(True)
+            imports = ','.join(availability.get('imports') or [])
+            return {
+                'success': True,
+                'output': f'cached_dependencies={record_path}\nverified_imports={imports}\ncache_reconciled=imports_already_available',
                 'error': None,
             }
 
