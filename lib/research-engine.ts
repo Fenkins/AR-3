@@ -129,6 +129,13 @@ export function runningStepHasTerminalGpuResult(step: { status?: string | null; 
   return /\[GPU Execution (?:Result|Error)\]/.test(result) && /\[CODE\]/.test(result) && /\[OUTPUT\]/.test(result)
 }
 
+
+export function runningStepHasTerminalGpuDiagnostic(step: { status?: string | null; result?: string | null }): boolean {
+  if (step.status !== 'RUNNING') return false
+  const result = String(step.result || '')
+  return /^\[(?:GPU COMPLETION INVALID|GPU EVIDENCE INVALID|GPU CONTRACT FAILED|FAKE EXPERIMENT DETECTED|VERIFICATION FAILED|GPU Error)\]/.test(result)
+}
+
 export function runningStepIsStaleWithoutGpuJob(
   step: { status?: string | null; updatedAt?: Date | string | null; description?: string | null; name?: string | null },
   jobs: Array<{ prompt?: string | null; submittedAt?: Date | string | null; status?: string | null }>,
@@ -176,6 +183,27 @@ async function reconcileCompletedGpuJobsForRunningSteps(spaceId: string): Promis
   for (const variant of runningVariants) {
     const runningSteps = variant.VariantStep.filter(step => step.status === 'RUNNING')
     for (const step of runningSteps) {
+      const persistedTerminalDiagnostic = runningStepHasTerminalGpuDiagnostic(step) ? String(step.result || '').trim() : ''
+      if (persistedTerminalDiagnostic) {
+        const reasonLine = persistedTerminalDiagnostic.split('\n', 1)[0].replace(/^\[|\]$/g, '')
+        await prisma.variantStep.update({
+          where: { id: step.id },
+          data: { status: 'FAILED', result: persistedTerminalDiagnostic, grade: 0 },
+        })
+        await prisma.variant.update({
+          where: { id: variant.id },
+          data: {
+            status: 'FAILED',
+            failureMode: 'GPU_COMPLETION_INVALID',
+            lastFailureReason: reasonLine,
+            feedback: `Step failure: ${reasonLine}`,
+          },
+        })
+        debugLog(`[reconcileCompletedGpuJobsForRunningSteps] Reconciled already-persisted terminal GPU diagnostic into failed step ${step.id}: ${reasonLine}`)
+        reconciled++
+        continue
+      }
+
       const persistedTerminalResult = runningStepHasTerminalGpuResult(step) ? String(step.result || '').trim() : ''
       if (persistedTerminalResult) {
         const completion = assessGpuStepCompletion(persistedTerminalResult, { stepName: step.name, stepDescription: step.description })

@@ -34,6 +34,7 @@ const {
   runningVariantIsStaleWithoutActiveStep,
   runningStepIsStaleWithoutGpuJob,
   runningStepHasTerminalGpuResult,
+  runningStepHasTerminalGpuDiagnostic,
 } = m.exports
 
 const job = {
@@ -66,6 +67,19 @@ assert.equal(
 )
 assert.equal(
   runningStepHasTerminalGpuResult({ status: 'RUNNING', result: '[GPU CONTRACT FAILED]: prose rejected' }),
+  false,
+)
+
+assert.equal(
+  runningStepHasTerminalGpuDiagnostic({
+    status: 'RUNNING',
+    result: '[GPU COMPLETION INVALID]: missing required runtime evidence\n\nOriginal output:\n[GPU Execution Result] job:gpu_bad\n[CODE]\nprint(1)\n[/CODE]\n[OUTPUT]\n{"cuda_available":true}',
+  }),
+  true,
+  'stale RUNNING steps with terminal GPU failure diagnostics must be failed rather than left running',
+)
+assert.equal(
+  runningStepHasTerminalGpuDiagnostic({ status: 'RUNNING', result: '[GPU Execution Result] job:gpu_ok\n[CODE]\nprint(1)\n[/CODE]\n[OUTPUT]\n{"cuda_available":true}' }),
   false,
 )
 
