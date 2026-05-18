@@ -92,6 +92,36 @@ export async function addToCache(options: AddCacheOptions): Promise<CacheEntry> 
   let fileSize = 0
   let checksum: string | null = null
 
+  const existing = await prisma.modelCache.findFirst({
+    where: {
+      spaceId,
+      fileName,
+      downloadUrl: downloadUrl || null,
+      status: 'COMPLETED',
+    },
+    orderBy: { createdAt: 'desc' },
+  })
+  if (existing && fs.existsSync(existing.filePath) && (downloadUrl || (expectedChecksum && existing.checksum === expectedChecksum))) {
+    const actualSize = getPathSizeBytes(existing.filePath)
+    const descriptionWithActualSize = actualSize > PRISMA_INT_MAX
+      ? `${description || existing.description || ''}${description || existing.description ? '; ' : ''}actual_size_bytes=${actualSize}; fileSize capped at Prisma Int max when artifact exceeds 2GiB`
+      : (description || existing.description || null)
+    const refreshed = await prisma.modelCache.update({
+      where: { id: existing.id },
+      data: {
+        filePath: existing.filePath,
+        fileSize: Math.min(actualSize || Number(existing.fileSize || 0), PRISMA_INT_MAX),
+        description: descriptionWithActualSize,
+        status: 'COMPLETED',
+      },
+    })
+    return {
+      ...refreshed,
+      fileSize: actualSize || Number(refreshed.fileSize),
+      status: 'COMPLETED' as const,
+    }
+  }
+
   // Create the DB row before any network work so callers can poll DOWNLOADING/FAILED/COMPLETED.
   const entry = await prisma.modelCache.create({
     data: {
@@ -155,9 +185,13 @@ export async function addToCache(options: AddCacheOptions): Promise<CacheEntry> 
       }
     }
 
+    const descriptionWithActualSize = fileSize > PRISMA_INT_MAX
+      ? `${description || ''}${description ? '; ' : ''}actual_size_bytes=${fileSize}; fileSize capped at Prisma Int max when artifact exceeds 2GiB`
+      : (description || null)
+
     await prisma.modelCache.update({
       where: { id: entry.id },
-      data: { filePath, fileSize: Math.min(fileSize, PRISMA_INT_MAX), checksum, status: 'COMPLETED' },
+      data: { filePath, fileSize: Math.min(fileSize, PRISMA_INT_MAX), checksum, description: descriptionWithActualSize, status: 'COMPLETED' },
     })
 
     return {

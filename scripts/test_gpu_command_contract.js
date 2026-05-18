@@ -840,6 +840,42 @@ function testModelExperimentStepAcceptsHardwareLimitEvidence() {
 testModelExperimentStepRequiresModelExecutionEvidence()
 testModelExperimentStepAcceptsHardwareLimitEvidence()
 
+function testModelExperimentCompletionPrefersFinalDeterministicJsonAfterSetupPreamble() {
+  const result = assessGpuStepCompletion(
+    [
+      '[GPU Execution Result] job:gpu_preamble_final_json',
+      'preparation_manifest=/tmp/ar3-workbench/preparation_manifest.json',
+      'torch_cuda_workbench:',
+      JSON.stringify({ cuda_available: true, torch_cuda_available: true, cuda_tensor_sum: 1.0 }),
+      'model_resolution:',
+      JSON.stringify({ ok: true, downloaded_files: ['config.json'], local_dir: '/opt/AR-3/model_cache/llada' }),
+      JSON.stringify({
+        type: 'deterministic_gpu_experiment',
+        cuda_available: true,
+        gpu_name: 'NVIDIA GeForce GTX 1080 Ti',
+        model_load_attempts: [
+          {
+            id: 'GSAI-ML/LLaDA-8B-Base',
+            attempted: true,
+            model_loaded: false,
+            hardware_limit: true,
+            model_load_error: 'CUDA out of memory',
+          },
+        ],
+        research_metrics: { latent_vector_norm: 1.5 },
+      }),
+    ].join('\n'),
+    {
+      stepName: 'Implement the multi-model inference pipeline that runs two or more LLaDA-8B-Base models',
+      stepDescription: 'Attempt model loading and report clear load or hardware evidence.',
+    },
+  )
+
+  assert.strictEqual(result.valid, true, result.reason)
+}
+
+testModelExperimentCompletionPrefersFinalDeterministicJsonAfterSetupPreamble()
+
 function testModelExperimentCompletionIgnoresSubmittedCodeBlock() {
   const result = assessGpuStepCompletion(
     [

@@ -137,7 +137,7 @@ export function assessGpuStepCompletion(content: string, input: GpuStepCompletio
     const hasTrainingEvidence = Boolean(parsedOutput && typeof parsedOutput === 'object' && !Array.isArray(parsedOutput) && (
       outputHasConcreteKey(parsedOutput, /(^|[.[_])(train_loss|training_loss|loss|epoch|epochs|training_steps|optimizer_steps|gradient_norm|checkpoint_path|checkpoint_dir|model_load_attempts|oom|out_of_memory|vram_error|cuda_oom|hardware_limit)(\]|\.|_|$)/i) ||
       outputHasConcreteArtifactValue(parsedOutput, /\.(pt|pth|safetensors|ckpt|json|csv|log)$/i)
-    ))
+    )) || outputContainsConcreteJsonKey(evidenceOutput, /(^|[.[_])(train_loss|training_loss|loss|epoch|epochs|training_steps|optimizer_steps|gradient_norm|checkpoint_path|checkpoint_dir|model_load_attempts|oom|out_of_memory|vram_error|cuda_oom|hardware_limit)(\]|\.|_|$)/i)
     if (!hasTrainingEvidence) {
       return {
         valid: false,
@@ -152,7 +152,7 @@ export function assessGpuStepCompletion(content: string, input: GpuStepCompletio
     const hasModelLoadOrTrainingEvidence = Boolean(parsedOutput && typeof parsedOutput === 'object' && !Array.isArray(parsedOutput) && (
       outputHasConcreteKey(parsedOutput, /(^|[.[_])(model_load_attempts|model_load|model_loaded|load_error|oom|out_of_memory|hardware_limit|training_attempt|training_step|loss|checkpoint_path|activation_shape|forward_pass)(\]|\.|_|$)/i) ||
       outputHasConcreteArtifactValue(parsedOutput, /\.(safetensors|bin|pt|pth|ckpt|index\.json)$/i)
-    ))
+    )) || outputContainsConcreteJsonKey(evidenceOutput, /(^|[.[_])(model_load_attempts|model_load|model_loaded|load_error|oom|out_of_memory|hardware_limit|training_attempt|training_step|loss|checkpoint_path|activation_shape|forward_pass)(\]|\.|_|$)/i)
     if (!hasModelLoadOrTrainingEvidence) {
       return {
         valid: false,
@@ -173,6 +173,17 @@ function outputHasConcreteKey(value: unknown, keyPattern: RegExp): boolean {
   for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
     if (keyPattern.test(key) && hasConcreteOutputValue(nested)) return true
     if (outputHasConcreteKey(nested, keyPattern)) return true
+  }
+  return false
+}
+
+
+function outputContainsConcreteJsonKey(output: string, keyPattern: RegExp): boolean {
+  for (const candidate of jsonObjectCandidates(String(output || ''))) {
+    try {
+      const parsed = JSON.parse(candidate)
+      if (outputHasConcreteKey(parsed, keyPattern)) return true
+    } catch {}
   }
   return false
 }
@@ -271,6 +282,13 @@ function parseGpuEvidenceJson(output: string): any {
   } catch {}
 
   const candidates: any[] = []
+  for (const line of trimmed.split(/\r?\n/)) {
+    const row = line.trim()
+    if (!row.startsWith('{') || !row.endsWith('}')) continue
+    try {
+      candidates.push(JSON.parse(row))
+    } catch {}
+  }
   for (let start = 0; start < trimmed.length; start++) {
     if (trimmed[start] !== '{') continue
     let depth = 0
@@ -308,8 +326,11 @@ function parseGpuEvidenceJson(output: string): any {
       }
       for (const [rawKey, rawValue] of Object.entries(node as Record<string, unknown>)) {
         const key = rawKey.toLowerCase()
+        if (key === 'type' && String(rawValue) === 'deterministic_gpu_experiment') score += 1000
+        if (key === 'type' && String(rawValue) === 'autonomous_preparation_manifest') score += 500
+        if (/^(model_load_attempts|training_attempt|training_step|research_metrics|grading_criteria_checked|grading_criteria_evidence)$/.test(key)) score += 80
         if (/^(type|gpu|model_ids|huggingface|installed_dependencies|workbench|contract_failure_reason)$/.test(key)) score += 6
-        if (/metric|score|loss|accuracy|acc|f1|precision|recall|latency|throughput|seconds|runtime|cuda|gpu|memory|vram|artifact|path|file|stdout|stderr|result|measurement/i.test(key)) score += 3
+        if (/metric|score|loss|accuracy|acc|f1|precision|recall|latency|throughput|seconds|runtime|cuda|gpu|memory|vram|artifact|path|file|stdout|stderr|result|measurement|model_load|training|checkpoint|activation/i.test(key)) score += 3
         if (typeof rawValue === 'number' && Number.isFinite(rawValue)) score += 2
         if (typeof rawValue === 'boolean') score += 1
         if (typeof rawValue === 'string' && rawValue.trim()) score += 1
@@ -319,6 +340,16 @@ function parseGpuEvidenceJson(output: string): any {
     visit(value, 0)
     return score
   }
+
+  const preferredExperiment = candidates
+    .filter(obj => obj && typeof obj === 'object' && !Array.isArray(obj) && obj.type === 'deterministic_gpu_experiment')
+    .pop()
+  if (preferredExperiment) return preferredExperiment
+
+  const preferredPreparation = candidates
+    .filter(obj => obj && typeof obj === 'object' && !Array.isArray(obj) && obj.type === 'autonomous_preparation_manifest')
+    .pop()
+  if (preferredPreparation) return preferredPreparation
 
   return candidates
     .map((obj, index) => ({ obj, index, score: scoreEvidenceCandidate(obj) }))

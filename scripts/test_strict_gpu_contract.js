@@ -90,7 +90,7 @@ function testPreparationStagesRouteThroughGpuWhenSpaceGpuEnabled() {
   assert.equal(contract.shouldRouteStageThroughGpu('Investigation', false, true), true)
   assert.equal(contract.shouldRouteStageThroughGpu('Implementation', true, true), true)
   assert.equal(contract.shouldRouteStageThroughGpu('Planning', false, false), false)
-  assert.equal(contract.shouldRouteStageThroughGpu('Proposition', false, true), false)
+  assert.equal(contract.shouldRouteStageThroughGpu('Proposition', false, true), true)
 }
 
 function testFallbackUsesWorkerProvidedWorkbenchDirectory() {
