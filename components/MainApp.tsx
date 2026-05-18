@@ -6,6 +6,7 @@ import StageWorkflow from './StageWorkflow'
 import ServiceProviders from './ServiceProviders'
 import Agents from './AgentsView'
 import EmbeddingsView from './EmbeddingsView'
+import { previewStepResult } from '@/lib/gpu-step-display'
 
 export default function Home() {
   const { isAuthenticated, isAdmin } = useAuth()
@@ -1008,7 +1009,7 @@ function SpaceDetailModalNew({ space, onClose, onUpdate }: { space: any; onClose
                                               <div className="text-xs text-dark-500 mt-1">{step.feedback}</div>
                                             )}
                                             {step.result && (
-                                              <div className="text-xs text-dark-500 mt-1 font-mono max-h-16 overflow-y-auto">{step.result.slice(0, 200)}</div>
+                                              <div className="text-xs text-dark-500 mt-1 font-mono max-h-16 overflow-y-auto">{previewStepResult(step.result, 200)}</div>
                                             )}
                                           </div>
                                         ))}

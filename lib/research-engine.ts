@@ -80,6 +80,21 @@ export function formatCompletedGpuJobStepResult(job: { jobId: string; prompt?: s
 
 }
 
+export function mergeGpuStepResultForPersistence(existingContent: string, gpuResult: string): string {
+  const gpuText = String(gpuResult || '').trim()
+  if (!gpuText) return String(existingContent || '')
+  const markerIndex = gpuText.search(/\[GPU (?:Execution )?(?:Result|Error)\]/)
+  const normalizedGpuText = markerIndex >= 0 ? gpuText.slice(markerIndex).trim() : gpuText
+  const existing = String(existingContent || '').trim()
+  const diagnosticIndex = existing.search(/\[(?:GPU EVIDENCE INVALID|GPU COMPLETION INVALID|VERIFICATION FAILED|FAKE EXPERIMENT DETECTED|GPU CONTRACT FAILED)\]/)
+  if (diagnosticIndex >= 0) {
+    const diagnostic = existing.slice(diagnosticIndex).trim()
+    return `${diagnostic}\n\n${normalizedGpuText}`
+  }
+  if (markerIndex >= 0) return normalizedGpuText
+  return existing ? `${existing}\n\n${normalizedGpuText}` : normalizedGpuText
+}
+
 export function gpuJobMatchesRunningStep(
   step: { description?: string | null; name?: string | null; updatedAt?: Date | string | null },
   job: { prompt?: string | null; submittedAt?: Date | string | null },
@@ -878,7 +893,7 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
                   response.content += `\n\n[GPU EVIDENCE INVALID]: ${evidence.reason}`
                   debugLog(`[executeResearchCycle] GPU evidence gate failed: ${evidence.reason}`)
                 }
-                response.content += '\n\n' + gpuResultText
+                response.content = mergeGpuStepResultForPersistence(response.content, gpuResultText)
                 debugLog(`[executeResearchCycle] GPU job completed: ${gpuResultText.substring(0, 100)}`)
                 break
               } else if (statusData.status === 'failed' || statusData.status === 'failed_runtime' || statusData.status === 'failed_validation') {
@@ -1404,7 +1419,7 @@ ${useGpu && shouldUseAutonomousPreparationFallback(stageName) ? `## Preparation 
                 break
               }
             }
-            response.content += '\n\n' + gpuResult
+            response.content = mergeGpuStepResultForPersistence(response.content, gpuResult)
             if (gpuEvidenceInvalidReason) {
               debugLog(`[executeVariant] GPU evidence gate failed for "${variant.name}": ${gpuEvidenceInvalidReason}`)
               step.status = 'FAILED'

@@ -29,6 +29,7 @@ m._compile(compiled, sourcePath)
 const {
   assessGpuStepCompletion,
   formatCompletedGpuJobStepResult,
+  mergeGpuStepResultForPersistence,
   gpuJobMatchesRunningStep,
   runningVariantIsStaleWithoutActiveStep,
   runningStepIsStaleWithoutGpuJob,
@@ -53,6 +54,22 @@ assert.match(resultText, /\[OUTPUT\]\n\{"cuda_available":true/)
 assert.ok(!resultText.startsWith('{"action":"run_python"'), 'step result should not start with raw run_python command JSON')
 assert.ok(resultText.indexOf('[GPU Execution Result]') < resultText.indexOf('[CODE]'), 'status marker should come before code so UI cards show useful status')
 assert.equal(assessGpuStepCompletion(resultText).valid, true)
+
+const rawCommandPreamble = '{"action":"run_python","dependencies":["torch"],"code":"print(1)"}'
+const persistedLiveResult = mergeGpuStepResultForPersistence(
+  rawCommandPreamble,
+  '[GPU Execution Result] job:gpu_live\n[CODE]\nprint(1)\n[/CODE]\n[OUTPUT]\n{"cuda_available":true}',
+)
+assert.ok(persistedLiveResult.startsWith('[GPU Execution Result] job:gpu_live'), 'live GPU step persistence should start with the execution marker')
+assert.ok(!persistedLiveResult.includes('{"action":"run_python"'), 'live GPU step persistence must not retain raw run_python command JSON')
+
+const invalidEvidenceResult = mergeGpuStepResultForPersistence(
+  `${rawCommandPreamble}\n\n[GPU EVIDENCE INVALID]: missing concrete metric`,
+  '[GPU Execution Result] job:gpu_bad\n[OUTPUT]\n{"cuda_available":true}',
+)
+assert.ok(invalidEvidenceResult.startsWith('[GPU EVIDENCE INVALID]: missing concrete metric'), 'invalid evidence diagnostics must be preserved')
+assert.ok(invalidEvidenceResult.includes('[GPU Execution Result] job:gpu_bad'), 'GPU execution evidence should remain attached after diagnostics')
+assert.ok(!invalidEvidenceResult.includes('{"action":"run_python"'), 'diagnostic persistence must still strip raw run_python command JSON')
 
 const failedRuntimeJob = {
   jobId: 'gpu_space_failed_runtime',
