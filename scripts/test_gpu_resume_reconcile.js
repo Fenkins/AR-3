@@ -251,5 +251,6 @@ assert.match(fullSource, /recoverStaleRunningVariantsWithoutActiveSteps\(spaceId
 assert.match(fullSource, /\[resumeSpace\] Recovered .*stale RUNNING variant/)
 assert.match(fullSource, /\[startBackgroundLoop\] Reconciled/)
 assert.match(fullSource, /\[startBackgroundLoop\] Recovered/)
+assert.match(fullSource, /updateVariantStepDb\(step\.id, \{ status: 'RUNNING', result: null, grade: null \}\)/, 'running steps clear stale terminal diagnostics before retrying GPU work')
 
 console.log('gpu resume reconciliation tests passed')

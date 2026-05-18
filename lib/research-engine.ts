@@ -1182,7 +1182,7 @@ async function executeVariant(variant: Variant, spaceId: string, stageName: stri
   for (const step of variant.steps) {
     if (step.status === 'COMPLETED') continue
     step.status = 'RUNNING'
-    await updateVariantStepDb(step.id, { status: 'RUNNING' })
+    await updateVariantStepDb(step.id, { status: 'RUNNING', result: null, grade: null })
 
     const variantDefaultPrompt = `You are executing variant "${variant.name}" of stage "${stageName}". Produce concrete results -- no <thought> tags. Focus on actual output, findings, and deliverables.`
     const basePrompt = agent?.gpuPromptVariant && useGpu
