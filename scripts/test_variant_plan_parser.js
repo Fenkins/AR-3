@@ -65,4 +65,10 @@ STEPS
   assert.equal(parsed.validSteps[1], 'Write metrics to AR3_ARTIFACTS_DIR.')
 }
 
+{
+  const fallbackSource = fs.readFileSync(sourcePath, 'utf8')
+  assert.ok(fallbackSource.includes("stageConfig.name === 'Investigation') return `${action} for ${term}: run a GPU-backed probe"), 'Investigation fallback steps must ask for executable GPU-backed probes')
+  assert.ok(!fallbackSource.includes("stageConfig.name === 'Investigation') return `${action} for ${term}: synthesize prior evidence"), 'Investigation fallback must not advance on prose-only synthesis')
+}
+
 console.log('variant plan parser tests passed')

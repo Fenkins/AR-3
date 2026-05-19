@@ -90,6 +90,7 @@ function testGpuEnabledSpaceRoutesAllResearchStagesThroughGpu() {
   assert.equal(contract.shouldRouteStageThroughGpu('Investigation', false, true), true)
   assert.equal(contract.shouldRouteStageThroughGpu('Investigation', true, true), true)
   assert.equal(contract.shouldRouteStageThroughGpu('Proposition', false, true), true)
+  assert.equal(contract.shouldRouteStageThroughGpu('Implementation', false, true), true)
   assert.equal(contract.shouldRouteStageThroughGpu('Implementation', true, true), true)
   assert.equal(contract.shouldRouteStageThroughGpu('Testing', true, true), true)
   assert.equal(contract.shouldRouteStageThroughGpu('Verification', false, true), true)
@@ -650,7 +651,7 @@ function testPersistedPreparationManifestKeepsResearchSpecificObjective() {
   assert.equal(extracted.manifest.recommendedExperiment.metrics[0], 'trajectory_cosine_similarity')
 }
 
-function testPreparationStageRejectsLlmManifestWrapperAndUsesFallback() {
+function testInvestigationNonPreparationStepRejectsLlmManifestWrapperAndUsesDeterministicExperiment() {
   const selected = contract.selectGpuSubmissionCommand({
     stageName: 'Investigation',
     researchGoal: 'Improve diffusion model inference with latent gasket ODE trajectory consensus.',
@@ -662,9 +663,37 @@ function testPreparationStageRejectsLlmManifestWrapperAndUsesFallback() {
     }),
   })
   assert.equal(selected.ok, true, selected.reason)
+  assert.equal(selected.fallbackUsed, false)
+  assert.match(selected.reason, /non-preparation research step/i)
+  assert.match(selected.command.code, /deterministic_gpu_experiment/)
+  assert.doesNotMatch(selected.command.code, /autonomous_preparation_manifest/)
+}
+
+function testExplicitPreparationStepStillUsesAutonomousPreparationFallback() {
+  const selected = contract.selectGpuSubmissionCommand({
+    stageName: 'Investigation',
+    researchGoal: 'Improve diffusion model inference with latent gasket ODE trajectory consensus.',
+    stepDescription: 'Prepare and cache LLaDA model weights and verify checksums before experiments.',
+    llmResponse: 'I would prepare the environment and report back.',
+  })
+  assert.equal(selected.ok, true, selected.reason)
   assert.equal(selected.fallbackUsed, true)
-  assert.match(selected.reason, /preparation manifest wrapper/i)
-  assert.match(selected.command.code, /recommended_experiment/)
+  assert.match(selected.reason, /preparation fallback/i)
+  assert.match(selected.command.code, /autonomous_preparation_manifest/)
+}
+
+
+function testInvestigationVerifyHypothesisIsNotMisclassifiedAsPreparation() {
+  const selected = contract.selectGpuSubmissionCommand({
+    stageName: 'Investigation',
+    researchGoal: 'Improve diffusion model inference with latent gasket ODE trajectory consensus.',
+    stepDescription: 'Verify the latent trajectory hypothesis by running a GPU-backed probe with JSON metrics.',
+    llmResponse: 'I would verify the hypothesis in prose.',
+  })
+  assert.equal(selected.ok, true, selected.reason)
+  assert.equal(selected.fallbackUsed, false)
+  assert.match(selected.command.code, /deterministic_gpu_experiment/)
+  assert.doesNotMatch(selected.command.code, /autonomous_preparation_manifest/)
 }
 
 function testStrictGpuCommandRejectsExecutableGpuProbeCodeWithUnterminatedPythonString() {
@@ -1161,7 +1190,9 @@ testStrictGpuCommandRejectsPassPlaceholderCode()
 testFallbackPreparationCommandSanitizesContractReasonMarkers()
 testAutonomousPreparationFallbackEmitsStepSpecificResearchPlan()
 testPersistedPreparationManifestKeepsResearchSpecificObjective()
-testPreparationStageRejectsLlmManifestWrapperAndUsesFallback()
+testInvestigationNonPreparationStepRejectsLlmManifestWrapperAndUsesDeterministicExperiment()
+testExplicitPreparationStepStillUsesAutonomousPreparationFallback()
+testInvestigationVerifyHypothesisIsNotMisclassifiedAsPreparation()
 testStrictGpuCommandRejectsExecutableGpuProbeCodeWithUnterminatedPythonString()
 testPreparationStageWithExistingManifestPromotesWeakOutputToDeterministicExperiment()
 testPreparationStageWithExistingManifestPromotesWrapperToDeterministicExperiment()

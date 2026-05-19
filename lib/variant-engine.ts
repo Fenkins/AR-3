@@ -580,7 +580,7 @@ CRITICAL: You MUST generate AT LEAST ${numStepsTarget} steps. Replace ALL step p
       const templates = Array.from({ length: Math.max(5, numStepsTarget) }, (_, idx) => {
         const term = focusTerms[idx % Math.max(1, focusTerms.length)] || 'target behavior'
         const action = actionTemplates[idx % actionTemplates.length]
-        if (stageConfig.name === 'Investigation') return `${action} for ${term}: run a GPU-backed probe, print JSON metrics, and record the observation`
+        if (stageConfig.name === 'Investigation') return `${action} for ${term}: run a GPU-backed probe, print JSON metrics, and record executable evidence`
         if (stageConfig.name === 'Planning') return `${action} for ${term}: produce implementation tasks, dependency decisions, smoke tests, and grading criteria`
         if (stageConfig.name === 'Implementation') return `${action} for ${term}: write runnable code, execute it in the retained workbench, and save artifacts`
         if (stageConfig.name === 'Testing') return `${action} for ${term}: run a benchmark or regression check, compare baseline output, and print pass/fail metrics`

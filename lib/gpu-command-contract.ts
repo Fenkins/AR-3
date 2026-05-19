@@ -4,6 +4,10 @@ export function shouldUseAutonomousPreparationFallback(stageName: string): boole
   return ['Investigation', 'Planning'].includes(stageName)
 }
 
+export function stepRequestsPreparation(stepDescription: string | undefined | null): boolean {
+  return /\b(prepare|preparation|setup|set up|set-up|download|cache|checksum|weights?|checkpoint|snapshot|model cache)\b/i.test(String(stepDescription || ''))
+}
+
 const GPU_SPACE_ROUTED_STAGES = new Set([
   'Investigation',
   'Proposition',
@@ -1996,6 +2000,20 @@ export function selectGpuSubmissionCommand(input: GpuSubmissionInput): GpuSubmis
   }
 
   if (shouldUseAutonomousPreparationFallback(input.stageName)) {
+    if (!stepRequestsPreparation(input.stepDescription)) {
+      return {
+        ok: true,
+        command: buildDeterministicGpuExperimentCommand({
+          researchGoal: input.researchGoal,
+          stepDescription: input.stepDescription,
+          stageName: input.stageName,
+          reason: extracted.ok ? 'preparation manifest wrapper emitted for non-preparation step' : extractedFailureReason,
+          preparationManifest: existingManifest,
+        }),
+        fallbackUsed: false,
+        reason: 'selected deterministic GPU experiment because a non-preparation research step cannot advance on preparation-only output',
+      }
+    }
     return {
       ok: true,
       command: buildAutonomousPreparationCommand({

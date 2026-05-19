@@ -3,7 +3,7 @@ import { callAI, AIConfig, AIMessage } from './ai'
 import { generateVariants, gradeVariant, selectBestVariant, saveVariantsToDatabase, updateVariantStepDb, updateVariantDb, selectBestVariantFromDb, loadVariantsFromDb, reEvaluateStepCount, Variant, Step } from './variant-engine'
 import { buildEmbeddingContext } from './embeddings'
 import { addToCache, repairOversizedModelCacheRows } from './model-cache'
-import { assessGpuExecutionEvidence, assessGpuStepCompletion, buildAutonomousPreparationCommand, buildDeterministicGpuExperimentCommand, extractPersistablePreparationManifest, extractStrictGpuCommand, selectGpuSubmissionCommand, shouldRouteStageThroughGpu, shouldShortCircuitGpuContractFailure, shouldUseAutonomousPreparationFallback } from './gpu-command-contract'
+import { assessGpuExecutionEvidence, assessGpuStepCompletion, buildAutonomousPreparationCommand, buildDeterministicGpuExperimentCommand, extractPersistablePreparationManifest, extractStrictGpuCommand, selectGpuSubmissionCommand, shouldRouteStageThroughGpu, shouldShortCircuitGpuContractFailure, shouldUseAutonomousPreparationFallback, stepRequestsPreparation } from './gpu-command-contract'
 import { buildPreparationManifestInstructions, buildPreparationRetryMessage, extractPreparationManifestCandidate, validatePreparationManifest } from './preparation-manifest'
 import fs from 'fs'
 import { getInternalGpuApiBase } from './internal-api-base'
@@ -1391,8 +1391,8 @@ ${useGpu && shouldUseAutonomousPreparationFallback(stageName) ? `## Preparation 
                 }),
               }
               variant.failureMode = 'GPU_CONTRACT_DETERMINISTIC_EXPERIMENT_FALLBACK'
-            } else {
-              debugLog(`[executeVariant] Strict GPU code contract failed after ${strictAttempts + 1} attempt(s); submitting autonomous preparation fallback: ${strictReason}`)
+            } else if (stepRequestsPreparation(step.description)) {
+              debugLog(`[executeVariant] Strict GPU code contract failed after ${strictAttempts + 1} attempt(s); submitting autonomous preparation fallback for explicit preparation step: ${strictReason}`)
               gpuSubmissionUsedFallback = true
               strictCommand = {
                 ok: true,
@@ -1404,6 +1404,18 @@ ${useGpu && shouldUseAutonomousPreparationFallback(stageName) ? `## Preparation 
                 }),
               }
               variant.failureMode = 'GPU_CONTRACT_FALLBACK_PREPARATION'
+            } else {
+              debugLog(`[executeVariant] Strict GPU code contract failed after ${strictAttempts + 1} attempt(s); submitting deterministic GPU experiment fallback for non-preparation ${stageName} step: ${strictReason}`)
+              strictCommand = {
+                ok: true,
+                command: buildDeterministicGpuExperimentCommand({
+                  researchGoal: space.initialPrompt,
+                  stepDescription: step.description,
+                  stageName,
+                  reason: strictReason,
+                }),
+              }
+              variant.failureMode = 'GPU_CONTRACT_DETERMINISTIC_EXPERIMENT_FALLBACK'
             }
           }
         }
