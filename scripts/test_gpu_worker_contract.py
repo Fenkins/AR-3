@@ -526,6 +526,76 @@ def test_resolved_manifest_model_is_mirrored_to_model_cache_db(monkeypatch, tmp_
     )
 
 
+
+
+def test_incomplete_manifest_model_cache_row_is_not_marked_completed(monkeypatch, tmp_path):
+    db = tmp_path / "dev.db"
+    con = sqlite3.connect(db)
+    con.execute(
+        "CREATE TABLE ModelCache (id TEXT PRIMARY KEY, spaceId TEXT NOT NULL, fileName TEXT NOT NULL, filePath TEXT NOT NULL, fileSize INTEGER NOT NULL, downloadUrl TEXT, checksum TEXT, description TEXT, status TEXT NOT NULL, createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+    )
+    con.commit()
+    con.close()
+
+    model_dir = tmp_path / "model_cache" / "dream-org-dream-v0-base-7b"
+    download_dir = model_dir / ".cache" / "huggingface" / "download"
+    download_dir.mkdir(parents=True)
+    (model_dir / "model.safetensors.index.json").write_text(json.dumps({
+        "weight_map": {
+            "layer.0.weight": "model-00001-of-00002.safetensors",
+            "layer.1.weight": "model-00002-of-00002.safetensors",
+        }
+    }))
+    (model_dir / "model-00001-of-00002.safetensors").write_bytes(b"weights")
+    (download_dir / "model-00002-of-00002.safetensors.incomplete").write_bytes(b"partial")
+
+    monkeypatch.setenv("AR3_PRISMA_DB_PATH", str(db))
+    gpu_worker.sync_model_cache_row(
+        space_id="space-123",
+        model_id="Dream-org/Dream-v0-Base-7B",
+        local_dir=str(model_dir),
+        source="huggingface",
+    )
+
+    con = sqlite3.connect(db)
+    row = con.execute("SELECT fileSize, status, description FROM ModelCache").fetchone()
+    con.close()
+
+    assert row[0] <= 2147483647
+    assert row[1] == "FAILED"
+    assert "missing_shards=model-00002-of-00002.safetensors" in row[2]
+    assert "incomplete_downloads=1" in row[2]
+
+
+
+def test_invalid_model_index_is_not_marked_completed(monkeypatch, tmp_path):
+    db = tmp_path / "dev.db"
+    con = sqlite3.connect(db)
+    con.execute(
+        "CREATE TABLE ModelCache (id TEXT PRIMARY KEY, spaceId TEXT NOT NULL, fileName TEXT NOT NULL, filePath TEXT NOT NULL, fileSize INTEGER NOT NULL, downloadUrl TEXT, checksum TEXT, description TEXT, status TEXT NOT NULL, createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+    )
+    con.commit()
+    con.close()
+
+    model_dir = tmp_path / "model_cache" / "bad-index-model"
+    model_dir.mkdir(parents=True)
+    (model_dir / "model.safetensors.index.json").write_text("{not-json")
+
+    monkeypatch.setenv("AR3_PRISMA_DB_PATH", str(db))
+    gpu_worker.sync_model_cache_row(
+        space_id="space-123",
+        model_id="org/bad-index-model",
+        local_dir=str(model_dir),
+        source="huggingface",
+    )
+
+    con = sqlite3.connect(db)
+    row = con.execute("SELECT status, description FROM ModelCache").fetchone()
+    con.close()
+
+    assert row[0] == "FAILED"
+    assert "invalid_index=model.safetensors.index.json" in row[1]
+
 def test_prepare_workbench_context_carries_space_id(monkeypatch, tmp_path):
     monkeypatch.setenv("AR3_WORKBENCH_ROOT", str(tmp_path / "workbenches"))
     context = gpu_worker.prepare_workbench({"spaceId": "space-abc", "jobId": "job-1"})

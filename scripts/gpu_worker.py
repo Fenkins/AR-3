@@ -172,6 +172,48 @@ def update_prisma_gpu_job_status(job_id: str, status: str, result: dict = None, 
 
 
 
+PRISMA_INT_MAX = 2147483647
+
+
+def _clamp_prisma_int(value) -> int:
+    try:
+        numeric = int(value or 0)
+    except Exception:
+        return 0
+    if numeric <= 0:
+        return 0
+    return min(numeric, PRISMA_INT_MAX)
+
+
+def _model_snapshot_integrity(path: Path):
+    """Return a conservative status and details for a local model snapshot."""
+    incomplete = sorted(p for p in path.rglob('*.incomplete') if p.is_file()) if path.exists() else []
+    missing_shards = []
+    invalid_indexes = []
+    for index_path in sorted(path.glob('*.safetensors.index.json')):
+        try:
+            data = json.loads(index_path.read_text())
+        except Exception:
+            invalid_indexes.append(index_path.name)
+            continue
+        weight_map = data.get('weight_map') if isinstance(data, dict) else None
+        if not isinstance(weight_map, dict):
+            invalid_indexes.append(index_path.name)
+            continue
+        for shard in sorted(set(str(v) for v in weight_map.values() if v)):
+            if not (path / shard).exists():
+                missing_shards.append(shard)
+    problems = []
+    if invalid_indexes:
+        problems.append('invalid_index=' + ','.join(sorted(set(invalid_indexes))[:12]))
+    if missing_shards:
+        problems.append('missing_shards=' + ','.join(sorted(set(missing_shards))[:12]))
+    if incomplete:
+        problems.append(f'incomplete_downloads={len(incomplete)}')
+    status = 'FAILED' if problems else 'COMPLETED'
+    return status, problems
+
+
 def sync_model_cache_row(space_id: str, model_id: str, local_dir: str, source: str = 'huggingface'):
     """Best-effort mirror of worker-resolved model artifacts into ModelCache.
 
@@ -190,8 +232,14 @@ def sync_model_cache_row(space_id: str, model_id: str, local_dir: str, source: s
     row_id = 'worker_model_' + hashlib.sha1(f'{space_id}:{model_id}:{path}'.encode('utf-8')).hexdigest()[:24]
     download_url = f'https://huggingface.co/{model_id}' if source == 'huggingface' else None
     file_size = _dir_size_bytes(path) if path.is_dir() else (path.stat().st_size if path.exists() else 0)
+    db_file_size = _clamp_prisma_int(file_size)
+    integrity_status, integrity_problems = _model_snapshot_integrity(path)
     now_iso = datetime.now().isoformat()
-    description = f'GPU worker resolved {source} model artifact; model_id={model_id}; actual_size_bytes={int(file_size)}'
+    description_parts = [f'GPU worker resolved {source} model artifact; model_id={model_id}; actual_size_bytes={int(file_size)}']
+    if file_size > PRISMA_INT_MAX:
+        description_parts.append('fileSize capped at Prisma Int max when artifact exceeds 2GiB')
+    description_parts.extend(integrity_problems)
+    description = '; '.join(description_parts)
     try:
         con = sqlite3.connect(str(db_path), timeout=5)
         try:
@@ -199,12 +247,12 @@ def sync_model_cache_row(space_id: str, model_id: str, local_dir: str, source: s
             if existing:
                 con.execute(
                     'UPDATE ModelCache SET fileName = ?, filePath = ?, fileSize = ?, downloadUrl = ?, description = ?, status = ? WHERE id = ?',
-                    (file_name, str(path), int(file_size), download_url, description, 'COMPLETED', existing[0]),
+                    (file_name, str(path), db_file_size, download_url, description, integrity_status, existing[0]),
                 )
             else:
                 con.execute(
                     'INSERT INTO ModelCache (id, spaceId, fileName, filePath, fileSize, downloadUrl, checksum, description, status, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                    (row_id, space_id, file_name, str(path), int(file_size), download_url, None, description, 'COMPLETED', now_iso),
+                    (row_id, space_id, file_name, str(path), db_file_size, download_url, None, description, integrity_status, now_iso),
                 )
             con.commit()
         finally:
