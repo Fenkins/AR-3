@@ -159,6 +159,13 @@ export function runningStepIsStaleWithoutGpuJob(
   return !jobs.some(job => gpuJobMatchesRunningStep(step, job, matchOptions))
 }
 
+export function variantMayContainRecoverableRunningStep(
+  variant: { status?: string | null; VariantStep?: Array<{ status?: string | null }> | null },
+): boolean {
+  if (variant.status === 'COMPLETED' || variant.status === 'FAILED') return false
+  return (variant.VariantStep || []).some(step => step.status === 'RUNNING')
+}
+
 export function runningVariantIsStaleWithoutActiveStep(
   variant: { status?: string | null; updatedAt?: Date | string | null },
   steps: Array<{ status?: string | null; updatedAt?: Date | string | null }>,
@@ -184,10 +191,14 @@ async function reconcileCompletedGpuJobsForRunningSteps(spaceId: string): Promis
   const gpuJobDelegate = (prisma as any).gpuJob
   if (!gpuJobDelegate) return 0
 
-  const runningVariants = await prisma.variant.findMany({
-    where: { spaceId, status: 'RUNNING' },
+  const runningVariants = (await prisma.variant.findMany({
+    where: {
+      spaceId,
+      NOT: { status: { in: ['COMPLETED', 'FAILED'] } },
+      VariantStep: { some: { status: 'RUNNING' } },
+    },
     include: { VariantStep: { orderBy: { order: 'asc' } } },
-  })
+  })).filter(variantMayContainRecoverableRunningStep)
   let reconciled = 0
 
   for (const variant of runningVariants) {

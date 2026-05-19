@@ -33,6 +33,7 @@ const {
   gpuJobMatchesRunningStep,
   runningVariantIsStaleWithoutActiveStep,
   runningStepIsStaleWithoutGpuJob,
+  variantMayContainRecoverableRunningStep,
   runningStepHasTerminalGpuResult,
   runningStepHasTerminalGpuDiagnostic,
 } = m.exports
@@ -56,6 +57,23 @@ assert.match(resultText, /\[OUTPUT\]\n\{"cuda_available":true/)
 assert.ok(!resultText.startsWith('{"action":"run_python"'), 'step result should not start with raw run_python command JSON')
 assert.ok(resultText.indexOf('[GPU Execution Result]') < resultText.indexOf('[CODE]'), 'status marker should come before code so UI cards show useful status')
 assert.equal(assessGpuStepCompletion(resultText).valid, true)
+
+
+assert.equal(
+  variantMayContainRecoverableRunningStep({
+    status: 'PENDING',
+    VariantStep: [{ status: 'RUNNING' }, { status: 'PENDING' }],
+  }),
+  true,
+  'a PENDING variant with a stale RUNNING step must be scanned for GPU-job recovery after interrupted resume',
+)
+assert.equal(
+  variantMayContainRecoverableRunningStep({
+    status: 'COMPLETED',
+    VariantStep: [{ status: 'COMPLETED' }],
+  }),
+  false,
+)
 
 assert.equal(
   runningStepHasTerminalGpuResult({
