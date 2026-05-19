@@ -87,9 +87,29 @@ export function formatCompletedGpuJobStepResult(job: { jobId: string; prompt?: s
   const outputBlock = typeof result.output === 'string' && result.output.trim() ? `\n[OUTPUT]\n${result.output.trim()}` : ''
   return result.success
     ? `[GPU Execution Result] job:${result.jobId || job.jobId}${codeBlock}${outputBlock}`
-    : `[GPU Execution Error] job:${result.jobId || job.jobId}: ${result.error || 'GPU job failed'}${codeBlock}${outputBlock}`
+    : `[GPU Execution Error] job:${result.jobId || job.jobId}: ${summarizeGpuRuntimeError(result.error)}${codeBlock}${outputBlock}`
 
 }
+
+function summarizeGpuRuntimeError(error: unknown): string {
+  const text = String(error || '').trim()
+  if (!text) return 'GPU job failed'
+  const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]
+    if (/^(?:[A-Za-z_][A-Za-z0-9_.]*(?:Error|Exception|Warning)|KeyboardInterrupt|SystemExit|AssertionError|KeyError|RuntimeError|ValueError|TypeError|IndexError|CUDAError|OutOfMemoryError):/.test(line)) {
+      if (/Warning:/.test(line) && i < lines.length - 1) continue
+      return line
+    }
+  }
+  const tracebackIndex = lines.findIndex(line => /^Traceback \(most recent call last\):$/.test(line))
+  if (tracebackIndex >= 0 && lines.length > tracebackIndex + 1) {
+    return lines[lines.length - 1]
+  }
+  const nonWarning = lines.find(line => !/\b(?:FutureWarning|UserWarning|DeprecationWarning|warnings\.warn)\b/.test(line))
+  return nonWarning || lines[0] || 'GPU job failed'
+}
+
 
 export function mergeGpuStepResultForPersistence(existingContent: string, gpuResult: string): string {
   const gpuText = String(gpuResult || '').trim()

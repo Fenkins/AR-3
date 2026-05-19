@@ -146,6 +146,20 @@ const failedRuntimeJob = {
 const failedRuntimeText = formatCompletedGpuJobStepResult(failedRuntimeJob)
 assert.match(failedRuntimeText, /\[GPU Execution Error\] job:gpu_space_failed_runtime: RuntimeError: boom/)
 assert.match(failedRuntimeText, /\[CODE\]\nraise RuntimeError\("boom"\)/)
+
+const warningPrefixedRuntimeJob = {
+  jobId: 'gpu_space_warning_runtime',
+  prompt: '{"action":"run_python","code":"raise KeyError(\"grade_score\")"}',
+  resultJson: JSON.stringify({
+    success: false,
+    jobId: 'gpu_space_warning_runtime',
+    code: 'raise KeyError("grade_score")',
+    error: '/tmp/workbench/python-packages/transformers/utils/hub.py:128: FutureWarning: Using TRANSFORMERS_CACHE is deprecated\n  warnings.warn(\nTraceback (most recent call last):\n  File "/tmp/ar3-workbenches/space/tmp/gpu_code.py", line 438, in <module>\n    grade_results["grade_score"]\nKeyError: \'grade_score\'',
+  }),
+}
+const warningRuntimeText = formatCompletedGpuJobStepResult(warningPrefixedRuntimeJob)
+assert.match(warningRuntimeText, /\[GPU Execution Error\] job:gpu_space_warning_runtime: KeyError: 'grade_score'/, 'runtime error formatting should surface the terminal traceback exception instead of a leading library warning')
+assert.ok(!warningRuntimeText.includes('FutureWarning'), 'library warnings should not become the persisted GPU error headline')
 assert.equal(
   gpuJobMatchesRunningStep(
     { description: 'download weights', name: 'Download weights', updatedAt: new Date('2026-05-17T21:42:00Z') },
