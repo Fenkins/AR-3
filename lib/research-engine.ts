@@ -11,6 +11,7 @@ import { removeSpaceWorkbenchDirs } from './space-cleanup'
 import { buildFallbackThinkingSetupResponse } from './thinking-setup'
 import { assessDeadLoop, shouldRegenerateTerminalFailedStage } from './dead-loop-detector'
 import { buildResearchMemoryContext } from './research-memory'
+import { redactSecrets } from './secret-redaction'
 
 const logFile = '/tmp/ar1_debug.log'
 function debugLog(...args: any[]) {
@@ -1047,8 +1048,10 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
             }
           }
         } else {
-          debugLog(`[executeResearchCycle] GPU job submission failed: ${gpuResponse.status}`)
-          response.content += '\n\n[GPU Error]: Failed to submit GPU job'
+          const gpuSubmissionErrorBody = await gpuResponse.text().catch(() => '')
+          const safeGpuSubmissionErrorBody = redactSecrets(gpuSubmissionErrorBody).slice(0, 500)
+          debugLog(`[executeResearchCycle] GPU job submission failed: ${gpuResponse.status}${safeGpuSubmissionErrorBody ? ` ${safeGpuSubmissionErrorBody}` : ''}`)
+          response.content += `\n\n[GPU Error]: Failed to submit GPU job: ${gpuResponse.status}${safeGpuSubmissionErrorBody ? ` ${safeGpuSubmissionErrorBody}` : ''}`
         }
       } catch (gpuError: any) {
         debugLog(`[executeResearchCycle] GPU worker error: ${gpuError.message}`)
@@ -1592,8 +1595,10 @@ ${useGpu && shouldUseAutonomousPreparationFallback(stageName) ? `## Preparation 
               continue
             }
           } else {
-            debugLog(`[executeVariant] GPU job submission failed: ${gpuResponse.status}`)
-            response.content += '\n\n[GPU Error]: Failed to submit GPU job'
+            const gpuSubmissionErrorBody = await gpuResponse.text().catch(() => '')
+            const safeGpuSubmissionErrorBody = redactSecrets(gpuSubmissionErrorBody).slice(0, 500)
+            debugLog(`[executeVariant] GPU job submission failed: ${gpuResponse.status}${safeGpuSubmissionErrorBody ? ` ${safeGpuSubmissionErrorBody}` : ''}`)
+            response.content += `\n\n[GPU Error]: Failed to submit GPU job: ${gpuResponse.status}${safeGpuSubmissionErrorBody ? ` ${safeGpuSubmissionErrorBody}` : ''}`
           }
         } catch (gpuError: any) {
           debugLog(`[executeVariant] GPU worker error: ${gpuError.message}`)
