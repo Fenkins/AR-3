@@ -1407,6 +1407,7 @@ ${useGpu && shouldUseAutonomousPreparationFallback(stageName) ? `## Preparation 
               variant.failureMode = 'GPU_CONTRACT_FALLBACK_PREPARATION'
             } else if (/deterministic GPU experiment/i.test(selectedSubmission.reason)) {
               variant.failureMode = 'GPU_CONTRACT_DETERMINISTIC_EXPERIMENT_FALLBACK'
+            }
           }
         }
 
@@ -1441,7 +1442,6 @@ ${useGpu && shouldUseAutonomousPreparationFallback(stageName) ? `## Preparation 
                 }),
               }
               variant.failureMode = "GPU_CONTRACT_DETERMINISTIC_EXPERIMENT_FALLBACK"
-            }
             }
           } else {
             if (preparationManifestForRescue) {

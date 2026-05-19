@@ -322,5 +322,6 @@ assert.doesNotMatch(fullSource, /strictCommand\.ok && shouldUseAutonomousPrepara
 assert.match(fullSource, /await\s+gpuResponse\.text\(\)/, 'GPU submission failures must capture the response body so 400 validation/root-cause errors are not reduced to an opaque status')
 assert.match(fullSource, /Failed to submit GPU job: \${gpuResponse\.status}[\s\S]*gpuSubmissionErrorBody/, 'persisted GPU submission diagnostics must include the response body when present')
 assert.match(fullSource, /redactSecrets\(gpuSubmissionErrorBody\)/, 'GPU submission response bodies must be redacted before logging or persistence')
+assert.match(fullSource, /variant\.failureMode = 'GPU_CONTRACT_DETERMINISTIC_EXPERIMENT_FALLBACK'\n\s*\}\n\s*\}\n\s*\}\n\s*if \(!strictCommand\.ok\) \{/, 'deterministic fallback for invalid GPU commands must be outside the strictCommand.ok branch; otherwise prompt becomes undefined and API returns 400')
 
 console.log('gpu resume reconciliation tests passed')
