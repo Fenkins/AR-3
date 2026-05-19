@@ -1108,6 +1108,25 @@ function testGpuStepCompletionAcceptsModelDownloadArtifactEvidence() {
 }
 
 
+
+function testCacheAndCheckpointExperimentTermsAreNotPreparationByThemselves() {
+  for (const stepDescription of [
+    'Measure KV-cache behavior during a GPU-backed latent trajectory experiment.',
+    'Evaluate checkpoint selection effects by running JSON metric probes.',
+  ]) {
+    const selected = contract.selectGpuSubmissionCommand({
+      stageName: 'Investigation',
+      researchGoal: 'Improve diffusion model inference with latent gasket ODE trajectory consensus.',
+      stepDescription,
+      llmResponse: 'I would discuss the experiment in prose.',
+    })
+    assert.equal(selected.ok, true, selected.reason)
+    assert.equal(selected.fallbackUsed, false)
+    assert.match(selected.command.code, /deterministic_gpu_experiment/)
+    assert.doesNotMatch(selected.command.code, /autonomous_preparation_manifest/)
+  }
+}
+
 function testModelCachePreparationProbeCompletionAcceptsDownloadStep() {
   const assessed = contract.assessGpuStepCompletion(
     '[GPU Execution Result] job:gpu_test_123\n' + JSON.stringify({
@@ -1207,6 +1226,7 @@ testPersistedPreparationManifestKeepsResearchSpecificObjective()
 testInvestigationNonPreparationStepRejectsLlmManifestWrapperAndUsesDeterministicExperiment()
 testExplicitPreparationStepStillUsesAutonomousPreparationFallback()
 testInvestigationVerifyHypothesisIsNotMisclassifiedAsPreparation()
+testCacheAndCheckpointExperimentTermsAreNotPreparationByThemselves()
 testStrictGpuCommandRejectsExecutableGpuProbeCodeWithUnterminatedPythonString()
 testPreparationStageWithExistingManifestPromotesWeakOutputToDeterministicExperiment()
 testPreparationStageWithExistingManifestPromotesWrapperToDeterministicExperiment()

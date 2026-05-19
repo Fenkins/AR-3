@@ -5,8 +5,12 @@ export function shouldUseAutonomousPreparationFallback(stageName: string): boole
 }
 
 export function stepRequestsPreparation(stepDescription: string | undefined | null): boolean {
-  return /\b(prepare|preparation|setup|set up|set-up|download|cache|checksum|weights?|checkpoint|snapshot|model cache)\b/i.test(String(stepDescription || ''))
+  const text = String(stepDescription || '')
+  return /\b(prepare|preparation|setup|set up|set-up|download|checksum|model cache)\b/i.test(text) ||
+    /\bcache\s+(?:model|weights?|checkpoint|snapshot|artifacts?)\b/i.test(text) ||
+    /\b(?:weights?|checkpoint|snapshot)\b.*\b(?:download|cache|checksum|prepare|preparation|setup)\b/i.test(text)
 }
+
 
 const GPU_SPACE_ROUTED_STAGES = new Set([
   'Implementation',
