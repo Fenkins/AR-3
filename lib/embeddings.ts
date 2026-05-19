@@ -103,17 +103,24 @@ export async function getEmbedding(
   }
 
   if (provider.provider === 'google') {
-    // Google Gemini embedding-001
+    // Google Gemini embedding models are exposed through getGenerativeModel().
+    // The current SDK returns embeddings as { embedding: { values: number[] } }.
     const { GoogleGenerativeAI } = require('@google/generative-ai')
     const genAI = new GoogleGenerativeAI(provider.apiKey)
-    const model = genAI.getTextEmbeddingModel()
+    const modelName = provider.model || 'embedding-001'
+    const model = genAI.getGenerativeModel({ model: modelName })
     const result = await model.embedContent(text)
+    const embedding = result.embedding && Array.isArray(result.embedding.values) ? result.embedding.values : []
+
+    if (!Array.isArray(embedding) || embedding.length === 0) {
+      throw new Error('Google embedding response did not include embedding.values')
+    }
     
     return {
-      embedding: result.embedding,
+      embedding,
       provider: 'google',
-      model: 'embedding-001',
-      dimensions: result.embedding.length,
+      model: modelName,
+      dimensions: embedding.length,
       tokensUsed: text.split(/\s+/).length,
     }
   }
