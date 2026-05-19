@@ -102,6 +102,14 @@ def test_injects_missing_defaultdict_import():
     exec(fixed, namespace)
 
 
+def test_injects_missing_gc_import_for_generated_cleanup():
+    code = "x = object()\ndel x\ngc.collect()\n"
+    fixed = gpu_worker.inject_missing_common_stdlib_imports(code)
+    assert fixed.startswith('import gc\n')
+    namespace = {}
+    exec(fixed, namespace)
+
+
 def test_injects_json_numpy_scalar_encoder_patch():
     code = (
         "import json\n"
@@ -157,5 +165,6 @@ if __name__ == '__main__':
     test_auto_fix_repairs_malformed_dict_value_format_spec()
     test_repairs_optional_gpu_info_boolean_lookup()
     test_injects_missing_defaultdict_import()
+    test_injects_missing_gc_import_for_generated_cleanup()
     test_injects_json_numpy_scalar_encoder_patch()
     print('gpu worker syntax repair tests passed')

@@ -2049,7 +2049,7 @@ def auto_fix_code(code: str) -> str:
 
 COMMON_STDLIB_MODULES = {
     'json', 'os', 'sys', 'math', 'random', 'time', 'datetime', 'pathlib', 'statistics',
-    'itertools', 'functools', 'collections', 'subprocess', 're', 'csv', 'tempfile', 'shutil',
+    'itertools', 'functools', 'collections', 'subprocess', 're', 'csv', 'tempfile', 'shutil', 'gc',
 }
 
 COMMON_STDLIB_SYMBOL_IMPORTS = {
