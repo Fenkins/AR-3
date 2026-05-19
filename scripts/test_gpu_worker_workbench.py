@@ -784,6 +784,31 @@ model_resolution_file=/tmp/ar3-workbenches/ode/model_resolution.json
     assert result["error"] is None
 
 
+def test_validation_rejects_manifest_model_steps_without_local_artifact_or_load_attempt():
+    result = gpu_worker.validate_execution_result_evidence({
+        "success": True,
+        "preparationManifest": {
+            "models": [
+                {"id": "GSAI-ML/LLaDA-8B-Base", "source": "huggingface", "required": True},
+            ],
+            "gradingCriteria": [
+                "It must print JSON evidence including GPU availability, model/dependency status, and measurable metrics.",
+            ],
+        },
+        "output": json.dumps({
+            "type": "deterministic_gpu_experiment",
+            "cuda_available": True,
+            "gpu_name": "NVIDIA GeForce GTX 1080 Ti",
+            "model_metadata": [{"id": "GSAI-ML/LLaDA-8B-Base", "safetensors_count": 6}],
+            "model_load_attempts": [],
+            "research_metrics": {"trajectory_cosine_similarity": 0.95},
+        }),
+    })
+
+    assert result["success"] is False
+    assert "required model" in result["error"].lower()
+
+
 def test_process_job_marks_validation_failures_as_failed_validation():
     root = tempfile.mkdtemp(prefix="ar3-worker-status-test-")
     old_queue = gpu_worker.JOB_QUEUE_FILE
@@ -1016,6 +1041,7 @@ if __name__ == "__main__":
     test_validation_rejects_pretty_printed_contract_failure_after_gpu_smoke_json()
     test_validation_rejects_preparation_probe_plus_unstructured_prose()
     test_validation_accepts_preparation_probe_with_setup_metadata_json()
+    test_validation_rejects_manifest_model_steps_without_local_artifact_or_load_attempt()
     test_process_job_marks_validation_failures_as_failed_validation()
     test_execute_gpu_command_stops_when_preparation_exhausts_disk_space()
     test_get_pending_jobs_reclaims_stale_inflight_jobs_without_results()

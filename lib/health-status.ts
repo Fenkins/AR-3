@@ -49,6 +49,10 @@ const ACTIVE_GPU_STATUSES = [
   'validating_evidence',
 ]
 
+function shouldRequireCloudflared(): boolean {
+  return ['1', 'true', 'yes'].includes(String(process.env.AR3_REQUIRE_CLOUDFLARED || '').toLowerCase())
+}
+
 function processRunning(pattern: string): boolean {
   try {
     execFileSync('pgrep', ['-f', pattern], { stdio: 'ignore', timeout: 1000 })
@@ -101,7 +105,7 @@ export function summarizeHealthSnapshot(snapshot: HealthSnapshot): HealthSummary
   if (!snapshot.webProcess) issues.push('web_process_missing')
   if (!snapshot.gpuWorkerProcess) issues.push('gpu_worker_process_missing')
   if (!snapshot.searchProcess) issues.push('search_process_missing')
-  if (!snapshot.cloudflaredProcess) issues.push('cloudflared_process_missing')
+  if (shouldRequireCloudflared() && !snapshot.cloudflaredProcess) issues.push('cloudflared_process_missing')
   if (!snapshot.gpu.available) issues.push('gpu_unavailable')
   if (snapshot.gpu.torchCudaAvailable === false) issues.push('torch_cuda_unavailable')
   if (!snapshot.db.ok) issues.push('database_unavailable')

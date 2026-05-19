@@ -60,6 +60,43 @@ function testDegradedSnapshotFlagsMissingGpuWorkerAndStaleJobs() {
   assert.ok(summary.issues.includes('stale_gpu_jobs_present'))
 }
 
+
+function testCloudflaredIsOptionalWhenNoTunnelIsRequired() {
+  const previous = process.env.AR3_REQUIRE_CLOUDFLARED
+  delete process.env.AR3_REQUIRE_CLOUDFLARED
+  const summary = summarizeHealthSnapshot({
+    nowMs: 10_000,
+    webProcess: true,
+    gpuWorkerProcess: true,
+    searchProcess: true,
+    cloudflaredProcess: false,
+    gpu: { available: true, name: "NVIDIA GeForce GTX 1080 Ti", torchCudaAvailable: true },
+    db: { ok: true, activeSpaces: 1, queuedJobs: 0, runningJobs: 1, staleRunningJobs: 0, failedRecentJobs: 0 },
+  })
+  if (previous === undefined) delete process.env.AR3_REQUIRE_CLOUDFLARED
+  else process.env.AR3_REQUIRE_CLOUDFLARED = previous
+  assert.strictEqual(summary.status, 'healthy')
+  assert.ok(!summary.issues.includes('cloudflared_process_missing'))
+}
+
+function testCloudflaredCanBeRequiredForTunnelDeployments() {
+  const previous = process.env.AR3_REQUIRE_CLOUDFLARED
+  process.env.AR3_REQUIRE_CLOUDFLARED = '1'
+  const summary = summarizeHealthSnapshot({
+    nowMs: 10_000,
+    webProcess: true,
+    gpuWorkerProcess: true,
+    searchProcess: true,
+    cloudflaredProcess: false,
+    gpu: { available: true, name: "NVIDIA GeForce GTX 1080 Ti", torchCudaAvailable: true },
+    db: { ok: true, activeSpaces: 1, queuedJobs: 0, runningJobs: 1, staleRunningJobs: 0, failedRecentJobs: 0 },
+  })
+  if (previous === undefined) delete process.env.AR3_REQUIRE_CLOUDFLARED
+  else process.env.AR3_REQUIRE_CLOUDFLARED = previous
+  assert.strictEqual(summary.status, 'degraded')
+  assert.ok(summary.issues.includes('cloudflared_process_missing'))
+}
+
 function testPublicHealthPayloadDoesNotExposeInternalDetails() {
   const summary = summarizeHealthSnapshot({
     nowMs: 10_000,
@@ -79,5 +116,7 @@ function testPublicHealthPayloadDoesNotExposeInternalDetails() {
 testHealthStatusUsesStaticPrismaImportForBundledRoute()
 testHealthySnapshotRequiresWebWorkerGpuAndDb()
 testDegradedSnapshotFlagsMissingGpuWorkerAndStaleJobs()
+testCloudflaredIsOptionalWhenNoTunnelIsRequired()
+testCloudflaredCanBeRequiredForTunnelDeployments()
 testPublicHealthPayloadDoesNotExposeInternalDetails()
 console.log('health-status tests passed')

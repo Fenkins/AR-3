@@ -2389,6 +2389,63 @@ def _validate_preparation_manifest_runtime_criteria(result: dict, json_objects: 
     for obj in experiment_objects:
         flattened.update(_flatten_json_evidence(obj))
 
+    required_models = []
+    for model in (manifest.get('models') or manifest.get('model_specs') or [])[:20]:
+        if not isinstance(model, dict) or model.get('required') is not True:
+            continue
+        model_id = str(model.get('id') or model.get('modelId') or model.get('model_id') or model.get('repoId') or model.get('repo_id') or '').strip()
+        if model_id:
+            required_models.append(model_id)
+
+    if required_models:
+        def _attempt_matches_required_model(attempt: dict, model_id: str) -> bool:
+            raw_id = str(
+                attempt.get('id')
+                or attempt.get('model_id')
+                or attempt.get('modelId')
+                or attempt.get('repo_id')
+                or ''
+            )
+            if raw_id and (raw_id == model_id or raw_id.endswith('/' + model_id.split('/')[-1])):
+                return True
+            candidates = attempt.get('cache_candidates') or attempt.get('local_artifacts') or []
+            if isinstance(candidates, str):
+                candidates = [candidates]
+            needle = model_id.lower().replace('/', '-')
+            tail = model_id.split('/')[-1].lower()
+            return any(needle in str(candidate).lower() or tail in str(candidate).lower() for candidate in candidates)
+
+        def _attempt_has_concrete_result(attempt: dict) -> bool:
+            if not isinstance(attempt, dict) or attempt.get('attempted') is False:
+                return False
+            if attempt.get('model_loaded') is True or attempt.get('config_loaded') is True or attempt.get('tokenizer_loaded') is True:
+                return True
+            if attempt.get('hardware_limit') is True or attempt.get('out_of_memory') is True:
+                return True
+            for key in ('model_load_error', 'load_error', 'config_error', 'tokenizer_error', 'weights_missing', 'local_weight_files'):
+                value = attempt.get(key)
+                if _value_is_concrete(value):
+                    return True
+            return False
+
+        attempts = []
+        for obj in experiment_objects:
+            value = obj.get('model_load_attempts') if isinstance(obj, dict) else None
+            if isinstance(value, dict):
+                attempts.append(value)
+            elif isinstance(value, list):
+                attempts.extend([item for item in value if isinstance(item, dict)])
+
+        missing_model_attempts = []
+        for model_id in required_models:
+            if not any(_attempt_matches_required_model(attempt, model_id) and _attempt_has_concrete_result(attempt) for attempt in attempts):
+                missing_model_attempts.append(model_id)
+        if missing_model_attempts:
+            return {
+                'ok': False,
+                'error': 'Experiment output did not include required model artifact/load-attempt evidence for: ' + ', '.join(missing_model_attempts[:3]),
+            }
+
     missing_evidence = []
     for smoke in (manifest.get('smokeTests') or manifest.get('smoke_tests') or [])[:20]:
         if not isinstance(smoke, dict):

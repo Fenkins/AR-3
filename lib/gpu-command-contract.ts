@@ -1462,8 +1462,11 @@ except Exception as exc:
 
 step_lower = (step_description or "").lower()
 requires_model_attempt = (
-    any(term in step_lower for term in ["load", "loading", "instantiate", "instrument", "activation", "inference", "infer", "train", "training", "fine-tune", "finetune", "checkpoint"])
-    and any(term in step_lower for term in ["model", "llada", "dream", "transformer", "weights", "checkpoint", "activation"])
+    bool(models)
+    or (
+        any(term in step_lower for term in ["load", "loading", "instantiate", "instrument", "activation", "inference", "infer", "train", "training", "fine-tune", "finetune", "checkpoint"])
+        and any(term in step_lower for term in ["model", "llada", "dream", "transformer", "weights", "checkpoint", "activation"])
+    )
 )
 requires_training_attempt = any(term in step_lower for term in ["train", "training", "fine-tune", "finetune", "loss", "checkpoint"])
 
