@@ -7,7 +7,12 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "seed": "node scripts/seed.js"
+    "seed": "node scripts/seed.js",
+    "test": "node -e \"const { readdirSync } = require('fs'); const { spawnSync } = require('child_process'); for (const f of readdirSync('scripts').filter(f => /^test_.*\\\\.js$/.test(f)).sort()) { console.log('===' + f + '==='); const r = spawnSync(process.execPath, ['scripts/' + f], { stdio: 'inherit' }); if (r.status) process.exit(r.status); }\" && python3 -m pytest scripts/test_*.py -q",
+    "prod:start": "bash scripts/production-supervisor.sh start",
+    "prod:stop": "bash scripts/production-supervisor.sh stop",
+    "prod:restart": "bash scripts/production-supervisor.sh restart",
+    "prod:status": "bash scripts/production-supervisor.sh status"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.21.0",

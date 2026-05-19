@@ -110,7 +110,6 @@ export function summarizeHealthSnapshot(snapshot: HealthSnapshot): HealthSummary
   if (snapshot.gpu.torchCudaAvailable === false) issues.push('torch_cuda_unavailable')
   if (!snapshot.db.ok) issues.push('database_unavailable')
   if (snapshot.db.staleRunningJobs > 0) issues.push('stale_gpu_jobs_present')
-  if (snapshot.db.failedRecentJobs > 0) issues.push('recent_gpu_job_failures')
   if (snapshot.publicHttp && !snapshot.publicHttp.ok) issues.push('public_http_unhealthy')
 
   return {

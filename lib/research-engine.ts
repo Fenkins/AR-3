@@ -176,7 +176,9 @@ export function runningVariantIsStaleWithoutActiveStep(
   if (variant.status !== 'RUNNING') return false
   if (activeJobs.length > 0) return false
   if (steps.some(step => step.status === 'RUNNING')) return false
-  if (!steps.some(step => step.status === 'PENDING')) return false
+  const hasPendingWork = steps.some(step => step.status === 'PENDING')
+  const hasOnlyTerminalFailures = steps.length > 0 && steps.every(step => step.status === 'FAILED')
+  if (!hasPendingWork && !hasOnlyTerminalFailures) return false
   const newestStepUpdate = steps.reduce((latest, step) => {
     const updatedAt = step.updatedAt ? new Date(step.updatedAt).getTime() : NaN
     return Number.isFinite(updatedAt) ? Math.max(latest, updatedAt) : latest
@@ -387,6 +389,22 @@ async function recoverStaleRunningVariantsWithoutActiveSteps(spaceId: string): P
     })
 
     if (!runningVariantIsStaleWithoutActiveStep(variant, variant.VariantStep, activeJobs)) continue
+    const allStepsFailed = variant.VariantStep.length > 0 && variant.VariantStep.every(step => step.status === 'FAILED')
+    if (allStepsFailed) {
+      const reason = 'Recovered stale RUNNING variant whose steps already terminal-failed; marking variant FAILED so the stage can regenerate instead of blocking forever.'
+      await prisma.variant.update({
+        where: { id: variant.id },
+        data: {
+          status: 'FAILED',
+          failureMode: 'GPU_COMPLETION_INVALID',
+          lastFailureReason: reason,
+          feedback: `Step failure: ${reason}`,
+        },
+      })
+      recovered++
+      debugLog('[recoverStaleRunningVariantsWithoutActiveSteps] Marked stale RUNNING variant ' + variant.id + ' FAILED because all steps are terminal failures')
+      continue
+    }
     await prisma.variant.update({
       where: { id: variant.id },
       data: {

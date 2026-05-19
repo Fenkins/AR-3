@@ -97,6 +97,21 @@ function testCloudflaredCanBeRequiredForTunnelDeployments() {
   assert.ok(summary.issues.includes('cloudflared_process_missing'))
 }
 
+
+function testRecentGpuFailuresDoNotFailInfrastructureHealth() {
+  const summary = summarizeHealthSnapshot({
+    nowMs: 10_000,
+    webProcess: true,
+    gpuWorkerProcess: true,
+    searchProcess: true,
+    cloudflaredProcess: true,
+    gpu: { available: true, name: "NVIDIA GeForce GTX 1080 Ti", torchCudaAvailable: true },
+    db: { ok: true, activeSpaces: 1, queuedJobs: 0, runningJobs: 1, staleRunningJobs: 0, failedRecentJobs: 3 },
+  })
+  assert.strictEqual(summary.status, "healthy")
+  assert.ok(!summary.issues.includes("recent_gpu_job_failures"))
+}
+
 function testPublicHealthPayloadDoesNotExposeInternalDetails() {
   const summary = summarizeHealthSnapshot({
     nowMs: 10_000,
@@ -118,5 +133,6 @@ testHealthySnapshotRequiresWebWorkerGpuAndDb()
 testDegradedSnapshotFlagsMissingGpuWorkerAndStaleJobs()
 testCloudflaredIsOptionalWhenNoTunnelIsRequired()
 testCloudflaredCanBeRequiredForTunnelDeployments()
+testRecentGpuFailuresDoNotFailInfrastructureHealth()
 testPublicHealthPayloadDoesNotExposeInternalDetails()
 console.log('health-status tests passed')
