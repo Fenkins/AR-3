@@ -1501,7 +1501,7 @@ if requires_model_attempt and models:
             "error": repr(exc),
         })
     else:
-        for model in (models or [])[:1]:
+        for model in (models or [])[:20]:
             model_id = manifest_get(model, "id", "modelId", "model_id", "repoId", "repo_id") if isinstance(model, dict) else str(model)
             attempt = {
                 "id": model_id,
@@ -1562,7 +1562,6 @@ if requires_model_attempt and models:
                 attempt["model_load_error"] = msg[:1200]
                 attempt["hardware_limit"] = "out of memory" in msg.lower() or "cuda out of memory" in msg.lower() or "not enough memory" in msg.lower()
             metrics["model_load_attempts"].append(attempt)
-            break
 
 if isinstance(preparation_manifest, dict):
     criteria = [str(c) for c in (manifest_get(preparation_manifest, "gradingCriteria", "grading_criteria", default=[]) or [])]

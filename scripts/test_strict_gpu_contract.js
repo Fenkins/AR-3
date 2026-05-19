@@ -1020,6 +1020,8 @@ function testDeterministicExperimentFallbackEmitsModelLoadAttemptForModelSteps()
   assert.match(command.code, /model_load_attempts/)
   assert.match(command.code, /AutoModelForCausalLM\.from_pretrained/)
   assert.match(command.code, /cache_candidates_for_model/)
+  assert.match(command.code, /for model in \(models or \[\]\)\[:20\]:/)
+  assert.doesNotMatch(command.code, /for model in \(models or \[\]\)\[:1\]:/)
 }
 
 function testDeterministicExperimentFallbackInstallsTransformersForModelSteps() {

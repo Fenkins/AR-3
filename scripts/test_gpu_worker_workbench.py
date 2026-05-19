@@ -809,6 +809,56 @@ def test_validation_rejects_manifest_model_steps_without_local_artifact_or_load_
     assert "required model" in result["error"].lower()
 
 
+def test_validation_accepts_each_required_manifest_model_with_concrete_attempt():
+    result = gpu_worker.validate_execution_result_evidence({
+        "success": True,
+        "preparationManifest": {
+            "models": [
+                {"id": "org/Model-A", "source": "huggingface", "required": True},
+                {"id": "org/Model-B", "source": "huggingface", "required": True},
+            ],
+            "gradingCriteria": ["It must print JSON evidence including measurable metrics."],
+        },
+        "output": json.dumps({
+            "type": "deterministic_gpu_experiment",
+            "cuda_available": True,
+            "gpu_name": "NVIDIA GeForce GTX 1080 Ti",
+            "model_load_attempts": [
+                {"id": "org/Model-A", "attempted": True, "config_loaded": True},
+                {"id": "org/Model-B", "attempted": True, "model_load_error": "local weights not present"},
+            ],
+            "research_metrics": {"trajectory_cosine_similarity": 0.95},
+        }),
+    })
+
+    assert result["success"] is True
+
+
+def test_validation_rejects_missing_second_required_manifest_model_attempt():
+    result = gpu_worker.validate_execution_result_evidence({
+        "success": True,
+        "preparationManifest": {
+            "models": [
+                {"id": "org/Model-A", "source": "huggingface", "required": True},
+                {"id": "org/Model-B", "source": "huggingface", "required": True},
+            ],
+            "gradingCriteria": ["It must print JSON evidence including measurable metrics."],
+        },
+        "output": json.dumps({
+            "type": "deterministic_gpu_experiment",
+            "cuda_available": True,
+            "gpu_name": "NVIDIA GeForce GTX 1080 Ti",
+            "model_load_attempts": [
+                {"id": "org/Model-A", "attempted": True, "config_loaded": True},
+            ],
+            "research_metrics": {"trajectory_cosine_similarity": 0.95},
+        }),
+    })
+
+    assert result["success"] is False
+    assert "Model-B" in result["error"]
+
+
 def test_process_job_marks_validation_failures_as_failed_validation():
     root = tempfile.mkdtemp(prefix="ar3-worker-status-test-")
     old_queue = gpu_worker.JOB_QUEUE_FILE
