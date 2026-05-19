@@ -244,16 +244,19 @@ def sync_model_cache_row(space_id: str, model_id: str, local_dir: str, source: s
         con = sqlite3.connect(str(db_path), timeout=5)
         try:
             existing = con.execute('SELECT id FROM ModelCache WHERE spaceId = ? AND filePath = ? LIMIT 1', (space_id, str(path))).fetchone()
-            if existing:
-                con.execute(
-                    'UPDATE ModelCache SET fileName = ?, filePath = ?, fileSize = ?, downloadUrl = ?, description = ?, status = ? WHERE id = ?',
-                    (file_name, str(path), db_file_size, download_url, description, integrity_status, existing[0]),
-                )
-            else:
+            if not existing:
                 con.execute(
                     'INSERT INTO ModelCache (id, spaceId, fileName, filePath, fileSize, downloadUrl, checksum, description, status, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                     (row_id, space_id, file_name, str(path), db_file_size, download_url, None, description, integrity_status, now_iso),
                 )
+            # The web/API downloader and worker can race and create duplicate rows for
+            # the same on-disk snapshot.  Mirror the verified file state to every
+            # matching row so stale DOWNLOADING records do not make health/UI believe
+            # a usable cached model is still unresolved.
+            con.execute(
+                'UPDATE ModelCache SET fileName = ?, filePath = ?, fileSize = ?, downloadUrl = ?, description = ?, status = ? WHERE spaceId = ? AND filePath = ?',
+                (file_name, str(path), db_file_size, download_url, description, integrity_status, space_id, str(path)),
+            )
             con.commit()
         finally:
             con.close()

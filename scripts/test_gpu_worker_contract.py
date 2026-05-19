@@ -598,6 +598,45 @@ def test_invalid_model_index_is_not_marked_completed(monkeypatch, tmp_path):
     assert row[0] == "FAILED"
     assert "invalid_index=model.safetensors.index.json" in row[1]
 
+def test_sync_model_cache_updates_stale_duplicate_rows(monkeypatch, tmp_path):
+    db = tmp_path / "dev.db"
+    con = sqlite3.connect(db)
+    con.execute(
+        "CREATE TABLE ModelCache (id TEXT PRIMARY KEY, spaceId TEXT NOT NULL, fileName TEXT NOT NULL, filePath TEXT NOT NULL, fileSize INTEGER NOT NULL, downloadUrl TEXT, checksum TEXT, description TEXT, status TEXT NOT NULL, createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+    )
+    model_dir = tmp_path / "model_cache" / "space-123" / "GSAI-ML_LLaDA-8B-Base"
+    model_dir.mkdir(parents=True)
+    (model_dir / "config.json").write_text("{}")
+    (model_dir / "model.safetensors").write_bytes(b"weights")
+    con.execute(
+        "INSERT INTO ModelCache (id, spaceId, fileName, filePath, fileSize, downloadUrl, checksum, description, status, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("api_stale", "space-123", "GSAI-ML_LLaDA-8B-Base", str(model_dir), 0, "https://huggingface.co/GSAI-ML/LLaDA-8B-Base", None, "api download started", "DOWNLOADING", "2026-01-01 00:00:00.000"),
+    )
+    con.execute(
+        "INSERT INTO ModelCache (id, spaceId, fileName, filePath, fileSize, downloadUrl, checksum, description, status, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("worker_existing", "space-123", "GSAI-ML_LLaDA-8B-Base", str(model_dir), 0, "https://huggingface.co/GSAI-ML/LLaDA-8B-Base", None, "worker old", "DOWNLOADING", "2026-01-02 00:00:00.000"),
+    )
+    con.commit()
+    con.close()
+
+    monkeypatch.setenv("AR3_PRISMA_DB_PATH", str(db))
+    gpu_worker.sync_model_cache_row(
+        space_id="space-123",
+        model_id="GSAI-ML/LLaDA-8B-Base",
+        local_dir=str(model_dir),
+        source="huggingface",
+    )
+
+    con = sqlite3.connect(db)
+    rows = con.execute("SELECT id, fileSize, status, description FROM ModelCache ORDER BY id").fetchall()
+    con.close()
+
+    assert len(rows) == 2
+    assert {row[2] for row in rows} == {"COMPLETED"}
+    assert {row[1] for row in rows} == {9}
+    assert all("actual_size_bytes=9" in row[3] for row in rows)
+
+
 def test_prepare_workbench_context_carries_space_id(monkeypatch, tmp_path):
     monkeypatch.setenv("AR3_WORKBENCH_ROOT", str(tmp_path / "workbenches"))
     context = gpu_worker.prepare_workbench({"spaceId": "space-abc", "jobId": "job-1"})
