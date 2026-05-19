@@ -329,8 +329,10 @@ def test_prune_stale_workbenches_reports_within_limits_without_deleting():
     root = tempfile.mkdtemp(prefix="ar3-worker-prune-noop-test-")
     old_root = os.environ.get("AR3_WORKBENCH_ROOT")
     old_max = os.environ.get("AR3_WORKBENCH_PRUNE_MAX_BYTES")
+    old_warn = os.environ.get("AR3_DISK_WARN_FREE_BYTES")
     os.environ["AR3_WORKBENCH_ROOT"] = root
     os.environ["AR3_WORKBENCH_PRUNE_MAX_BYTES"] = str(1024 * 1024)
+    os.environ["AR3_DISK_WARN_FREE_BYTES"] = "0"
     try:
         context = gpu_worker.prepare_workbench({"jobId": "gpu_space-prune-noop_1", "spaceId": "space prune noop"})
         sibling = Path(root, "kept-space")
@@ -351,6 +353,10 @@ def test_prune_stale_workbenches_reports_within_limits_without_deleting():
             os.environ.pop("AR3_WORKBENCH_PRUNE_MAX_BYTES", None)
         else:
             os.environ["AR3_WORKBENCH_PRUNE_MAX_BYTES"] = old_max
+        if old_warn is None:
+            os.environ.pop("AR3_DISK_WARN_FREE_BYTES", None)
+        else:
+            os.environ["AR3_DISK_WARN_FREE_BYTES"] = old_warn
         shutil.rmtree(root, ignore_errors=True)
 
 

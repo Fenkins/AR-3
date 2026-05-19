@@ -25,6 +25,29 @@ export async function repairOversizedModelCacheRows(): Promise<number> {
   }
 }
 
+export async function repairInvalidModelCacheDateRows(): Promise<number> {
+  try {
+    const textRows = await prisma.$executeRawUnsafe(
+      `UPDATE "ModelCache"
+       SET "createdAt" = "createdAt" || 'Z'
+       WHERE typeof("createdAt") = 'text'
+         AND "createdAt" LIKE '____-__-__T__:__:__%'
+         AND "createdAt" NOT LIKE '%Z'
+         AND substr("createdAt", 20) NOT LIKE '%+%'
+         AND substr("createdAt", 20) NOT LIKE '%-%'`
+    )
+    const integerRows = await prisma.$executeRawUnsafe(
+      `UPDATE "ModelCache"
+       SET "createdAt" = strftime('%Y-%m-%dT%H:%M:%fZ', "createdAt" / 1000.0, 'unixepoch')
+       WHERE typeof("createdAt") = 'integer'`
+    )
+    return Number(textRows || 0) + Number(integerRows || 0)
+  } catch (err) {
+    console.warn(`[ModelCache] Failed to repair invalid createdAt rows: ${redactSecrets(err)}`)
+    return 0
+  }
+}
+
 
 export type SnapshotValidationResult = { ok: true } | { ok: false; reason: string }
 
@@ -155,6 +178,7 @@ export function getCacheEntrySizeBytes(entry: { filePath: string; fileSize: numb
 export async function addToCache(options: AddCacheOptions): Promise<CacheEntry> {
   const { spaceId, fileName, downloadUrl, description, expectedChecksum } = options
   await repairOversizedModelCacheRows()
+  await repairInvalidModelCacheDateRows()
 
   ensureSpaceDir(spaceId)
   let filePath = path.join(getSpaceCacheDir(spaceId), fileName)
@@ -287,6 +311,7 @@ export async function addToCache(options: AddCacheOptions): Promise<CacheEntry> 
 
 export async function getSpaceCache(spaceId: string): Promise<CacheEntry[]> {
   await repairOversizedModelCacheRows()
+  await repairInvalidModelCacheDateRows()
   const entries = await prisma.modelCache.findMany({
     where: { spaceId },
     orderBy: { createdAt: 'asc' },
@@ -301,6 +326,7 @@ export async function getSpaceCache(spaceId: string): Promise<CacheEntry[]> {
 
 export async function getSpaceCacheSize(spaceId: string): Promise<number> {
   await repairOversizedModelCacheRows()
+  await repairInvalidModelCacheDateRows()
   const entries = await prisma.modelCache.findMany({
     where: { spaceId, status: 'COMPLETED' },
     select: { filePath: true, fileSize: true },

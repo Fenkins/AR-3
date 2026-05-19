@@ -29,9 +29,13 @@ function loadTs(relativePath) {
   return m.exports
 }
 
-const { clampModelCacheFileSize } = loadTs('lib/model-cache.ts')
+const { clampModelCacheFileSize, repairInvalidModelCacheDateRows } = loadTs('lib/model-cache.ts')
 
 assert.equal(typeof clampModelCacheFileSize, 'function', 'model-cache must export a reusable fileSize guard')
+assert.equal(typeof repairInvalidModelCacheDateRows, 'function', 'model-cache must export a reusable ModelCache DateTime repair guard')
+const modelCacheSource = fs.readFileSync(path.join(__dirname, '..', 'lib', 'model-cache.ts'), 'utf8')
+assert.match(modelCacheSource, /substr\("createdAt", 20\) NOT LIKE '%\+%'/, 'date repair must not append Z to offset timestamps')
+assert.match(modelCacheSource, /"createdAt" \/ 1000\.0/, 'millisecond epoch repair must preserve fractional seconds')
 assert.equal(clampModelCacheFileSize(16_038_195_604), 2_147_483_647, 'large model snapshots must be clamped before Prisma Int reads/writes')
 assert.equal(clampModelCacheFileSize(42), 42)
 assert.equal(clampModelCacheFileSize(-10), 0)

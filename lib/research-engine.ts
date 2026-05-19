@@ -2,7 +2,7 @@ import { prisma } from './prisma'
 import { callAI, AIConfig, AIMessage } from './ai'
 import { generateVariants, gradeVariant, selectBestVariant, saveVariantsToDatabase, updateVariantStepDb, updateVariantDb, selectBestVariantFromDb, loadVariantsFromDb, reEvaluateStepCount, Variant, Step } from './variant-engine'
 import { buildEmbeddingContext } from './embeddings'
-import { addToCache, repairOversizedModelCacheRows } from './model-cache'
+import { addToCache, repairInvalidModelCacheDateRows, repairOversizedModelCacheRows } from './model-cache'
 import { assessGpuExecutionEvidence, assessGpuStepCompletion, buildAutonomousPreparationCommand, buildDeterministicGpuExperimentCommand, extractPersistablePreparationManifest, extractStrictGpuCommand, selectGpuSubmissionCommand, shouldRouteStageThroughGpu, shouldShortCircuitGpuContractFailure, shouldUseAutonomousPreparationFallback, stepRequestsPreparation } from './gpu-command-contract'
 import { buildPreparationManifestInstructions, buildPreparationRetryMessage, extractPreparationManifestCandidate, validatePreparationManifest } from './preparation-manifest'
 import fs from 'fs'
@@ -2540,6 +2540,7 @@ async function ensureModelsDownloaded(
   // Step 3: Confirm directly against Prisma instead of calling authenticated API routes.
   debugLog(`[ensureModelsDownloaded] Confirming model-cache status in DB...`)
   await repairOversizedModelCacheRows()
+  await repairInvalidModelCacheDateRows()
 
   while (Date.now() - startTime < TIMEOUT_MS) {
     const entries = await prisma.modelCache.findMany({
