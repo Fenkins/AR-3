@@ -1933,6 +1933,20 @@ export function selectGpuSubmissionCommand(input: GpuSubmissionInput): GpuSubmis
   const extractedFailureReason = strictGpuFailureReason(extracted)
 
   if (existingManifest) {
+    if (extracted.ok && /\[CODE QUALITY WARNING\]/i.test(input.llmResponse)) {
+      return {
+        ok: true,
+        command: buildDeterministicGpuExperimentCommand({
+          researchGoal: input.researchGoal,
+          stepDescription: input.stepDescription,
+          stageName: input.stageName,
+          reason: 'GPU code quality warning indicated setup-only or underspecified executable output',
+          preparationManifest: existingManifest,
+        }),
+        fallbackUsed: false,
+        reason: 'selected deterministic GPU experiment from preparation manifest because code quality warning flagged weak setup-only output',
+      }
+    }
     if (!extracted.ok || (extracted.ok && looksLikePreparationManifestWrapper(extracted.command))) {
       return {
         ok: true,

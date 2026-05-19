@@ -1093,6 +1093,33 @@ function testGpuStepCompletionAcceptsTrainingHardwareLimitEvidence() {
   assert.equal(assessed.valid, true, assessed.reason)
 }
 
+function testGpuEnabledStageCodeQualityWarningPromotesToDeterministicFallback() {
+  const selected = contract.selectGpuSubmissionCommand({
+    stageName: 'Testing',
+    researchGoal: 'Measure latent gasket improvements for LLaDA inference.',
+    stepDescription: 'Compare output against a control with concrete metrics.',
+    llmResponse: JSON.stringify({
+      action: 'run_python',
+      dependencies: ['torch'],
+      code: 'import json\nimport torch\nprint(json.dumps({"cuda_available": torch.cuda.is_available()}))',
+    }) + '\n\n[CODE QUALITY WARNING] LLM response contains only 3 lines with code indicators but stage is GPU-enabled.',
+    preparationManifest: {
+      schemaVersion: 'ar3.preparation-manifest.v1',
+      researchType: 'gpu-autonomous-research',
+      objective: 'Run deterministic GPU experiment rescue.',
+      models: [{ id: 'GSAI-ML/LLaDA-8B-Base', source: 'huggingface', required: true }],
+      dependencies: [{ name: 'torch', importName: 'torch' }],
+      resources: [{ kind: 'gpu', name: 'cuda', required: true }],
+      smokeTests: [{ expectedEvidence: ['cuda_available'] }],
+      gradingCriteria: ['metrics evidence'],
+      workbench: { reuseKey: 'llada-rescue', expectedArtifacts: ['deterministic_gpu_experiment_metrics.json'] },
+    },
+  })
+  assert.equal(selected.ok, true)
+  assert.match(selected.command.code, /deterministic_gpu_experiment/)
+  assert.match(selected.reason, /code quality warning/i)
+}
+
 testExtractsJsonAfterUnclosedThink()
 testFallbackPreparationCommandIsExecutableAndPromptIndependent()
 testPreparationStageWithValidatedManifestSubmitsExecutableFallbackInsteadOfRawManifestJson()
@@ -1143,6 +1170,7 @@ testDeterministicExperimentCriteriaEvidenceRejectsForgedKeys()
 testDeterministicExperimentCriteriaEvidenceRejectsEmptyValues()
 testDeterministicExperimentCriteriaEvidenceRejectsUnsatisfiedThreshold()
 testDeterministicExperimentCriteriaEvidenceAcceptsSatisfiedThreshold()
+testGpuEnabledStageCodeQualityWarningPromotesToDeterministicFallback()
 testPreparationStagesShortCircuitWeakModelContractFailures()
 testGpuStepCompletionRejectsProseWithoutExecutionResult()
 testGpuStepCompletionRejectsGpuError()
