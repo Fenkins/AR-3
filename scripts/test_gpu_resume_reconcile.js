@@ -75,6 +75,19 @@ assert.equal(
   false,
 )
 
+
+const recoverStart = fullSource.indexOf('async function recoverStaleRunningStepsWithoutGpuJobs')
+const recoverEnd = fullSource.indexOf('async function recoverStaleRunningVariantsWithoutActiveSteps', recoverStart)
+const recoverSource = fullSource.slice(recoverStart, recoverEnd)
+assert.ok(
+  /VariantStep:\s*\{\s*some:\s*\{\s*status:\s*'RUNNING'\s*\}\s*\}/.test(recoverSource),
+  'stale-step recovery must scan any non-terminal variant containing a RUNNING step, not only variants marked RUNNING',
+)
+assert.ok(
+  !/where:\s*\{\s*spaceId,\s*status:\s*'RUNNING'\s*\}/.test(recoverSource),
+  'stale-step recovery must not skip PENDING variants that contain interrupted RUNNING steps',
+)
+
 assert.equal(
   runningStepHasTerminalGpuResult({
     status: 'RUNNING',

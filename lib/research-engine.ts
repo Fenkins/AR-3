@@ -320,10 +320,14 @@ async function recoverStaleRunningStepsWithoutGpuJobs(spaceId: string): Promise<
   const gpuJobDelegate = (prisma as any).gpuJob
   if (!gpuJobDelegate) return 0
 
-  const runningVariants = await prisma.variant.findMany({
-    where: { spaceId, status: 'RUNNING' },
+  const runningVariants = (await prisma.variant.findMany({
+    where: {
+      spaceId,
+      NOT: { status: { in: ['COMPLETED', 'FAILED'] } },
+      VariantStep: { some: { status: 'RUNNING' } },
+    },
     include: { VariantStep: { orderBy: { order: 'asc' } } },
-  })
+  })).filter(variantMayContainRecoverableRunningStep)
   let recovered = 0
 
   for (const variant of runningVariants) {
