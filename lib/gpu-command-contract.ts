@@ -9,18 +9,14 @@ export function stepRequestsPreparation(stepDescription: string | undefined | nu
 }
 
 const GPU_SPACE_ROUTED_STAGES = new Set([
-  'Investigation',
-  'Proposition',
-  'Planning',
   'Implementation',
   'Testing',
   'Verification',
 ])
 
 export function shouldRouteStageThroughGpu(stageName: string, stageGpuEnabled: boolean | undefined, spaceUseGpu: boolean | undefined | null): boolean {
-  return Boolean(spaceUseGpu && (stageGpuEnabled || GPU_SPACE_ROUTED_STAGES.has(stageName)))
+  return Boolean(spaceUseGpu && GPU_SPACE_ROUTED_STAGES.has(stageName))
 }
-
 function isDeterministicGpuContractFailure(reason: string): boolean {
   const normalized = String(reason || '').toLowerCase()
   return [
@@ -123,8 +119,8 @@ export function assessGpuStepCompletion(content: string, input: GpuStepCompletio
     parsedOutput?.contract_failure_reason,
   )
   if (isPreparationProbe) {
-    const stepRequestsPreparation = /\b(prepare|preparation|setup|set up|set-up)\b/.test(stepText)
-    if (!stepRequestsPreparation) {
+    const preparationRequested = stepRequestsPreparation(stepText)
+    if (!preparationRequested) {
       return {
         valid: false,
         reason: 'GPU execution produced only an autonomous preparation probe; this is not task-specific experiment evidence for the requested step.',

@@ -457,7 +457,7 @@ IMPORTANT: Every step must produce REAL code that runs. If your code fails, that
 Your goal is to discover how LLaDA's latent space works through direct experimentation, not through literature review or description.`,
     order: 0,
     isActive: true,
-    gpuEnabled: true,
+    gpuEnabled: false,
   },
   {
     name: 'Proposition',
@@ -1336,11 +1336,15 @@ ${useGpu && shouldUseAutonomousPreparationFallback(stageName) ? `## Preparation 
             stepDescription: step.description,
             preparationManifest: preparationManifestForRescue,
           })
-          if (selectedSubmission.ok && selectedSubmission.fallbackUsed) {
-            debugLog(`[executeVariant] Preparation-stage GPU command was a weak wrapper; submitting autonomous preparation fallback: ${selectedSubmission.reason}`)
-            gpuSubmissionUsedFallback = true
+          if (selectedSubmission.ok) {
+            debugLog(`[executeVariant] Preparation-capable GPU stage selected submission command: ${selectedSubmission.reason}`)
+            gpuSubmissionUsedFallback = selectedSubmission.fallbackUsed
             strictCommand = { ok: true, command: selectedSubmission.command }
-            variant.failureMode = 'GPU_CONTRACT_FALLBACK_PREPARATION'
+            if (selectedSubmission.fallbackUsed) {
+              variant.failureMode = 'GPU_CONTRACT_FALLBACK_PREPARATION'
+            } else if (/deterministic GPU experiment/i.test(selectedSubmission.reason)) {
+              variant.failureMode = 'GPU_CONTRACT_DETERMINISTIC_EXPERIMENT_FALLBACK'
+            }
           }
         }
 

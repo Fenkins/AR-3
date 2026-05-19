@@ -85,18 +85,19 @@ function testAutonomousPreparationFallbackIsLimitedToPreparationStages() {
   assert.equal(contract.shouldUseAutonomousPreparationFallback('Testing'), false)
 }
 
-function testGpuEnabledSpaceRoutesAllResearchStagesThroughGpu() {
-  assert.equal(contract.shouldRouteStageThroughGpu('Planning', false, true), true)
-  assert.equal(contract.shouldRouteStageThroughGpu('Investigation', false, true), true)
-  assert.equal(contract.shouldRouteStageThroughGpu('Investigation', true, true), true)
-  assert.equal(contract.shouldRouteStageThroughGpu('Proposition', false, true), true)
+function testGpuEnabledSpaceRoutesOnlyExecutableStagesThroughGpu() {
+  assert.equal(contract.shouldRouteStageThroughGpu('Investigation', false, true), false)
+  assert.equal(contract.shouldRouteStageThroughGpu('Investigation', true, true), false)
+  assert.equal(contract.shouldRouteStageThroughGpu('Proposition', false, true), false)
+  assert.equal(contract.shouldRouteStageThroughGpu('Proposition', true, true), false)
+  assert.equal(contract.shouldRouteStageThroughGpu('Planning', false, true), false)
+  assert.equal(contract.shouldRouteStageThroughGpu('Planning', true, true), false)
   assert.equal(contract.shouldRouteStageThroughGpu('Implementation', false, true), true)
   assert.equal(contract.shouldRouteStageThroughGpu('Implementation', true, true), true)
   assert.equal(contract.shouldRouteStageThroughGpu('Testing', true, true), true)
   assert.equal(contract.shouldRouteStageThroughGpu('Verification', false, true), true)
-  assert.equal(contract.shouldRouteStageThroughGpu('Planning', false, false), false)
+  assert.equal(contract.shouldRouteStageThroughGpu('Implementation', true, false), false)
 }
-
 function testFallbackUsesWorkerProvidedWorkbenchDirectory() {
   const fallback = contract.buildAutonomousPreparationCommand({
     researchGoal: 'Any arbitrary model research goal',
@@ -1106,6 +1107,19 @@ function testGpuStepCompletionAcceptsModelDownloadArtifactEvidence() {
   assert.equal(assessed.valid, true, assessed.reason)
 }
 
+
+function testModelCachePreparationProbeCompletionAcceptsDownloadStep() {
+  const assessed = contract.assessGpuStepCompletion(
+    '[GPU Execution Result] job:gpu_test_123\n' + JSON.stringify({
+      type: 'autonomous_preparation_manifest',
+      gpu: { cuda_available: true },
+      model_resolution: { ok: true, local_dir: '/workbench/model_cache/llada', downloaded_files: ['model.safetensors'] },
+    }),
+    { stepDescription: 'Download and cache model weights, verify checksum, and record snapshot metadata.' },
+  )
+  assert.equal(assessed.valid, true, assessed.reason)
+}
+
 function testGpuStepCompletionRejectsGenericMetricsForTrainingStep() {
   const assessed = contract.assessGpuStepCompletion(
     '[GPU Execution Result] job:gpu_test_123\n{"cuda_available":true,"gpu_name":"RTX 2060 SUPER","tensor_sum":42}',
@@ -1158,7 +1172,7 @@ testExtractsJsonAfterUnclosedThink()
 testFallbackPreparationCommandIsExecutableAndPromptIndependent()
 testPreparationStageWithValidatedManifestSubmitsExecutableFallbackInsteadOfRawManifestJson()
 testAutonomousPreparationFallbackIsLimitedToPreparationStages()
-testGpuEnabledSpaceRoutesAllResearchStagesThroughGpu()
+testGpuEnabledSpaceRoutesOnlyExecutableStagesThroughGpu()
 testFallbackUsesWorkerProvidedWorkbenchDirectory()
 testAutonomousPreparationFallbackIsAcceptedForPreparationStages()
 testAutonomousPreparationFallbackAcceptsWorkerPrefixedOutput()
