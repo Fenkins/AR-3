@@ -191,7 +191,7 @@ def sync_model_cache_row(space_id: str, model_id: str, local_dir: str, source: s
     download_url = f'https://huggingface.co/{model_id}' if source == 'huggingface' else None
     file_size = _dir_size_bytes(path) if path.is_dir() else (path.stat().st_size if path.exists() else 0)
     now_iso = datetime.now().isoformat()
-    description = f'GPU worker resolved {source} model artifact; model_id={model_id}'
+    description = f'GPU worker resolved {source} model artifact; model_id={model_id}; actual_size_bytes={int(file_size)}'
     try:
         con = sqlite3.connect(str(db_path), timeout=5)
         try:

@@ -512,7 +512,7 @@ def test_resolved_manifest_model_is_mirrored_to_model_cache_db(monkeypatch, tmp_
     )
 
     con = sqlite3.connect(db)
-    row = con.execute("SELECT spaceId, fileName, filePath, fileSize, downloadUrl, status FROM ModelCache").fetchone()
+    row = con.execute("SELECT spaceId, fileName, filePath, fileSize, downloadUrl, status, description FROM ModelCache").fetchone()
     con.close()
 
     assert row == (
@@ -522,6 +522,7 @@ def test_resolved_manifest_model_is_mirrored_to_model_cache_db(monkeypatch, tmp_
         9,
         "https://huggingface.co/GSAI-ML/LLaDA-8B-Base",
         "COMPLETED",
+        "GPU worker resolved huggingface model artifact; model_id=GSAI-ML/LLaDA-8B-Base; actual_size_bytes=9",
     )
 
 
