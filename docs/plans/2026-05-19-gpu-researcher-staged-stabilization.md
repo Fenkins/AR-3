@@ -25,6 +25,20 @@ The overnight run revealed drift: GPU execution had been routed through Investig
 Implementation note: `shouldRouteStageThroughGpu` must deny GPU to Investigation/Proposition/Planning even if stale/default stage config says `gpuEnabled: true`. Only Implementation, Testing, and Verification may be space-GPU-routed.
 
 
+## Product loop target: variant-driven autonomous research cycles
+
+The target product is not a one-shot prompt runner. It is a fast idea-to-evidence loop:
+
+1. **Variant generation:** For each cycle, generate the configured number of idea variants quickly in the non-GPU reasoning path.
+2. **Proposition formation:** Turn the best directions into a small set of falsifiable propositions with explicit measurable claims.
+3. **Planning handoff:** Convert propositions into executable experiment plans, dependencies, success metrics, and expected artifacts.
+4. **GPU execution:** Spend the expensive wall-clock time only on Implementation, Testing, and Verification jobs. The GPU training/experiment run is expected to be the longest part of the cycle.
+5. **Evaluation:** Grade results against proposition claims, capture artifacts/metrics/failure causes, and decide what was learned.
+6. **Carry-forward memory:** Feed lessons, winning variants, failed assumptions, metrics, and artifact references into the next cycle so each loop becomes more informed rather than restarting from scratch.
+
+Design implication: optimize the non-GPU stages for breadth and speed, optimize GPU stages for strict executable evidence, and make Evaluation the bridge that turns one cycle's results into the next cycle's Investigation context.
+
+
 ## Multi-call code synthesis policy for executable stages
 
 Restoring stage separation does **not** mean executable stages must be one-shot. The correct behavior is:
