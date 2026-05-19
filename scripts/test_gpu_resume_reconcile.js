@@ -30,6 +30,7 @@ const {
   assessGpuStepCompletion,
   formatCompletedGpuJobStepResult,
   mergeGpuStepResultForPersistence,
+  formatPolledGpuJobStepResult,
   gpuJobMatchesRunningStep,
   runningVariantIsStaleWithoutActiveStep,
   runningStepIsStaleWithoutGpuJob,
@@ -57,6 +58,26 @@ assert.match(resultText, /\[OUTPUT\]\n\{"cuda_available":true/)
 assert.ok(!resultText.startsWith('{"action":"run_python"'), 'step result should not start with raw run_python command JSON')
 assert.ok(resultText.indexOf('[GPU Execution Result]') < resultText.indexOf('[CODE]'), 'status marker should come before code so UI cards show useful status')
 assert.equal(assessGpuStepCompletion(resultText).valid, true)
+
+
+const failedPollText = formatPolledGpuJobStepResult({
+  status: 'failed_runtime',
+  error: 'IndexError: too many indices for tensor of dimension 3',
+  result: {
+    success: false,
+    jobId: 'gpu_space_failed',
+    code: 'import torch\nprint(torch.cuda.is_available())',
+    output: '{"cuda_available":true,"attempted_real_gpu_work":true}',
+    error: 'Traceback (most recent call last):\nIndexError: too many indices for tensor of dimension 3',
+  },
+}, 'gpu_space_failed')
+assert.match(failedPollText, /\[GPU Execution Error\] job:gpu_space_failed: IndexError: too many indices/)
+assert.match(failedPollText, /\[CODE\]\nimport torch/)
+assert.match(failedPollText, /\[OUTPUT\]\n\{\"cuda_available\":true/)
+assert.ok(
+  !/^\[GPU Error\]: undefined/.test(failedPollText),
+  'failed runtime polling must preserve worker result details instead of collapsing to an undefined generic GPU error',
+)
 
 
 assert.equal(

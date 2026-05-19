@@ -83,13 +83,33 @@ export function formatCompletedGpuJobStepResult(job: { jobId: string; prompt?: s
     return null
   }
   if (!result || typeof result !== 'object') return null
-  const code = typeof result.code === 'string' ? result.code : ''
-  const codeBlock = code ? `\n[CODE]\n${code}\n[/CODE]` : ''
-  const outputBlock = typeof result.output === 'string' && result.output.trim() ? `\n[OUTPUT]\n${result.output.trim()}` : ''
-  return result.success
-    ? `[GPU Execution Result] job:${result.jobId || job.jobId}${codeBlock}${outputBlock}`
-    : `[GPU Execution Error] job:${result.jobId || job.jobId}: ${summarizeGpuRuntimeError(result.error)}${codeBlock}${outputBlock}`
+  return formatGpuWorkerResultForStep(result, job.jobId, Boolean(result.success))
 
+}
+
+function formatGpuWorkerResultForStep(result: any, fallbackJobId: string, success: boolean): string {
+  const code = typeof result?.code === 'string' ? result.code : ''
+  const codeBlock = code ? `
+[CODE]
+${code}
+[/CODE]` : ''
+  const outputBlock = typeof result?.output === 'string' && result.output.trim() ? `
+[OUTPUT]
+${result.output.trim()}` : ''
+  const jobId = result?.jobId || fallbackJobId
+  return success
+    ? `[GPU Execution Result] job:${jobId}${codeBlock}${outputBlock}`
+    : `[GPU Execution Error] job:${jobId}: ${summarizeGpuRuntimeError(result?.error)}${codeBlock}${outputBlock}`
+}
+
+export function formatPolledGpuJobStepResult(statusData: any, fallbackJobId: string): string {
+  const result = statusData?.result && typeof statusData.result === 'object' ? statusData.result : {}
+  const completed = statusData?.status === 'completed' && result.success !== false
+  return formatGpuWorkerResultForStep(
+    { ...result, error: result.error ?? statusData?.error },
+    fallbackJobId,
+    completed,
+  )
 }
 
 function summarizeGpuRuntimeError(error: unknown): string {
@@ -1530,15 +1550,7 @@ ${useGpu && shouldUseAutonomousPreparationFallback(stageName) ? `## Preparation 
               if (statusRes.ok) {
                 const statusData = await statusRes.json()
                 if (statusData.status === 'completed') {
-                  const completedJobId = statusData.result.jobId || jobId
-                  const code = statusData.result.code || ''
-                  const codeBlock = code ? `\n[CODE]\n${code}\n[/CODE]` : ''
-                  const outputBlock = typeof statusData.result.output === 'string' && statusData.result.output.trim()
-                    ? `\n[OUTPUT]\n${statusData.result.output.trim()}`
-                    : ''
-                  gpuResult = statusData.result.success
-                    ? `[GPU Execution Result] job:${completedJobId}${codeBlock}${outputBlock}`
-                    : `[GPU Execution Error] job:${completedJobId}: ${statusData.result.error}${codeBlock}${outputBlock}`
+                  gpuResult = formatPolledGpuJobStepResult(statusData, jobId)
                   const evidence = assessGpuExecutionEvidence({
                     stageName,
                     fallbackUsed: gpuSubmissionUsedFallback,
@@ -1571,7 +1583,7 @@ ${useGpu && shouldUseAutonomousPreparationFallback(stageName) ? `## Preparation 
                   debugLog(`[executeVariant] GPU job completed`)
                   break
                 } else if (statusData.status === 'failed' || statusData.status === 'failed_runtime' || statusData.status === 'failed_validation') {
-                  gpuResult = `[GPU Error]: ${statusData.error}`
+                  gpuResult = formatPolledGpuJobStepResult(statusData, jobId)
                   break
                 }
               }
