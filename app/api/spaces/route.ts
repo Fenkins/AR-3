@@ -4,6 +4,7 @@ import { prisma } from '@/lib/prisma'
 import { normalizeSpaceForClient } from '@/lib/space-api-shape'
 import { startSpace } from '@/lib/research-engine'
 import { getCacheEntrySizeBytes, getSpaceCacheDiskSize, repairOversizedModelCacheRows } from '@/lib/model-cache'
+import { resolveStrictCodeGatesForSpaceCreate } from '@/lib/space-defaults'
 
 export async function GET(request: NextRequest) {
   try {
@@ -115,7 +116,7 @@ export async function POST(request: NextRequest) {
         useEmbeddings: useEmbeddings || false,
         useGpu: useGpu || false,
         useSystemRamOffload: useSystemRamOffload || false,
-        strictCodeGates: strictCodeGates || false,
+        strictCodeGates: resolveStrictCodeGatesForSpaceCreate({ useGpu, strictCodeGates }),
         defaultNumVariants: Math.max(1, Math.min(10, numVariants || 3)),
         defaultStepsPerVariant: Math.max(3, Math.min(100, stepsPerVariant || 25)),
         numVariantsMode: numVariantsMode || 'fixed',

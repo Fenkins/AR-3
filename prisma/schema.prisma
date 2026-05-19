@@ -178,7 +178,7 @@ model Space {
   useEmbeddings          Boolean        @default(false)
   useGpu                 Boolean        @default(false)
   useSystemRamOffload    Boolean        @default(false)
-  strictCodeGates        Boolean        @default(false)  // If true, fail early-stage variants with no code indicators
+  strictCodeGates        Boolean        @default(true)   // Fail closed for GPU spaces unless explicitly disabled
   currentCycle           Int            @default(1)
   researchType           String?        // e.g. "diffusion_model", "autoregressive", "multi_model_ensemble"
   targetModelIds         String?        // JSON array of HuggingFace model IDs, e.g. ["Qwen/Qwen2.5-1.5B", "GSAI-ML/LLaDA-8B-Base"]

@@ -20,6 +20,18 @@ function loadTs(relativePath) {
 
 const { normalizeSpaceForClient, normalizeVariantForClient } = loadTs('lib/space-api-shape.ts')
 const { removeSpaceWorkbenchDirs } = loadTs('lib/space-cleanup.ts')
+const { resolveStrictCodeGatesForSpaceCreate } = loadTs('lib/space-defaults.ts')
+
+{
+  assert.equal(resolveStrictCodeGatesForSpaceCreate({ useGpu: true }), true, 'GPU spaces must default strict code gates on')
+  assert.equal(resolveStrictCodeGatesForSpaceCreate({ useGpu: true, strictCodeGates: false }), false, 'explicit user opt-out must be preserved')
+  assert.equal(resolveStrictCodeGatesForSpaceCreate({ useGpu: false }), false, 'non-GPU spaces keep strict gates off by default')
+}
+
+{
+  const schema = fs.readFileSync(path.join(__dirname, '..', 'prisma/schema.prisma'), 'utf8')
+  assert.match(schema, /strictCodeGates\s+Boolean\s+@default\(true\)/, 'schema default should fail closed for strict code gates')
+}
 
 {
   const dbVariant = {
