@@ -10,6 +10,7 @@ import { getInternalGpuApiBase } from './internal-api-base'
 import { removeSpaceWorkbenchDirs } from './space-cleanup'
 import { buildFallbackThinkingSetupResponse } from './thinking-setup'
 import { assessDeadLoop } from './dead-loop-detector'
+import { buildResearchMemoryContext } from './research-memory'
 
 const logFile = '/tmp/ar1_debug.log'
 function debugLog(...args: any[]) {
@@ -1839,7 +1840,7 @@ async function generateStagePrompt(space: any, stage: ResearchStage, previousExp
     ? `\n\n## Mandatory Preparation Manifest\n${buildPreparationManifestInstructions(space.initialPrompt)}\nThe next GPU Implementation stage is blocked until this manifest validates. Be concrete: no vague dependencies, no HuggingFace path fragments, include executable smoke tests and expected evidence.\n`
     : ''
 
-  const fullPrompt = `${activePrompt}${contextFromPrevious}${embeddingContext}${preparationContext}
+  const fullPrompt = `${activePrompt}${contextFromPrevious}${embeddingContext}${buildResearchMemoryContext(space)}${preparationContext}
 
 Research Goal: ${space.initialPrompt}
 

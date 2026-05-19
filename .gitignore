@@ -60,3 +60,6 @@ sandboxes/
 model_cache/
 prisma/prisma/
 /tmp/
+# Runtime per-space research memory
+spaces/
+
