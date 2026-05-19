@@ -8,6 +8,23 @@ import crypto from 'crypto'
 const CACHE_BASE_DIR = '/opt/AR-3/model_cache'
 const PRISMA_INT_MAX = 2147483647
 
+export function clampModelCacheFileSize(size: number | bigint | null | undefined): number {
+  const numericSize = Number(size || 0)
+  if (!Number.isFinite(numericSize) || numericSize <= 0) return 0
+  return Math.min(Math.floor(numericSize), PRISMA_INT_MAX)
+}
+
+export async function repairOversizedModelCacheRows(): Promise<number> {
+  try {
+    return await prisma.$executeRawUnsafe(
+      `UPDATE "ModelCache" SET "fileSize" = ${PRISMA_INT_MAX} WHERE "fileSize" > ${PRISMA_INT_MAX}`
+    )
+  } catch (err) {
+    console.warn(`[ModelCache] Failed to repair oversized fileSize rows: ${redactSecrets(err)}`)
+    return 0
+  }
+}
+
 export interface CacheEntry {
   id: string
   spaceId: string
@@ -86,6 +103,7 @@ export function getCacheEntrySizeBytes(entry: { filePath: string; fileSize: numb
 
 export async function addToCache(options: AddCacheOptions): Promise<CacheEntry> {
   const { spaceId, fileName, downloadUrl, description, expectedChecksum } = options
+  await repairOversizedModelCacheRows()
 
   ensureSpaceDir(spaceId)
   let filePath = path.join(getSpaceCacheDir(spaceId), fileName)
@@ -110,7 +128,7 @@ export async function addToCache(options: AddCacheOptions): Promise<CacheEntry> 
       where: { id: existing.id },
       data: {
         filePath: existing.filePath,
-        fileSize: Math.min(actualSize || Number(existing.fileSize || 0), PRISMA_INT_MAX),
+        fileSize: clampModelCacheFileSize(actualSize || existing.fileSize),
         description: descriptionWithActualSize,
         status: 'COMPLETED',
       },
@@ -191,7 +209,7 @@ export async function addToCache(options: AddCacheOptions): Promise<CacheEntry> 
 
     await prisma.modelCache.update({
       where: { id: entry.id },
-      data: { filePath, fileSize: Math.min(fileSize, PRISMA_INT_MAX), checksum, description: descriptionWithActualSize, status: 'COMPLETED' },
+      data: { filePath, fileSize: clampModelCacheFileSize(fileSize), checksum, description: descriptionWithActualSize, status: 'COMPLETED' },
     })
 
     return {
@@ -212,6 +230,7 @@ export async function addToCache(options: AddCacheOptions): Promise<CacheEntry> 
 }
 
 export async function getSpaceCache(spaceId: string): Promise<CacheEntry[]> {
+  await repairOversizedModelCacheRows()
   const entries = await prisma.modelCache.findMany({
     where: { spaceId },
     orderBy: { createdAt: 'asc' },
@@ -225,6 +244,7 @@ export async function getSpaceCache(spaceId: string): Promise<CacheEntry[]> {
 }
 
 export async function getSpaceCacheSize(spaceId: string): Promise<number> {
+  await repairOversizedModelCacheRows()
   const entries = await prisma.modelCache.findMany({
     where: { spaceId, status: 'COMPLETED' },
     select: { filePath: true, fileSize: true },

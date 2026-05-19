@@ -3,7 +3,7 @@ import { authMiddleware } from '../middleware'
 import { prisma } from '@/lib/prisma'
 import { normalizeSpaceForClient } from '@/lib/space-api-shape'
 import { startSpace } from '@/lib/research-engine'
-import { getCacheEntrySizeBytes, getSpaceCacheDiskSize } from '@/lib/model-cache'
+import { getCacheEntrySizeBytes, getSpaceCacheDiskSize, repairOversizedModelCacheRows } from '@/lib/model-cache'
 
 export async function GET(request: NextRequest) {
   try {
@@ -51,6 +51,7 @@ export async function GET(request: NextRequest) {
     // Get cache sizes for completed cache artifacts only. Failed download rows
     // are useful diagnostics, but showing them as "0 B files" makes the UI look
     // like empty artifacts were prepared.
+    await repairOversizedModelCacheRows()
     const allCaches = await prisma.modelCache.findMany({
       select: { spaceId: true, filePath: true, fileSize: true, status: true },
     })
