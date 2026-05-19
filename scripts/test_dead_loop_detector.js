@@ -15,7 +15,49 @@ m.filename = sourcePath
 m.paths = Module._nodeModulePaths(path.dirname(sourcePath))
 m._compile(compiled, sourcePath)
 
-const { assessDeadLoop, variantFailureSignature, variantProgressSignature, variantCodeSignature } = m.exports
+const { assessDeadLoop, variantFailureSignature, variantProgressSignature, variantCodeSignature, shouldRegenerateTerminalFailedStage } = m.exports
+
+
+assert.equal(typeof shouldRegenerateTerminalFailedStage, 'function', 'dead-loop detector must export terminal-failed regeneration policy')
+assert.equal(
+  shouldRegenerateTerminalFailedStage([
+    { id: 'v1', stageId: 'stage_3', status: 'FAILED', failureMode: 'GPU_COMPLETION_INVALID', steps: [
+      { status: 'FAILED', result: '[GPU COMPLETION INVALID]: Required model manifest evidence was missing a concrete local artifact/load attempt.' },
+    ]},
+    { id: 'v2', stageId: 'stage_3', status: 'FAILED', failureMode: 'GPU_CONTRACT', steps: [
+      { status: 'FAILED', result: '[GPU CONTRACT FAILED]: Completed step contained prose/thinking text instead of strict executable GPU evidence.' },
+    ]},
+  ], 'stage_3'),
+  true,
+  'terminal GPU-contract/model-evidence failures with steps should regenerate instead of pausing the space as a dead loop',
+)
+assert.equal(
+  shouldRegenerateTerminalFailedStage([
+    { id: 'v1', stageId: 'stage_3', status: 'FAILED', failureMode: 'PROVIDER_AUTH', steps: [
+      { status: 'FAILED', result: 'Provider API key is invalid' },
+    ]},
+  ], 'stage_3'),
+  false,
+  'non-GPU-contract failures should still flow to dead-loop pause instead of blind regeneration',
+)
+assert.equal(
+  shouldRegenerateTerminalFailedStage([
+    { id: 'v1', stageId: 'stage_3', status: 'FAILED', failureMode: 'PROVIDER_AUTH', steps: []},
+  ], 'stage_3'),
+  false,
+  'zero-step non-GPU failures must not be treated as strict GPU contract invalidations',
+)
+assert.equal(
+  shouldRegenerateTerminalFailedStage([
+    { id: 'v1', stageId: 'stage_3', status: 'FAILED', failureMode: 'GPU_COMPLETION_INVALID', steps: [
+      { status: 'FAILED', result: '[GPU COMPLETION INVALID]: Required model manifest evidence was missing a concrete local artifact/load attempt.' },
+      { status: 'FAILED', result: 'Provider API key is invalid' },
+    ]},
+  ], 'stage_3'),
+  false,
+  'mixed GPU and non-GPU failed steps must not blindly regenerate because the non-GPU failure needs operator/provider handling',
+)
+
 
 const repeatedFailure = (id, suffix = '') => ({
   id,

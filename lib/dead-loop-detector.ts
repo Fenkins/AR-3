@@ -883,6 +883,48 @@ export function variantCodeSignature(variant: VariantLike): string | null {
   return null
 }
 
+
+function textIsGpuContractTerminalFailure(value: string): boolean {
+  const haystack = String(value || '').toLowerCase()
+  return /gpu[_ -]?(contract|completion|validation)/i.test(haystack)
+    || haystack.includes('[gpu contract failed]')
+    || haystack.includes('[gpu completion invalid]')
+    || haystack.includes('strict executable gpu evidence')
+    || haystack.includes('required model manifest evidence')
+    || haystack.includes('model_load_attempts')
+}
+
+function isGpuContractTerminalFailure(variant: VariantLike): boolean {
+  const haystack = [
+    variant.failureMode || '',
+    variant.feedback || '',
+    ...(Array.isArray(variant.steps)
+      ? variant.steps.map(step => [step.result, step.feedback].filter(Boolean).join('\n'))
+      : []),
+  ].join('\n')
+
+  return textIsGpuContractTerminalFailure(haystack)
+}
+
+export function shouldRegenerateTerminalFailedStage(
+  variants: VariantLike[],
+  stageId: string,
+): boolean {
+  const stageVariants = variants.filter(variant => variant.stageId === stageId)
+  if (stageVariants.length === 0) return false
+
+  return stageVariants.every(variant => {
+    const status = String(variant.status || '').toUpperCase()
+    if (!['FAILED', 'PENDING_REVIEW'].includes(status)) return false
+    const steps = Array.isArray(variant.steps) ? variant.steps : []
+    if (steps.length === 0) return isGpuContractTerminalFailure(variant)
+    return steps.every(step => {
+      if (String(step.status || '').toUpperCase() !== 'FAILED') return false
+      return textIsGpuContractTerminalFailure([step.result, step.feedback].filter(Boolean).join('\n'))
+    })
+  })
+}
+
 export function assessDeadLoop(
   variants: VariantLike[],
   stageId: string,

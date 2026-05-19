@@ -9,7 +9,7 @@ import fs from 'fs'
 import { getInternalGpuApiBase } from './internal-api-base'
 import { removeSpaceWorkbenchDirs } from './space-cleanup'
 import { buildFallbackThinkingSetupResponse } from './thinking-setup'
-import { assessDeadLoop } from './dead-loop-detector'
+import { assessDeadLoop, shouldRegenerateTerminalFailedStage } from './dead-loop-detector'
 import { buildResearchMemoryContext } from './research-memory'
 
 const logFile = '/tmp/ar1_debug.log'
@@ -780,11 +780,16 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
     let stageVariants = state.variants.filter(v => v.stageId === currentStage.id)
     const nonExecutableVariants = stageVariants.filter(v => (v.steps || []).length === 0)
     const shouldRegenerateStageVariants = stageVariants.length > 0
-      && nonExecutableVariants.length === stageVariants.length
-      && stageVariants.every(v => ['FAILED', 'PENDING_REVIEW'].includes(String(v.status || '').toUpperCase()))
+      && (
+        (
+          nonExecutableVariants.length === stageVariants.length
+          && stageVariants.every(v => ['FAILED', 'PENDING_REVIEW'].includes(String(v.status || '').toUpperCase()))
+        )
+        || shouldRegenerateTerminalFailedStage(state.variants, currentStage.id)
+      )
 
     if (shouldRegenerateStageVariants) {
-      debugLog(`[executeResearchCycle] Stage ${currentStage.name} only has failed zero-step variants; pruning and regenerating`)
+      debugLog(`[executeResearchCycle] Stage ${currentStage.name} only has terminal GPU-contract failures; pruning and regenerating`)
       const variantIds = stageVariants.map(v => v.id)
       await prisma.variantStep.deleteMany({ where: { variantId: { in: variantIds } } })
       await prisma.variant.deleteMany({ where: { id: { in: variantIds } } })
@@ -3030,8 +3035,10 @@ export function startBackgroundLoop(spaceId: string): void {
           const zeroStepFailures = currentStageVariants.filter(v =>
             (v.steps || []).length === 0 && ['FAILED', 'PENDING_REVIEW'].includes(String(v.status || '').toUpperCase())
           )
-          if (zeroStepFailures.length === currentStageVariants.length) {
-            debugLog(`[startBackgroundLoop] ${currentStage?.name} has only failed zero-step variants; pruning and regenerating current stage instead of advancing`)
+          const shouldRegenerateFailedStage = zeroStepFailures.length === currentStageVariants.length
+            || shouldRegenerateTerminalFailedStage(state.variants, currentStageId)
+          if (shouldRegenerateFailedStage) {
+            debugLog(`[startBackgroundLoop] ${currentStage?.name} has only terminal GPU-contract failures; pruning and regenerating current stage instead of advancing or pausing`)
             const variantIds = currentStageVariants.map(v => v.id)
             await prisma.variantStep.deleteMany({ where: { variantId: { in: variantIds } } })
             await prisma.variant.deleteMany({ where: { id: { in: variantIds } } })
