@@ -317,4 +317,6 @@ assert.match(fullSource, /validatePreparationManifest\(preparationManifestCandid
 
 assert.doesNotMatch(fullSource, /failing \$\{stageName\} step without deterministic fallback|failing .* step without deterministic fallback/, 'non-preparation GPU stage prose must be replaced by deterministic executable fallback even when preparation evidence is missing')
 
+assert.doesNotMatch(fullSource, /strictCommand\.ok && shouldUseAutonomousPreparationFallback\(stageName\)/, 'strict GPU command selection/reconciliation must run for Proposition/Implementation/Testing too, not only preparation-capable stages')
+
 console.log('gpu resume reconciliation tests passed')

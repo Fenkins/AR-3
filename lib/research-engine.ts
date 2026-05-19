@@ -1388,7 +1388,7 @@ ${useGpu && shouldUseAutonomousPreparationFallback(stageName) ? `## Preparation 
           }
         }
 
-        if (strictCommand.ok && shouldUseAutonomousPreparationFallback(stageName)) {
+        if (strictCommand.ok) {
           const selectedSubmission = selectGpuSubmissionCommand({
             llmResponse: response.content,
             stageName,
