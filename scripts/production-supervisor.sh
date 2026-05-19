@@ -28,7 +28,20 @@ is_running() {
 
 pid_for_pattern() {
   local pattern="$1"
-  pgrep -f "$pattern" | head -1 || true
+  local line pid cmd
+  while IFS= read -r line; do
+    pid="${line%% *}"
+    cmd="${line#* }"
+    if [ "$pid" = "$$" ] || [ "$pid" = "$PPID" ]; then
+      continue
+    fi
+    case "$cmd" in
+      *production-supervisor.sh*) continue ;;
+    esac
+    printf '%s\n' "$pid"
+    return 0
+  done < <(pgrep -af "$pattern" || true)
+  return 0
 }
 
 start_one() {
