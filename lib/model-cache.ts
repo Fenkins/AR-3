@@ -25,6 +25,57 @@ export async function repairOversizedModelCacheRows(): Promise<number> {
   }
 }
 
+
+export type SnapshotValidationResult = { ok: true } | { ok: false; reason: string }
+
+function findIncompleteDownloads(root: string): string[] {
+  const found: string[] = []
+  if (!fs.existsSync(root)) return found
+  const visit = (dir: string) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const child = path.join(dir, entry.name)
+      if (entry.isDirectory()) visit(child)
+      else if (entry.isFile() && entry.name.endsWith('.incomplete')) found.push(child)
+    }
+  }
+  visit(root)
+  return found
+}
+
+export function validateLoadableSnapshotPath(filePath: string): SnapshotValidationResult {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) return { ok: false, reason: 'snapshot_path_missing' }
+    const stat = fs.statSync(filePath)
+    const incomplete = stat.isDirectory() ? findIncompleteDownloads(filePath) : []
+    if (incomplete.length > 0) return { ok: false, reason: `incomplete_downloads=${incomplete.length}` }
+    const indexPath = stat.isDirectory() ? path.join(filePath, 'model.safetensors.index.json') : ''
+    if (!indexPath || !fs.existsSync(indexPath)) return { ok: true }
+    let parsed: any
+    try {
+      parsed = JSON.parse(fs.readFileSync(indexPath, 'utf8'))
+    } catch {
+      return { ok: false, reason: 'invalid_index=model.safetensors.index.json' }
+    }
+    const weightMap = parsed && typeof parsed === 'object' && parsed.weight_map && typeof parsed.weight_map === 'object'
+      ? parsed.weight_map
+      : {}
+    const shards = Array.from(new Set(Object.values(weightMap).map(String).filter(Boolean)))
+    const root = fs.realpathSync(filePath)
+    const unsafe = shards.filter(shard => {
+      if (path.isAbsolute(shard)) return true
+      const resolved = path.resolve(filePath, shard)
+      const relative = path.relative(root, resolved)
+      return relative.startsWith('..') || path.isAbsolute(relative)
+    })
+    if (unsafe.length > 0) return { ok: false, reason: `unsafe_shard_path=${unsafe.slice(0, 5).join(', ')}` }
+    const missing = shards.filter(shard => !fs.existsSync(path.join(filePath, shard)))
+    if (missing.length > 0) return { ok: false, reason: `missing_shards=${missing.length}: ${missing.slice(0, 5).join(', ')}` }
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, reason: `snapshot_validation_error=${redactSecrets(err)}` }
+  }
+}
+
 export interface CacheEntry {
   id: string
   spaceId: string
@@ -201,6 +252,11 @@ export async function addToCache(options: AddCacheOptions): Promise<CacheEntry> 
         fs.unlinkSync(filePath)
         throw new Error(`Checksum mismatch for ${fileName}: expected ${expectedChecksum}, got ${checksum}`)
       }
+    }
+
+    const snapshotValidation = validateLoadableSnapshotPath(filePath)
+    if (!snapshotValidation.ok) {
+      throw new Error(`Downloaded snapshot is not loadable: ${snapshotValidation.reason}`)
     }
 
     const descriptionWithActualSize = fileSize > PRISMA_INT_MAX
