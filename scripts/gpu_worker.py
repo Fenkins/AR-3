@@ -126,7 +126,7 @@ def update_prisma_gpu_job_status(job_id: str, status: str, result: dict = None, 
     db_path = _prisma_db_path()
     if not db_path.exists():
         return
-    now_iso = datetime.now().isoformat()
+    now_iso = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
     now_ms = int(time.time() * 1000)
     try:
         con = sqlite3.connect(str(db_path), timeout=5)
@@ -234,7 +234,7 @@ def sync_model_cache_row(space_id: str, model_id: str, local_dir: str, source: s
     file_size = _dir_size_bytes(path) if path.is_dir() else (path.stat().st_size if path.exists() else 0)
     db_file_size = _clamp_prisma_int(file_size)
     integrity_status, integrity_problems = _model_snapshot_integrity(path)
-    now_iso = datetime.now().isoformat()
+    now_iso = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
     description_parts = [f'GPU worker resolved {source} model artifact; model_id={model_id}; actual_size_bytes={int(file_size)}']
     if file_size > PRISMA_INT_MAX:
         description_parts.append('fileSize capped at Prisma Int max when artifact exceeds 2GiB')

@@ -512,10 +512,10 @@ def test_resolved_manifest_model_is_mirrored_to_model_cache_db(monkeypatch, tmp_
     )
 
     con = sqlite3.connect(db)
-    row = con.execute("SELECT spaceId, fileName, filePath, fileSize, downloadUrl, status, description FROM ModelCache").fetchone()
+    row = con.execute("SELECT spaceId, fileName, filePath, fileSize, downloadUrl, status, description, createdAt FROM ModelCache").fetchone()
     con.close()
 
-    assert row == (
+    assert row[:7] == (
         "space-123",
         "GSAI-ML_LLaDA-8B-Base",
         str(model_dir),
@@ -524,6 +524,8 @@ def test_resolved_manifest_model_is_mirrored_to_model_cache_db(monkeypatch, tmp_
         "COMPLETED",
         "GPU worker resolved huggingface model artifact; model_id=GSAI-ML/LLaDA-8B-Base; actual_size_bytes=9",
     )
+    assert "T" not in row[7], "ModelCache.createdAt must use Prisma-readable SQLite datetime format, not datetime.isoformat()"
+    assert row[7].count(":") >= 2
 
 
 
