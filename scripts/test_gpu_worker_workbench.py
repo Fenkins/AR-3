@@ -580,6 +580,74 @@ def test_required_model_without_smoke_test_does_not_block_research_execution():
 
 
 
+def test_manifest_model_local_dir_reuses_space_scoped_download_cache():
+    root = tempfile.mkdtemp(prefix="ar3-model-cache-reuse-")
+    old_cache_root = os.environ.get("AR3_MODEL_CACHE_ROOT")
+    try:
+        os.environ["AR3_MODEL_CACHE_ROOT"] = root
+        existing = Path(root) / "space-123" / "GSAI-ML_LLaDA-8B-Base"
+        existing.mkdir(parents=True)
+        (existing / "config.json").write_text("{}")
+        (existing / "model-00001-of-00001.safetensors").write_text("weights")
+        context = gpu_worker.prepare_workbench({"jobId": "gpu_space-123_1", "spaceId": "space-123"})
+
+        resolved = gpu_worker._manifest_model_local_dir("GSAI-ML/LLaDA-8B-Base", context)
+
+        assert resolved == existing
+    finally:
+        if old_cache_root is None:
+            os.environ.pop("AR3_MODEL_CACHE_ROOT", None)
+        else:
+            os.environ["AR3_MODEL_CACHE_ROOT"] = old_cache_root
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_manifest_model_local_dir_rejects_traversal_space_id():
+    root = tempfile.mkdtemp(prefix="ar3-model-cache-traversal-")
+    old_cache_root = os.environ.get("AR3_MODEL_CACHE_ROOT")
+    try:
+        os.environ["AR3_MODEL_CACHE_ROOT"] = root
+        outside = Path(root).parent / "escape" / "GSAI-ML_LLaDA-8B-Base"
+        outside.mkdir(parents=True)
+        (outside / "config.json").write_text("{}")
+        (outside / "model-00001-of-00001.safetensors").write_text("weights")
+        context = {"space_id": "../escape"}
+
+        resolved = gpu_worker._manifest_model_local_dir("GSAI-ML/LLaDA-8B-Base", context)
+
+        assert resolved.resolve() != outside.resolve()
+        assert resolved.resolve().is_relative_to(Path(root).resolve())
+    finally:
+        if old_cache_root is None:
+            os.environ.pop("AR3_MODEL_CACHE_ROOT", None)
+        else:
+            os.environ["AR3_MODEL_CACHE_ROOT"] = old_cache_root
+        shutil.rmtree(root, ignore_errors=True)
+        shutil.rmtree(Path(root).parent / "escape", ignore_errors=True)
+
+
+def test_manifest_model_local_dir_rejects_dot_space_id():
+    root = tempfile.mkdtemp(prefix="ar3-model-cache-dot-")
+    old_cache_root = os.environ.get("AR3_MODEL_CACHE_ROOT")
+    try:
+        os.environ["AR3_MODEL_CACHE_ROOT"] = root
+        root_level = Path(root) / "GSAI-ML_LLaDA-8B-Base"
+        root_level.mkdir(parents=True)
+        (root_level / "config.json").write_text("{}")
+        (root_level / "model-00001-of-00001.safetensors").write_text("weights")
+        context = {"space_id": "."}
+
+        resolved = gpu_worker._manifest_model_local_dir("GSAI-ML/LLaDA-8B-Base", context)
+
+        assert resolved.resolve() != root_level.resolve()
+    finally:
+        if old_cache_root is None:
+            os.environ.pop("AR3_MODEL_CACHE_ROOT", None)
+        else:
+            os.environ["AR3_MODEL_CACHE_ROOT"] = old_cache_root
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def test_required_huggingface_manifest_models_default_to_weight_artifacts():
     patterns = gpu_worker._manifest_model_allow_patterns({
         "id": "example/tiny-model",

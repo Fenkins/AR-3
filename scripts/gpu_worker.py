@@ -617,6 +617,7 @@ def prepare_workbench(job: dict) -> dict:
             'PYTORCH_CUDA_ALLOC_CONF': env.get('PYTORCH_CUDA_ALLOC_CONF') or 'expandable_segments:True',
         })
     return {
+        'space_id': str(job.get('spaceId') or ''),
         'workbench_dir': str(workbench),
         'packages_dir': str(packages_dir),
         'artifacts_dir': str(artifacts_dir),
@@ -1380,10 +1381,30 @@ def _manifest_model_cache_root(context: dict) -> Path:
 
 
 def _manifest_model_local_dir(model_id: str, context: dict) -> Path:
-    """Return a stable, collision-resistant local dir for a HuggingFace model id."""
+    """Return a stable local dir for a HuggingFace model id.
+
+    The Next.js pre-download path stores full snapshots at
+    model_cache/<spaceId>/<owner>_<repo>. Reuse that authoritative cache when it
+    already exists instead of downloading a second multi-GB copy into the
+    worker's hashed fallback path.
+    """
+    model_cache_root = _manifest_model_cache_root(context)
+    repo_key = str(model_id).strip().replace('/', '_')
+    space_id = str(context.get('space_id') or '').strip()
+    safe_space_id = bool(re_module.fullmatch(r'[A-Za-z0-9_.-]+', space_id)) and space_id not in {'.', '..'}
+    if safe_space_id and repo_key:
+        space_scoped = model_cache_root / space_id / repo_key
+        try:
+            space_scoped.resolve().relative_to(model_cache_root.resolve())
+        except Exception:
+            space_scoped = None
+        if space_scoped and space_scoped.exists() and (space_scoped / 'config.json').exists():
+            has_artifact = any(space_scoped.glob('*.safetensors')) or any(space_scoped.glob('pytorch_model*.bin'))
+            if has_artifact:
+                return space_scoped
     digest = hashlib.sha1(str(model_id).encode('utf-8')).hexdigest()[:10]
     slug = _safe_slug(str(model_id).replace('/', '-'), 'model')
-    return _manifest_model_cache_root(context) / f'{slug}-{digest}'
+    return model_cache_root / f'{slug}-{digest}'
 
 
 def resolve_manifest_models(manifest: dict, context: dict, timeout: int = 900) -> dict:
