@@ -85,12 +85,15 @@ function testAutonomousPreparationFallbackIsLimitedToPreparationStages() {
   assert.equal(contract.shouldUseAutonomousPreparationFallback('Testing'), false)
 }
 
-function testPreparationStagesRouteThroughGpuWhenSpaceGpuEnabled() {
+function testGpuEnabledSpaceRoutesAllResearchStagesThroughGpu() {
   assert.equal(contract.shouldRouteStageThroughGpu('Planning', false, true), true)
   assert.equal(contract.shouldRouteStageThroughGpu('Investigation', false, true), true)
-  assert.equal(contract.shouldRouteStageThroughGpu('Implementation', true, true), true)
-  assert.equal(contract.shouldRouteStageThroughGpu('Planning', false, false), false)
+  assert.equal(contract.shouldRouteStageThroughGpu('Investigation', true, true), true)
   assert.equal(contract.shouldRouteStageThroughGpu('Proposition', false, true), true)
+  assert.equal(contract.shouldRouteStageThroughGpu('Implementation', true, true), true)
+  assert.equal(contract.shouldRouteStageThroughGpu('Testing', true, true), true)
+  assert.equal(contract.shouldRouteStageThroughGpu('Verification', false, true), true)
+  assert.equal(contract.shouldRouteStageThroughGpu('Planning', false, false), false)
 }
 
 function testFallbackUsesWorkerProvidedWorkbenchDirectory() {
@@ -1026,12 +1029,14 @@ function testDeterministicExperimentFallbackPrioritizesModelRuntimeDepsWhenManif
   assert.ok(command.dependencies.length <= 12)
 }
 
-function testPreparationStagesShortCircuitWeakModelContractFailures() {
-  assert.equal(contract.shouldShortCircuitPreparationFallback('Investigation', 'response did not parse as the required JSON object'), true)
-  assert.equal(contract.shouldShortCircuitPreparationFallback('Planning', 'JSON action must be "run_python"'), true)
-  assert.equal(contract.shouldShortCircuitPreparationFallback('Investigation', 'code contains placeholder/pseudocode markers'), true)
-  assert.equal(contract.shouldShortCircuitPreparationFallback('Implementation', 'response did not parse as the required JSON object'), false)
-  assert.equal(contract.shouldShortCircuitPreparationFallback('Testing', 'JSON action must be run_python'), false)
+function testGpuContractFailuresShortCircuitOnlyWhenDeterministicRescueExists() {
+  assert.equal(contract.shouldShortCircuitGpuContractFailure('Investigation', 'response did not parse as the required JSON object', false), true)
+  assert.equal(contract.shouldShortCircuitGpuContractFailure('Planning', 'JSON action must be "run_python"', false), true)
+  assert.equal(contract.shouldShortCircuitGpuContractFailure('Implementation', 'JSON action must be "run_python"', true), true)
+  assert.equal(contract.shouldShortCircuitGpuContractFailure('Testing', 'code contains placeholder/pseudocode markers', true), true)
+  assert.equal(contract.shouldShortCircuitGpuContractFailure('Verification', 'code hardcodes unmanaged absolute /tmp path /tmp/workbench', true), true)
+  assert.equal(contract.shouldShortCircuitGpuContractFailure('Implementation', 'python syntax issue: unexpected indent', true), false)
+  assert.equal(contract.shouldShortCircuitGpuContractFailure('Implementation', 'JSON action must be "run_python"', false), false)
 }
 
 function testGpuStepCompletionRejectsProseWithoutExecutionResult() {
@@ -1124,7 +1129,7 @@ testExtractsJsonAfterUnclosedThink()
 testFallbackPreparationCommandIsExecutableAndPromptIndependent()
 testPreparationStageWithValidatedManifestSubmitsExecutableFallbackInsteadOfRawManifestJson()
 testAutonomousPreparationFallbackIsLimitedToPreparationStages()
-testPreparationStagesRouteThroughGpuWhenSpaceGpuEnabled()
+testGpuEnabledSpaceRoutesAllResearchStagesThroughGpu()
 testFallbackUsesWorkerProvidedWorkbenchDirectory()
 testAutonomousPreparationFallbackIsAcceptedForPreparationStages()
 testAutonomousPreparationFallbackAcceptsWorkerPrefixedOutput()
@@ -1171,7 +1176,7 @@ testDeterministicExperimentCriteriaEvidenceRejectsEmptyValues()
 testDeterministicExperimentCriteriaEvidenceRejectsUnsatisfiedThreshold()
 testDeterministicExperimentCriteriaEvidenceAcceptsSatisfiedThreshold()
 testGpuEnabledStageCodeQualityWarningPromotesToDeterministicFallback()
-testPreparationStagesShortCircuitWeakModelContractFailures()
+testGpuContractFailuresShortCircuitOnlyWhenDeterministicRescueExists()
 testGpuStepCompletionRejectsProseWithoutExecutionResult()
 testGpuStepCompletionRejectsGpuError()
 testGpuStepCompletionAcceptsRecordedExecutionResult()

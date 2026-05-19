@@ -17,8 +17,7 @@ export function shouldRouteStageThroughGpu(stageName: string, stageGpuEnabled: b
   return Boolean(spaceUseGpu && (stageGpuEnabled || GPU_SPACE_ROUTED_STAGES.has(stageName)))
 }
 
-export function shouldShortCircuitPreparationFallback(stageName: string, reason: string): boolean {
-  if (!shouldUseAutonomousPreparationFallback(stageName)) return false
+function isDeterministicGpuContractFailure(reason: string): boolean {
   const normalized = String(reason || '').toLowerCase()
   return [
     'response did not parse',
@@ -28,7 +27,18 @@ export function shouldShortCircuitPreparationFallback(stageName: string, reason:
     'code too short',
     'missing non-empty code',
     'lacks python syntax',
+    'unmanaged absolute /tmp path',
   ].some(marker => normalized.includes(marker))
+}
+
+export function shouldShortCircuitPreparationFallback(stageName: string, reason: string): boolean {
+  return shouldShortCircuitGpuContractFailure(stageName, reason, false)
+}
+
+export function shouldShortCircuitGpuContractFailure(stageName: string, reason: string, hasPreparationManifest: boolean): boolean {
+  if (!isDeterministicGpuContractFailure(reason)) return false
+  if (shouldUseAutonomousPreparationFallback(stageName)) return true
+  return Boolean(hasPreparationManifest)
 }
 
 type StrictGpuResult = { ok: true; command: StrictGpuCommand } | { ok: false; reason: string }

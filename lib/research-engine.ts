@@ -3,7 +3,7 @@ import { callAI, AIConfig, AIMessage } from './ai'
 import { generateVariants, gradeVariant, selectBestVariant, saveVariantsToDatabase, updateVariantStepDb, updateVariantDb, selectBestVariantFromDb, loadVariantsFromDb, reEvaluateStepCount, Variant, Step } from './variant-engine'
 import { buildEmbeddingContext } from './embeddings'
 import { addToCache } from './model-cache'
-import { assessGpuExecutionEvidence, assessGpuStepCompletion, buildAutonomousPreparationCommand, buildDeterministicGpuExperimentCommand, extractPersistablePreparationManifest, extractStrictGpuCommand, selectGpuSubmissionCommand, shouldRouteStageThroughGpu, shouldShortCircuitPreparationFallback, shouldUseAutonomousPreparationFallback } from './gpu-command-contract'
+import { assessGpuExecutionEvidence, assessGpuStepCompletion, buildAutonomousPreparationCommand, buildDeterministicGpuExperimentCommand, extractPersistablePreparationManifest, extractStrictGpuCommand, selectGpuSubmissionCommand, shouldRouteStageThroughGpu, shouldShortCircuitGpuContractFailure, shouldUseAutonomousPreparationFallback } from './gpu-command-contract'
 import { buildPreparationManifestInstructions, buildPreparationRetryMessage, extractPreparationManifestCandidate, validatePreparationManifest } from './preparation-manifest'
 import fs from 'fs'
 import { getInternalGpuApiBase } from './internal-api-base'
@@ -1306,8 +1306,8 @@ ${useGpu && shouldUseAutonomousPreparationFallback(stageName) ? `## Preparation 
           strictAttempts++
           const strictReason = (strictCommand as { ok: false; reason: string }).reason
           debugLog(`[executeVariant] Strict GPU code contract failed for "${stageName}" step "${step.name}": ${strictReason}; retry ${strictAttempts}/2`)
-          if (shouldShortCircuitPreparationFallback(stageName, strictReason)) {
-            debugLog(`[executeVariant] Weak-model contract failure is deterministic for ${stageName}; skipping extra LLM retries and using autonomous preparation fallback: ${strictReason}`)
+          if (shouldShortCircuitGpuContractFailure(stageName, strictReason, Boolean(preparationManifestForRescue))) {
+            debugLog(`[executeVariant] Weak-model contract failure is deterministic for ${stageName}; skipping extra LLM retries and using deterministic fallback/rescue path: ${strictReason}`)
             break
           }
           response = await callAI(agentConfig, [...messages, buildStrictGpuRetryMessage(step.description, strictReason, response.content)])
