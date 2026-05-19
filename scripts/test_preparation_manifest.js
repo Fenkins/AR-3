@@ -386,4 +386,38 @@ function validManifest(overrides = {}) {
   assert(result.errors.some((e) => e.includes('dependencies[0].versionSpec')), result.errors.join('\n'))
 }
 
+{
+  const result = validatePreparationManifest({
+    schemaVersion: 'ar3.preparation-probe.v1',
+    researchType: 'gpu-autonomous-research',
+    objective: 'Reuse validated GPU/model preparation evidence to run deterministic fallback experiments.',
+    models: [
+      { id: 'GSAI-ML/LLaDA-8B-Base', source: 'huggingface', required: true },
+    ],
+    dependencies: [
+      { name: 'torch', importName: 'torch' },
+      { name: 'huggingface-hub', importName: 'huggingface_hub' },
+    ],
+    resources: [
+      { type: 'gpu', name: 'NVIDIA GeForce GTX 1080 Ti', required: true },
+      { type: 'workbench', path: '/tmp/ar3-workbenches/space-abc', required: true },
+    ],
+    smokeTests: [
+      {
+        name: 'torch_cuda_smoke',
+        command: 'python smoke.py',
+        expectedEvidence: ['cuda_available'],
+        timeoutSeconds: 60,
+      },
+    ],
+    gradingCriteria: ['A valid experiment must execute code, not prose.'],
+    workbench: { reuseKey: 'space-abc', expectedArtifacts: ['deterministic_gpu_experiment_metrics.json'] },
+  })
+  assert.equal(result.ok, true, result.errors && result.errors.join('\n'))
+  assert.equal(result.manifest.schemaVersion, PREPARATION_MANIFEST_SCHEMA_VERSION)
+  assert.equal(result.manifest.models[0].purpose.includes('GSAI-ML/LLaDA-8B-Base'), true)
+  assert.equal(result.manifest.dependencies[0].purpose.includes('torch'), true)
+  assert.equal(result.manifest.resources[0].kind, 'gpu')
+}
+
 console.log('preparation manifest tests passed')

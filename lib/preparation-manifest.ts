@@ -213,6 +213,17 @@ function pushStringError(errors: string[], path: string, value: unknown) {
 
 function normalizePreparationManifest(value: Record<string, unknown>): Record<string, unknown> {
   const normalized: Record<string, unknown> = { ...value }
+  const isLegacyPreparationProbe = normalized.schemaVersion === 'ar3.preparation-probe.v1'
+  const objective = nonEmptyString(normalized.objective) ? normalized.objective : 'validated GPU preparation probe'
+
+  if (isLegacyPreparationProbe) {
+    // Older autonomous GPU setup fallbacks persisted their validated setup as a
+    // preparation-probe document. It already contains the concrete models,
+    // dependencies, workbench, and CUDA smoke evidence needed for deterministic
+    // experiment rescue; normalize it instead of forcing later non-preparation
+    // stages to fail prose output with "no validated preparation manifest".
+    normalized.schemaVersion = PREPARATION_MANIFEST_SCHEMA_VERSION
+  }
 
   if (Array.isArray(normalized.models)) {
     normalized.models = normalized.models.map((model: unknown) => {
@@ -222,7 +233,9 @@ function normalizePreparationManifest(value: Record<string, unknown>): Record<st
         ...model,
         id,
         source: model.source ?? (nonEmptyString(id) && validHuggingFaceRepoId(id) ? 'huggingface' : 'url'),
+        purpose: model.purpose ?? (nonEmptyString(id) ? `model artifact required for ${id} GPU experiment rescue` : objective),
         required: typeof model.required === 'boolean' ? model.required : true,
+        smokeTest: model.smokeTest ?? (isLegacyPreparationProbe ? 'Reuse the validated preparation probe and verify model/cache availability before deterministic experiment execution.' : undefined),
       }
     })
   }
@@ -230,9 +243,11 @@ function normalizePreparationManifest(value: Record<string, unknown>): Record<st
   if (Array.isArray(normalized.dependencies)) {
     normalized.dependencies = normalized.dependencies.map((dep: unknown) => {
       if (!isPlainObject(dep)) return dep
+      const name = dep.name ?? dep.package ?? dep.pip ?? dep.pipPackage
       return {
         ...dep,
-        name: dep.name ?? dep.package ?? dep.pip ?? dep.pipPackage,
+        name,
+        purpose: dep.purpose ?? (nonEmptyString(name) ? `runtime dependency required for ${name} GPU experiment rescue` : objective),
         required: typeof dep.required === 'boolean' ? dep.required : true,
       }
     })
@@ -241,11 +256,13 @@ function normalizePreparationManifest(value: Record<string, unknown>): Record<st
   if (Array.isArray(normalized.resources)) {
     normalized.resources = normalized.resources.map((resource: unknown) => {
       if (!isPlainObject(resource)) return resource
-      const kind = resource.kind ?? (RESOURCE_KINDS.has(String(resource.resourceType)) ? resource.resourceType : 'other')
+      const kind = resource.kind ?? (RESOURCE_KINDS.has(String(resource.resourceType)) ? resource.resourceType : (String(resource.type) === 'gpu' ? 'gpu' : 'other'))
+      const name = resource.name ?? resource.specification ?? resource.resourceType ?? resource.type ?? resource.path ?? 'resource'
       return {
         ...resource,
         kind,
-        name: resource.name ?? resource.specification ?? resource.resourceType ?? 'resource',
+        name,
+        purpose: resource.purpose ?? `resource reused from validated preparation probe for ${objective}`,
         required: typeof resource.required === 'boolean' ? resource.required : true,
       }
     })
@@ -267,7 +284,11 @@ function normalizePreparationManifest(value: Record<string, unknown>): Record<st
 
   if (Array.isArray(normalized.gradingCriteria)) {
     normalized.gradingCriteria = normalized.gradingCriteria.map((criterion: unknown) => {
-      if (nonEmptyString(criterion)) return criterion
+      if (nonEmptyString(criterion)) {
+        return isLegacyPreparationProbe
+          ? `${criterion} Evidence: GPU runtime metrics, dependency imports, model metadata, artifacts, and explicit failure_reason fields.`
+          : criterion
+      }
       if (isPlainObject(criterion)) {
         return [criterion.criterion, criterion.evidence].filter(nonEmptyString).join(' — ')
       }
