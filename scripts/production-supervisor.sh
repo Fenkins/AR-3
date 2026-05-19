@@ -37,6 +37,7 @@ pid_for_pattern() {
     fi
     case "$cmd" in
       *production-supervisor.sh*) continue ;;
+      bash\ -c*|sh\ -c*) continue ;;
     esac
     printf '%s\n' "$pid"
     return 0

@@ -27,4 +27,9 @@ assert.match(
   'pid_for_pattern must exclude production-supervisor command lines from service detection',
 )
 
+assert.ok(
+  pidForPattern[0].includes('bash\\ -c*|sh\\ -c*)'),
+  'pid_for_pattern must exclude shell wrapper commands from SSH/cron checks that mention service filenames',
+)
+
 console.log('production supervisor tests passed')
