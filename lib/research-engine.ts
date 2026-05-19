@@ -47,6 +47,16 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = 30000): Promise<Response> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    return await fetch(input, { ...init, signal: init.signal || controller.signal })
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
 export function gpuJobPollTimeoutMsFromConfig(config: { jobTimeout?: unknown } | null | undefined, fallbackMs = 300000): number {
   const configuredSeconds = Number(config?.jobTimeout)
   if (!Number.isFinite(configuredSeconds) || configuredSeconds <= 0) return fallbackMs
@@ -1406,7 +1416,7 @@ ${useGpu && shouldUseAutonomousPreparationFallback(stageName) ? `## Preparation 
             debugLog(`[executeVariant] Space ${spaceId} is no longer running before GPU submission; stopping stale variant execution`)
             return
           }
-          const gpuResponse = await fetch(`${internalGpuApiBase}/api/jobs/gpu`, {
+          const gpuResponse = await fetchWithTimeout(`${internalGpuApiBase}/api/jobs/gpu`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1423,7 +1433,7 @@ ${useGpu && shouldUseAutonomousPreparationFallback(stageName) ? `## Preparation 
                 },
               }),
             }),
-          })
+          }, 30000)
           if (gpuResponse.ok) {
             const { jobId } = await gpuResponse.json()
             debugLog(`[executeVariant] GPU job submitted: ${jobId}`)
@@ -1436,7 +1446,7 @@ ${useGpu && shouldUseAutonomousPreparationFallback(stageName) ? `## Preparation 
             while (waited < maxWait) {
               await new Promise(r => setTimeout(r, pollInterval))
               waited += pollInterval
-              const statusRes = await fetch(`${internalGpuApiBase}/api/jobs/gpu?jobId=${jobId}`)
+              const statusRes = await fetchWithTimeout(`${internalGpuApiBase}/api/jobs/gpu?jobId=${jobId}`, {}, 30000)
               if (statusRes.ok) {
                 const statusData = await statusRes.json()
                 if (statusData.status === 'completed') {
@@ -2785,18 +2795,67 @@ export function runLoopBackground(spaceId: string, numCycles: number = 3): void 
 }
 
 // Active background loops (prevent duplicate loops)
-const activeLoops: Set<string> = new Set()
+export type ActiveLoopState = {
+  generation: number
+  startedMs: number
+  lastTickMs: number
+}
+
+const activeLoops: Map<string, ActiveLoopState> = new Map()
+const ACTIVE_LOOP_STALE_MS = 60 * 60 * 1000
+
+export function activeLoopIsStaleForRestart(
+  loop: ActiveLoopState | null | undefined,
+  nowMs = Date.now(),
+  staleMs = ACTIVE_LOOP_STALE_MS,
+): boolean {
+  if (!loop) return false
+  const lastTickMs = Number(loop.lastTickMs || loop.startedMs)
+  if (!Number.isFinite(lastTickMs)) return true
+  return nowMs - lastTickMs >= staleMs
+}
+
+function activeLoopIsSuperseded(spaceId: string, generation: number): boolean {
+  return activeLoops.get(spaceId)?.generation !== generation
+}
+
+function markActiveLoopHeartbeat(spaceId: string, generation: number): void {
+  const currentLoop = activeLoops.get(spaceId)
+  if (currentLoop?.generation === generation) currentLoop.lastTickMs = Date.now()
+}
+
+async function withActiveLoopHeartbeat<T>(
+  spaceId: string,
+  generation: number,
+  promise: Promise<T>,
+  heartbeatMs = 30000,
+): Promise<T> {
+  markActiveLoopHeartbeat(spaceId, generation)
+  const heartbeat = setInterval(() => markActiveLoopHeartbeat(spaceId, generation), heartbeatMs)
+  try {
+    return await promise
+  } finally {
+    clearInterval(heartbeat)
+    markActiveLoopHeartbeat(spaceId, generation)
+  }
+}
 
 /**
  * Continuous background loop that keeps executing research cycles
  * while the space is running. This is the auto-pilot for the pipeline.
  */
 export function startBackgroundLoop(spaceId: string): void {
-  if (activeLoops.has(spaceId)) {
+  const existingLoop = activeLoops.get(spaceId)
+  const nowMs = Date.now()
+  if (existingLoop && !activeLoopIsStaleForRestart(existingLoop, nowMs)) {
     debugLog(`[startBackgroundLoop] Loop already running for ${spaceId}, skipping`)
     return
   }
-  activeLoops.add(spaceId)
+  if (existingLoop) {
+    debugLog(`[startBackgroundLoop] Existing loop for ${spaceId} is stale; starting replacement loop`)
+  }
+  const generation = (existingLoop?.generation || 0) + 1
+  activeLoops.set(spaceId, { generation, startedMs: nowMs, lastTickMs: nowMs })
   debugLog(`[startBackgroundLoop] Starting background loop for ${spaceId}`)
 
   const pollInterval = 15000 // 15 seconds between cycles
@@ -2804,8 +2863,12 @@ export function startBackgroundLoop(spaceId: string): void {
   let consecutiveErrors = 0
 
   async function loop() {
+    if (activeLoopIsSuperseded(spaceId, generation)) return
+    const currentLoop = activeLoops.get(spaceId)
+    if (currentLoop) currentLoop.lastTickMs = Date.now()
     try {
       const reconciledGpuSteps = await reconcileCompletedGpuJobsForRunningSteps(spaceId)
+      if (activeLoopIsSuperseded(spaceId, generation)) return
       if (reconciledGpuSteps > 0) {
         debugLog(`[startBackgroundLoop] Reconciled ${reconciledGpuSteps} completed GPU job(s) from stalled RUNNING step(s)`)
         try {
@@ -2816,6 +2879,7 @@ export function startBackgroundLoop(spaceId: string): void {
       }
 
       const recoveredStaleSteps = await recoverStaleRunningStepsWithoutGpuJobs(spaceId)
+      if (activeLoopIsSuperseded(spaceId, generation)) return
       if (recoveredStaleSteps > 0) {
         debugLog(`[startBackgroundLoop] Recovered ${recoveredStaleSteps} stale RUNNING step(s) without active GPU jobs`)
         try {
@@ -2826,6 +2890,7 @@ export function startBackgroundLoop(spaceId: string): void {
       }
 
       const recoveredStaleVariants = await recoverStaleRunningVariantsWithoutActiveSteps(spaceId)
+      if (activeLoopIsSuperseded(spaceId, generation)) return
       if (recoveredStaleVariants > 0) {
         debugLog(`[startBackgroundLoop] Recovered ${recoveredStaleVariants} stale RUNNING variant(s) without active steps`)
         try {
@@ -2838,7 +2903,7 @@ export function startBackgroundLoop(spaceId: string): void {
       const state = getExecutionState(spaceId)
       if (!state || !state.isRunning) {
         debugLog(`[startBackgroundLoop] Space ${spaceId} no longer running, stopping loop`)
-        activeLoops.delete(spaceId)
+        if (!activeLoopIsSuperseded(spaceId, generation)) activeLoops.delete(spaceId)
         return
       }
 
@@ -2886,13 +2951,19 @@ export function startBackgroundLoop(spaceId: string): void {
               debugLog(`[startBackgroundLoop] Could not read GPU config, using default 30min timeout`)
             }
 
-            await withTimeout(
-              executeVariantCycle(spaceId, pendingVariant.id),
-              variantTimeoutMs,
-              'executeVariantCycle'
+            await withActiveLoopHeartbeat(
+              spaceId,
+              generation,
+              withTimeout(
+                executeVariantCycle(spaceId, pendingVariant.id),
+                variantTimeoutMs,
+                'executeVariantCycle'
+              ),
             )
+            if (activeLoopIsSuperseded(spaceId, generation)) return
             consecutiveErrors = 0
           } catch (err: any) {
+            if (activeLoopIsSuperseded(spaceId, generation)) return
             consecutiveErrors++
             debugLog(`[startBackgroundLoop] Variant execution failed: ${err.message}`)
           }
@@ -2936,8 +3007,9 @@ export function startBackgroundLoop(spaceId: string): void {
                 lastErrorType: 'OTHER',
               })
               debugLog(`[startBackgroundLoop] ${deadLoop.reason}`)
+              if (activeLoopIsSuperseded(spaceId, generation)) return
               await pauseSpace(spaceId)
-              activeLoops.delete(spaceId)
+              if (!activeLoopIsSuperseded(spaceId, generation)) activeLoops.delete(spaceId)
               return
             }
 
@@ -3005,14 +3077,20 @@ export function startBackgroundLoop(spaceId: string): void {
       // Execute next cycle with a hard timeout
       debugLog(`[startBackgroundLoop] Executing cycle for stage ${currentStage?.name}`)
       try {
-        await withTimeout(
-          executeResearchCycle(spaceId, currentStageId),
-          stageCycleTimeoutMs,
-          'executeResearchCycle'
+        await withActiveLoopHeartbeat(
+          spaceId,
+          generation,
+          withTimeout(
+            executeResearchCycle(spaceId, currentStageId),
+            stageCycleTimeoutMs,
+            'executeResearchCycle'
+          ),
         )
+        if (activeLoopIsSuperseded(spaceId, generation)) return
         consecutiveErrors = 0
         debugLog(`[startBackgroundLoop] Cycle completed successfully for ${currentStage?.name}`)
       } catch (err: any) {
+        if (activeLoopIsSuperseded(spaceId, generation)) return
         const isTimeout = err.message?.includes('Timeout') || err.message?.includes('timeout')
         consecutiveErrors++
         debugLog(`[startBackgroundLoop] Cycle ${isTimeout ? 'timed out' : 'failed'} (${consecutiveErrors}/${maxConsecutiveErrors}): ${err.message}`)
@@ -3024,8 +3102,9 @@ export function startBackgroundLoop(spaceId: string): void {
             lastErrorType: 'API_ERROR',
           })
           debugLog(`[startBackgroundLoop] Max consecutive errors reached, pausing space`)
+          if (activeLoopIsSuperseded(spaceId, generation)) return
           await pauseSpace(spaceId)
-          activeLoops.delete(spaceId)
+          if (!activeLoopIsSuperseded(spaceId, generation)) activeLoops.delete(spaceId)
           return
         }
       }
@@ -3038,6 +3117,9 @@ export function startBackgroundLoop(spaceId: string): void {
   }
 
   function scheduleNext() {
+    if (activeLoopIsSuperseded(spaceId, generation)) return
+    const currentLoop = activeLoops.get(spaceId)
+    if (currentLoop) currentLoop.lastTickMs = Date.now()
     setTimeout(loop, pollInterval)
   }
 
