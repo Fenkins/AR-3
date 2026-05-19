@@ -315,4 +315,6 @@ assert.ok(!fullSource.includes("stageName === 'Implementation' && preparationMan
 assert.match(fullSource, /stageName,[\s\S]*reason:\s*strictReason,[\s\S]*preparationManifest,/, 'non-preparation GPU stages should build deterministic executable experiment fallback from validated preparation evidence')
 assert.match(fullSource, /validatePreparationManifest\(preparationManifestCandidate\)/, 'deterministic fallback must validate parseable setupStep before using it as preparation evidence')
 
+assert.doesNotMatch(fullSource, /failing \$\{stageName\} step without deterministic fallback|failing .* step without deterministic fallback/, 'non-preparation GPU stage prose must be replaced by deterministic executable fallback even when preparation evidence is missing')
+
 console.log('gpu resume reconciliation tests passed')

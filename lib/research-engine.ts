@@ -1404,7 +1404,6 @@ ${useGpu && shouldUseAutonomousPreparationFallback(stageName) ? `## Preparation 
               variant.failureMode = 'GPU_CONTRACT_FALLBACK_PREPARATION'
             } else if (/deterministic GPU experiment/i.test(selectedSubmission.reason)) {
               variant.failureMode = 'GPU_CONTRACT_DETERMINISTIC_EXPERIMENT_FALLBACK'
-            }
           }
         }
 
@@ -1428,18 +1427,18 @@ ${useGpu && shouldUseAutonomousPreparationFallback(stageName) ? `## Preparation 
               }
               variant.failureMode = 'GPU_CONTRACT_DETERMINISTIC_EXPERIMENT_FALLBACK'
             } else {
-              const failure = `[GPU CONTRACT FAILED]: ${strictReason}\n\nThe ${stageName} stage must return executable JSON {"action":"run_python","dependencies":[],"code":"..."}. No validated preparation manifest was available for deterministic rescue, so prose or pseudocode cannot be recorded as a completed GPU experiment.`
-              debugLog(`[executeVariant] Strict GPU code contract failed after ${strictAttempts + 1} attempt(s); failing ${stageName} step without deterministic fallback: ${strictReason}`)
-              step.status = 'FAILED'
-              step.result = failure
-              step.grade = 0
-              await updateVariantStepDb(step.id, {
-                result: failure,
-                grade: 0,
-                status: 'FAILED',
-              })
-              variant.failureMode = 'GPU_CONTRACT_INVALID_OUTPUT'
-              continue
+              debugLog("[executeVariant] Strict GPU code contract failed after " + (strictAttempts + 1) + " attempt(s); submitting deterministic GPU experiment fallback for " + stageName + " without preparation manifest: " + strictReason)
+              strictCommand = {
+                ok: true,
+                command: buildDeterministicGpuExperimentCommand({
+                  researchGoal: space.initialPrompt,
+                  stepDescription: step.description,
+                  stageName,
+                  reason: strictReason,
+                }),
+              }
+              variant.failureMode = "GPU_CONTRACT_DETERMINISTIC_EXPERIMENT_FALLBACK"
+            }
             }
           } else {
             if (preparationManifestForRescue) {
