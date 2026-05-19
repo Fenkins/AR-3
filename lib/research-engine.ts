@@ -1347,9 +1347,11 @@ ${useGpu && shouldUseAutonomousPreparationFallback(stageName) ? `## Preparation 
         if (!strictCommand.ok) {
           const strictReason = (strictCommand as { ok: false; reason: string }).reason
           if (!shouldUseAutonomousPreparationFallback(stageName)) {
-            const preparationManifest = (() => { try { return space.setupStep ? JSON.parse(space.setupStep) : null } catch { return null } })()
-            if (stageName === 'Implementation' && preparationManifest) {
-              debugLog(`[executeVariant] Strict GPU code contract failed after ${strictAttempts + 1} attempt(s); submitting deterministic GPU experiment fallback from validated preparation manifest: ${strictReason}`)
+            const preparationManifestCandidate = (() => { try { return space.setupStep ? JSON.parse(space.setupStep) : null } catch { return null } })()
+            const preparationManifestValidation = validatePreparationManifest(preparationManifestCandidate)
+            const preparationManifest = preparationManifestValidation.ok ? preparationManifestValidation.manifest : null
+            if (preparationManifest) {
+              debugLog(`[executeVariant] Strict GPU code contract failed after ${strictAttempts + 1} attempt(s); submitting deterministic GPU experiment fallback for ${stageName} from validated preparation manifest: ${strictReason}`)
               strictCommand = {
                 ok: true,
                 command: buildDeterministicGpuExperimentCommand({

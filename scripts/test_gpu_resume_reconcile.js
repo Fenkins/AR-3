@@ -253,4 +253,8 @@ assert.match(fullSource, /\[startBackgroundLoop\] Reconciled/)
 assert.match(fullSource, /\[startBackgroundLoop\] Recovered/)
 assert.match(fullSource, /updateVariantStepDb\(step\.id, \{ status: 'RUNNING', result: null, grade: null \}\)/, 'running steps clear stale terminal diagnostics before retrying GPU work')
 
+assert.ok(!fullSource.includes("stageName === 'Implementation' && preparationManifest"), 'deterministic GPU experiment fallback must not be limited to Implementation; Testing/Verification prose must also be replaced when preparation evidence exists')
+assert.match(fullSource, /stageName,[\s\S]*reason:\s*strictReason,[\s\S]*preparationManifest,/, 'non-preparation GPU stages should build deterministic executable experiment fallback from validated preparation evidence')
+assert.match(fullSource, /validatePreparationManifest\(preparationManifestCandidate\)/, 'deterministic fallback must validate parseable setupStep before using it as preparation evidence')
+
 console.log('gpu resume reconciliation tests passed')
