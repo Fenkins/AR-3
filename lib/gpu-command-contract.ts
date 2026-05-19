@@ -13,6 +13,9 @@ export function stepRequestsPreparation(stepDescription: string | undefined | nu
 
 
 const GPU_SPACE_ROUTED_STAGES = new Set([
+  'Investigation',
+  'Proposition',
+  'Planning',
   'Implementation',
   'Testing',
   'Verification',

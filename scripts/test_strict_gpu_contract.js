@@ -86,12 +86,12 @@ function testAutonomousPreparationFallbackIsLimitedToPreparationStages() {
 }
 
 function testGpuEnabledSpaceRoutesOnlyExecutableStagesThroughGpu() {
-  assert.equal(contract.shouldRouteStageThroughGpu('Investigation', false, true), false)
-  assert.equal(contract.shouldRouteStageThroughGpu('Investigation', true, true), false)
-  assert.equal(contract.shouldRouteStageThroughGpu('Proposition', false, true), false)
-  assert.equal(contract.shouldRouteStageThroughGpu('Proposition', true, true), false)
-  assert.equal(contract.shouldRouteStageThroughGpu('Planning', false, true), false)
-  assert.equal(contract.shouldRouteStageThroughGpu('Planning', true, true), false)
+  assert.equal(contract.shouldRouteStageThroughGpu('Investigation', false, true), true)
+  assert.equal(contract.shouldRouteStageThroughGpu('Investigation', true, true), true)
+  assert.equal(contract.shouldRouteStageThroughGpu('Proposition', false, true), true)
+  assert.equal(contract.shouldRouteStageThroughGpu('Proposition', true, true), true)
+  assert.equal(contract.shouldRouteStageThroughGpu('Planning', false, true), true)
+  assert.equal(contract.shouldRouteStageThroughGpu('Planning', true, true), true)
   assert.equal(contract.shouldRouteStageThroughGpu('Implementation', false, true), true)
   assert.equal(contract.shouldRouteStageThroughGpu('Implementation', true, true), true)
   assert.equal(contract.shouldRouteStageThroughGpu('Testing', true, true), true)
