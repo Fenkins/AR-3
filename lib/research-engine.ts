@@ -953,6 +953,7 @@ export async function executeResearchCycle(spaceId: string, stageId?: string): P
       })
 
       if (!selectedGpuCommand.ok) {
+        gpuEvidenceInvalidReasonForExperiment = `strict GPU command rejected before submission: ${selectedGpuCommand.reason}`
         debugLog(`[executeResearchCycle] Strict GPU command validation failed: ${selectedGpuCommand.reason}`)
         response.content += `\n\n[GPU Error]: Strict GPU command validation failed before submission: ${selectedGpuCommand.reason}`
       } else {
