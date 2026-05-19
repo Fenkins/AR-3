@@ -1353,7 +1353,24 @@ def _manifest_model_allow_patterns(model: dict) -> list:
                 return patterns[:50]
     if model.get('downloadFull') is True and os.environ.get('AR3_ALLOW_FULL_MODEL_DOWNLOAD') == '1':
         return []
-    return ['config.json', 'tokenizer.json', 'tokenizer_config.json', 'generation_config.json', '*.md', '*.txt']
+    metadata_patterns = ['config.json', 'tokenizer.json', 'tokenizer_config.json', 'generation_config.json', '*.md', '*.txt']
+    if model.get('required') is True:
+        # A required model is part of the executable research contract, not a
+        # catalog lookup.  The previous metadata-only default let preparation
+        # probes "succeed" with config/tokenizer files while later experiment
+        # stages had no checkpoint shards to load.  Include common HF weight
+        # artifact names by default so the shared model cache becomes actually
+        # usable for model_load_attempts; callers can still override with an
+        # explicit files/allowPatterns list for intentionally smaller probes.
+        return [
+            *metadata_patterns,
+            '*.safetensors.index.json',
+            '*.safetensors',
+            'model*.safetensors',
+            'pytorch_model*.bin',
+            '*.bin.index.json',
+        ]
+    return metadata_patterns
 
 
 def _manifest_model_cache_root(context: dict) -> Path:

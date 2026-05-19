@@ -579,6 +579,28 @@ def test_required_model_without_smoke_test_does_not_block_research_execution():
         shutil.rmtree(root, ignore_errors=True)
 
 
+
+def test_required_huggingface_manifest_models_default_to_weight_artifacts():
+    patterns = gpu_worker._manifest_model_allow_patterns({
+        "id": "example/tiny-model",
+        "source": "huggingface",
+        "required": True,
+    })
+    assert "*.safetensors" in patterns
+    assert "*.safetensors.index.json" in patterns
+    assert "pytorch_model*.bin" in patterns
+    assert "config.json" in patterns
+
+
+def test_optional_huggingface_manifest_models_keep_metadata_only_default():
+    patterns = gpu_worker._manifest_model_allow_patterns({
+        "id": "example/tiny-model",
+        "source": "huggingface",
+        "required": False,
+    })
+    assert "*.safetensors" not in patterns
+    assert patterns == ["config.json", "tokenizer.json", "tokenizer_config.json", "generation_config.json", "*.md", "*.txt"]
+
 def test_huggingface_models_are_resolved_into_workbench_before_smoke_tests():
     root = tempfile.mkdtemp(prefix="ar3-worker-model-resolve-test-")
     old_root = os.environ.get("AR3_WORKBENCH_ROOT")
@@ -1084,6 +1106,8 @@ if __name__ == "__main__":
     test_safe_smoke_command_accepts_timeout_wrapped_python()
     test_safe_smoke_command_rejects_destructive_shell_even_without_typescript_validation()
     test_manifest_torch_dependencies_are_smoked_and_repaired_before_manifest_smoke_tests()
+    test_required_huggingface_manifest_models_default_to_weight_artifacts()
+    test_optional_huggingface_manifest_models_keep_metadata_only_default()
     test_huggingface_models_are_resolved_into_workbench_before_smoke_tests()
     test_fstring_item_coercion_does_not_cross_other_braces()
     test_execute_python_code_injects_missing_common_stdlib_imports()
