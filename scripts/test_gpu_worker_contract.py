@@ -489,10 +489,53 @@ def json_escape(value: str) -> str:
     import json
     return json.dumps(value)
 
+def test_resolved_manifest_model_is_mirrored_to_model_cache_db(monkeypatch, tmp_path):
+    db = tmp_path / "dev.db"
+    con = sqlite3.connect(db)
+    con.execute(
+        "CREATE TABLE ModelCache (id TEXT PRIMARY KEY, spaceId TEXT NOT NULL, fileName TEXT NOT NULL, filePath TEXT NOT NULL, fileSize INTEGER NOT NULL, downloadUrl TEXT, checksum TEXT, description TEXT, status TEXT NOT NULL, createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+    )
+    con.commit()
+    con.close()
+
+    model_dir = tmp_path / "model_cache" / "gsai-ml-llada-8b-base-40ce9a1371"
+    model_dir.mkdir(parents=True)
+    (model_dir / "config.json").write_text("{}")
+    (model_dir / "model-00001-of-00006.safetensors").write_bytes(b"weights")
+
+    monkeypatch.setenv("AR3_PRISMA_DB_PATH", str(db))
+    gpu_worker.sync_model_cache_row(
+        space_id="space-123",
+        model_id="GSAI-ML/LLaDA-8B-Base",
+        local_dir=str(model_dir),
+        source="huggingface",
+    )
+
+    con = sqlite3.connect(db)
+    row = con.execute("SELECT spaceId, fileName, filePath, fileSize, downloadUrl, status FROM ModelCache").fetchone()
+    con.close()
+
+    assert row == (
+        "space-123",
+        "GSAI-ML_LLaDA-8B-Base",
+        str(model_dir),
+        9,
+        "https://huggingface.co/GSAI-ML/LLaDA-8B-Base",
+        "COMPLETED",
+    )
+
+
+def test_prepare_workbench_context_carries_space_id(monkeypatch, tmp_path):
+    monkeypatch.setenv("AR3_WORKBENCH_ROOT", str(tmp_path / "workbenches"))
+    context = gpu_worker.prepare_workbench({"spaceId": "space-abc", "jobId": "job-1"})
+
+    assert context["space_id"] == "space-abc"
+
 
 if __name__ == "__main__":
-    test_prose_only_prompt_is_invalid()
-    test_json_run_python_prompt_is_accepted()
-    test_cpu_only_experiment_is_rejected_before_execution()
-    test_gpu_probe_experiment_is_accepted_before_execution()
+    import inspect
+
+    for _name, _fn in sorted(globals().items()):
+        if _name.startswith("test_") and callable(_fn) and not inspect.signature(_fn).parameters:
+            _fn()
     print("gpu_worker contract tests passed")

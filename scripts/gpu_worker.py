@@ -171,6 +171,47 @@ def update_prisma_gpu_job_status(job_id: str, status: str, result: dict = None, 
         log(f"Warning: could not mirror GPU job {job_id} to Prisma DB: {e}")
 
 
+
+def sync_model_cache_row(space_id: str, model_id: str, local_dir: str, source: str = 'huggingface'):
+    """Best-effort mirror of worker-resolved model artifacts into ModelCache.
+
+    The GPU worker can download/reuse multi-GB HuggingFace snapshots without going
+    through the Next.js model-cache API.  Keep the SQLite ModelCache rows aligned
+    with the real files so health checks/UI do not report an empty cache while the
+    worker is using usable artifacts.
+    """
+    if not space_id or not model_id or not local_dir:
+        return
+    db_path = _prisma_db_path()
+    path = Path(local_dir)
+    if not db_path.exists() or not path.exists() or not _sqlite_has_table(db_path, 'ModelCache'):
+        return
+    file_name = str(model_id).strip().replace('/', '_')
+    row_id = 'worker_model_' + hashlib.sha1(f'{space_id}:{model_id}:{path}'.encode('utf-8')).hexdigest()[:24]
+    download_url = f'https://huggingface.co/{model_id}' if source == 'huggingface' else None
+    file_size = _dir_size_bytes(path) if path.is_dir() else (path.stat().st_size if path.exists() else 0)
+    now_iso = datetime.now().isoformat()
+    description = f'GPU worker resolved {source} model artifact; model_id={model_id}'
+    try:
+        con = sqlite3.connect(str(db_path), timeout=5)
+        try:
+            existing = con.execute('SELECT id FROM ModelCache WHERE spaceId = ? AND filePath = ? LIMIT 1', (space_id, str(path))).fetchone()
+            if existing:
+                con.execute(
+                    'UPDATE ModelCache SET fileName = ?, filePath = ?, fileSize = ?, downloadUrl = ?, description = ?, status = ? WHERE id = ?',
+                    (file_name, str(path), int(file_size), download_url, description, 'COMPLETED', existing[0]),
+                )
+            else:
+                con.execute(
+                    'INSERT INTO ModelCache (id, spaceId, fileName, filePath, fileSize, downloadUrl, checksum, description, status, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    (row_id, space_id, file_name, str(path), int(file_size), download_url, None, description, 'COMPLETED', now_iso),
+                )
+            con.commit()
+        finally:
+            con.close()
+    except Exception as e:
+        log(f"Warning: could not mirror model cache row for {model_id}: {e}")
+
 def update_job_queue_status(job_id: str, status: str):
     """Persist a fine-grained worker lifecycle status for API/UI polling."""
     if not job_id:
@@ -1500,6 +1541,12 @@ print(json.dumps({
             item = {'repo_id': model_id, 'raw': stdout}
         item['manifest_index'] = i
         item['local_dir'] = item.get('local_dir') or str(local_dir)
+        sync_model_cache_row(
+            space_id=str(context.get("space_id") or context.get("spaceId") or ""),
+            model_id=model_id,
+            local_dir=str(item['local_dir']),
+            source='huggingface',
+        )
         resolution.append(item)
 
     resolution_file = Path(context['workbench_dir']) / 'model_resolution.json'
