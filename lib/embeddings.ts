@@ -107,7 +107,7 @@ export async function getEmbedding(
     // The current SDK returns embeddings as { embedding: { values: number[] } }.
     const { GoogleGenerativeAI } = require('@google/generative-ai')
     const genAI = new GoogleGenerativeAI(provider.apiKey)
-    const modelName = provider.model || 'embedding-001'
+    const modelName = !provider.model || provider.model === 'embedding-001' ? 'text-embedding-004' : provider.model
     const model = genAI.getGenerativeModel({ model: modelName })
     const result = await model.embedContent(text)
     const embedding = result.embedding && Array.isArray(result.embedding.values) ? result.embedding.values : []
