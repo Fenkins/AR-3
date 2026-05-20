@@ -175,6 +175,26 @@ export function getCacheEntrySizeBytes(entry: { filePath: string; fileSize: numb
   return diskSize > 0 ? diskSize : Number(entry.fileSize || 0)
 }
 
+function cacheEntryIdentity(filePath: string): string {
+  try {
+    return fs.existsSync(filePath) ? fs.realpathSync(filePath) : path.resolve(filePath)
+  } catch {
+    return path.resolve(filePath)
+  }
+}
+
+export function sumUniqueCacheEntrySizes(entries: Array<{ filePath: string; fileSize: number | bigint }>): number {
+  const seen = new Set<string>()
+  let total = 0
+  for (const entry of entries) {
+    const identity = cacheEntryIdentity(entry.filePath)
+    if (seen.has(identity)) continue
+    seen.add(identity)
+    total += getCacheEntrySizeBytes(entry)
+  }
+  return total
+}
+
 export async function addToCache(options: AddCacheOptions): Promise<CacheEntry> {
   const { spaceId, fileName, downloadUrl, description, expectedChecksum } = options
   await repairOversizedModelCacheRows()
@@ -331,7 +351,7 @@ export async function getSpaceCacheSize(spaceId: string): Promise<number> {
     where: { spaceId, status: 'COMPLETED' },
     select: { filePath: true, fileSize: true },
   })
-  const trackedSize = entries.reduce((total, entry) => total + getCacheEntrySizeBytes(entry), 0)
+  const trackedSize = sumUniqueCacheEntrySizes(entries)
   return Math.max(trackedSize, getSpaceCacheDiskSize(spaceId))
 }
 

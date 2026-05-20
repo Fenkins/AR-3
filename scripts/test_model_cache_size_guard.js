@@ -29,10 +29,11 @@ function loadTs(relativePath) {
   return m.exports
 }
 
-const { clampModelCacheFileSize, repairInvalidModelCacheDateRows } = loadTs('lib/model-cache.ts')
+const { clampModelCacheFileSize, repairInvalidModelCacheDateRows, sumUniqueCacheEntrySizes } = loadTs('lib/model-cache.ts')
 
 assert.equal(typeof clampModelCacheFileSize, 'function', 'model-cache must export a reusable fileSize guard')
 assert.equal(typeof repairInvalidModelCacheDateRows, 'function', 'model-cache must export a reusable ModelCache DateTime repair guard')
+assert.equal(typeof sumUniqueCacheEntrySizes, 'function', 'model-cache must export duplicate-safe cache size aggregation')
 const modelCacheSource = fs.readFileSync(path.join(__dirname, '..', 'lib', 'model-cache.ts'), 'utf8')
 assert.match(modelCacheSource, /substr\("createdAt", 20\) NOT LIKE '%\+%'/, 'date repair must not append Z to offset timestamps')
 assert.match(modelCacheSource, /"createdAt" \/ 1000\.0/, 'millisecond epoch repair must preserve fractional seconds')
@@ -47,6 +48,15 @@ const { validateLoadableSnapshotPath } = loadTs('lib/model-cache.ts')
 assert.equal(typeof validateLoadableSnapshotPath, 'function', 'model-cache must export loadable snapshot validation')
 const tmpRoot = fs.mkdtempSync(path.join(require('os').tmpdir(), 'ar3-model-cache-guard-'))
 try {
+  const duplicatePath = path.join(tmpRoot, 'duplicate.bin')
+  fs.writeFileSync(duplicatePath, 'cache-bytes')
+  const duplicateSize = sumUniqueCacheEntrySizes([
+    { filePath: duplicatePath, fileSize: 999 },
+    { filePath: duplicatePath, fileSize: 999 },
+  ])
+  const singleSize = sumUniqueCacheEntrySizes([{ filePath: duplicatePath, fileSize: 999 }])
+  assert.equal(duplicateSize, singleSize, 'duplicate ModelCache rows for the same real path must not double-count disk usage')
+
   const good = path.join(tmpRoot, 'good')
   fs.mkdirSync(good)
   fs.writeFileSync(path.join(good, 'model.safetensors.index.json'), JSON.stringify({ weight_map: { 'layer.a': 'model-00001-of-00002.safetensors', 'layer.b': 'model-00002-of-00002.safetensors' } }))
