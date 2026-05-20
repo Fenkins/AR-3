@@ -1061,14 +1061,16 @@ function testDeterministicExperimentFallbackPrioritizesModelRuntimeDepsWhenManif
   assert.ok(command.dependencies.length <= 12)
 }
 
-function testGpuContractFailuresShortCircuitOnlyWhenDeterministicRescueExists() {
+function testGpuContractFailuresShortCircuitDeterministicWeakModelFailures() {
   assert.equal(contract.shouldShortCircuitGpuContractFailure('Investigation', 'response did not parse as the required JSON object', false), true)
   assert.equal(contract.shouldShortCircuitGpuContractFailure('Planning', 'JSON action must be "run_python"', false), true)
   assert.equal(contract.shouldShortCircuitGpuContractFailure('Implementation', 'JSON action must be "run_python"', true), true)
   assert.equal(contract.shouldShortCircuitGpuContractFailure('Testing', 'code contains placeholder/pseudocode markers', true), true)
   assert.equal(contract.shouldShortCircuitGpuContractFailure('Verification', 'code hardcodes unmanaged absolute /tmp path /tmp/workbench', true), true)
   assert.equal(contract.shouldShortCircuitGpuContractFailure('Implementation', 'python syntax issue: unexpected indent', true), false)
-  assert.equal(contract.shouldShortCircuitGpuContractFailure('Implementation', 'JSON action must be "run_python"', false), false)
+  assert.equal(contract.shouldShortCircuitGpuContractFailure('Implementation', 'JSON action must be "run_python"', false), true)
+  assert.equal(contract.shouldShortCircuitGpuContractFailure('Implementation', 'code hardcodes unmanaged absolute /tmp path /tmp/ar3_workbench', false), true)
+  assert.equal(contract.shouldShortCircuitGpuContractFailure('Testing', 'code contains placeholder/pseudocode markers', false), true)
 }
 
 function testGpuStepCompletionRejectsProseWithoutExecutionResult() {
@@ -1243,7 +1245,7 @@ testDeterministicExperimentCriteriaEvidenceRejectsEmptyValues()
 testDeterministicExperimentCriteriaEvidenceRejectsUnsatisfiedThreshold()
 testDeterministicExperimentCriteriaEvidenceAcceptsSatisfiedThreshold()
 testGpuEnabledStageCodeQualityWarningPromotesToDeterministicFallback()
-testGpuContractFailuresShortCircuitOnlyWhenDeterministicRescueExists()
+testGpuContractFailuresShortCircuitDeterministicWeakModelFailures()
 testGpuStepCompletionRejectsProseWithoutExecutionResult()
 testGpuStepCompletionRejectsGpuError()
 testGpuStepCompletionAcceptsRecordedExecutionResult()

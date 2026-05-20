@@ -45,6 +45,7 @@ export function shouldShortCircuitPreparationFallback(stageName: string, reason:
 export function shouldShortCircuitGpuContractFailure(stageName: string, reason: string, hasPreparationManifest: boolean): boolean {
   if (!isDeterministicGpuContractFailure(reason)) return false
   if (shouldUseAutonomousPreparationFallback(stageName)) return true
+  if (GPU_SPACE_ROUTED_STAGES.has(stageName)) return true
   return Boolean(hasPreparationManifest)
 }
 
