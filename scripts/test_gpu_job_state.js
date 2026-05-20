@@ -23,6 +23,7 @@ const {
   applyWorkerQueueStateToJob,
   pruneFileQueueForSpace,
   validateGpuJobInput,
+  normalizeGpuJobInput,
 } = m.exports
 
 assert.deepStrictEqual(GPU_JOB_STATUSES, ['queued', 'preparing_workbench', 'installing_dependencies', 'running_experiment', 'validating_evidence', 'failed_validation', 'failed_runtime', 'completed', 'cancelled'])
@@ -40,9 +41,13 @@ assert.equal(isValidGpuJobTransition('cancelled', 'queued'), false)
 {
   const valid = validateGpuJobInput({ spaceId: 'spaceA', stageName: 'HeartbeatProbe', prompt: '{"action":"run_python","code":"print(1)","dependencies":[]}' })
   assert.deepStrictEqual(valid.errors, [])
-  const invalid = validateGpuJobInput({ spaceId: 'spaceA', stageName: 'HeartbeatProbe', prompt: { action: 'run_python', code: 'print(1)' } })
-  assert.equal(invalid.ok, false)
-  assert.match(invalid.errors.join(' '), /prompt must be a string/i)
+  const normalized = normalizeGpuJobInput({ spaceId: 'spaceA', stageName: 'HeartbeatProbe', prompt: { action: 'run_python', code: 'print(1)', dependencies: [] } })
+  assert.equal(normalized.ok, true)
+  assert.equal(normalized.value.prompt, '{"action":"run_python","code":"print(1)","dependencies":[]}')
+  assert.deepStrictEqual(normalized.value.promptObject, { action: 'run_python', code: 'print(1)', dependencies: [] })
+  const invalidObject = normalizeGpuJobInput({ spaceId: 'spaceA', stageName: 'HeartbeatProbe', prompt: { action: 'shell', code: 'print(1)' } })
+  assert.equal(invalidObject.ok, false)
+  assert.match(invalidObject.errors.join(' '), /prompt.action must be run_python/i)
 }
 
 {

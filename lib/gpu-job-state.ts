@@ -53,6 +53,10 @@ type GpuJobInput = {
   context?: string
 }
 
+type NormalizedGpuJobInput = GpuJobInput & {
+  promptObject?: { action: 'run_python'; dependencies: string[]; code: string }
+}
+
 const TRANSITIONS: Record<GpuJobStatus, GpuJobStatus[]> = {
   queued: ['preparing_workbench', 'installing_dependencies', 'running_experiment', 'failed_validation', 'cancelled'],
   preparing_workbench: ['installing_dependencies', 'running_experiment', 'failed_validation', 'failed_runtime', 'cancelled'],
@@ -82,17 +86,60 @@ export function slugForJobId(value: string): string {
     .slice(0, 80) || 'space'
 }
 
-export function validateGpuJobInput(input: Record<string, unknown>): { ok: boolean; errors: string[] } {
+export function normalizeGpuJobInput(input: Record<string, unknown>): { ok: true; value: NormalizedGpuJobInput } | { ok: false; errors: string[] } {
   const errors: string[] = []
-  for (const field of ['spaceId', 'stageName', 'prompt'] as const) {
-    if (typeof input?.[field] !== 'string' || !String(input[field]).trim()) {
-      errors.push(`${field} must be a string`)
+
+  const spaceId = typeof input?.spaceId === 'string' ? input.spaceId.trim() : ''
+  const stageName = typeof input?.stageName === 'string' ? input.stageName.trim() : ''
+  if (!spaceId) errors.push('spaceId must be a string')
+  if (!stageName) errors.push('stageName must be a string')
+
+  let prompt = ''
+  let promptObject: NormalizedGpuJobInput['promptObject'] | undefined
+  const rawPrompt = input?.prompt
+
+  if (typeof rawPrompt === 'string') {
+    prompt = rawPrompt.trim()
+    if (!prompt) errors.push('prompt must be a string')
+  } else if (rawPrompt && typeof rawPrompt === 'object' && !Array.isArray(rawPrompt)) {
+    const candidate = rawPrompt as Record<string, unknown>
+    if (candidate.action !== 'run_python') errors.push('prompt.action must be run_python')
+    if (typeof candidate.code !== 'string' || !candidate.code.trim()) errors.push('prompt.code must be a non-empty string')
+    if (!Array.isArray(candidate.dependencies) || !candidate.dependencies.every((dep) => typeof dep === 'string')) {
+      errors.push('prompt.dependencies must be an array of strings')
     }
+    if (errors.length === 0) {
+      promptObject = {
+        action: 'run_python',
+        code: candidate.code as string,
+        dependencies: candidate.dependencies as string[],
+      }
+      prompt = JSON.stringify(promptObject)
+    }
+  } else {
+    errors.push('prompt must be a string')
   }
+
   if (input?.context !== undefined && typeof input.context !== 'string') {
     errors.push('context must be a string')
   }
-  return { ok: errors.length === 0, errors }
+
+  if (errors.length > 0) return { ok: false, errors }
+  return {
+    ok: true,
+    value: {
+      spaceId,
+      stageName,
+      prompt,
+      context: typeof input.context === 'string' ? input.context : '',
+      ...(promptObject ? { promptObject } : {}),
+    },
+  }
+}
+
+export function validateGpuJobInput(input: Record<string, unknown>): { ok: boolean; errors: string[] } {
+  const normalized = normalizeGpuJobInput(input)
+  return normalized.ok ? { ok: true, errors: [] } : normalized
 }
 
 export function buildGpuJobRecord(input: GpuJobInput, now = new Date(), nonce = Math.random().toString(36).slice(2, 11)): GpuJobRecord {

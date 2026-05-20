@@ -11,7 +11,7 @@ import {
   parseJobEvents,
   parseWorkerResult,
   pruneFileQueueForSpace,
-  validateGpuJobInput,
+  normalizeGpuJobInput,
   workerQueueJob,
 } from '@/lib/gpu-job-state'
 import fs from 'fs'
@@ -265,13 +265,13 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json()
-    const { spaceId, stageName, prompt, context } = body
-    const validation = validateGpuJobInput({ spaceId, stageName, prompt, context })
+    const validation = normalizeGpuJobInput(body)
 
     if (!validation.ok) {
       return NextResponse.json({ error: validation.errors.join('; ') }, { status: 400 })
     }
 
+    const { spaceId, stageName, prompt, context } = validation.value
     const record = buildGpuJobRecord({ spaceId, stageName, prompt, context: context || '' })
     await createDbJob(record)
     mirrorJobToFileQueue(record)
