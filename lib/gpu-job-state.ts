@@ -82,6 +82,19 @@ export function slugForJobId(value: string): string {
     .slice(0, 80) || 'space'
 }
 
+export function validateGpuJobInput(input: Record<string, unknown>): { ok: boolean; errors: string[] } {
+  const errors: string[] = []
+  for (const field of ['spaceId', 'stageName', 'prompt'] as const) {
+    if (typeof input?.[field] !== 'string' || !String(input[field]).trim()) {
+      errors.push(`${field} must be a string`)
+    }
+  }
+  if (input?.context !== undefined && typeof input.context !== 'string') {
+    errors.push('context must be a string')
+  }
+  return { ok: errors.length === 0, errors }
+}
+
 export function buildGpuJobRecord(input: GpuJobInput, now = new Date(), nonce = Math.random().toString(36).slice(2, 11)): GpuJobRecord {
   const submittedAt = now.toISOString()
   const jobId = `gpu_${slugForJobId(input.spaceId)}_${now.getTime()}_${nonce}`
