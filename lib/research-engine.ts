@@ -3688,7 +3688,7 @@ function verifyTestingOutput(
   }
 
   // 2. Check for VERDICT — required per Testing stage prompt
-  const verdictMatch = output.match(/\bverdict\s*:\s*(pass|fail)/i)
+  const verdictMatch = output.match(/(?:^|[^A-Za-z0-9_])[\"']?verdict[\"']?\s*[:=]\s*[\"']?(pass|fail)[\"']?(?=$|[^A-Za-z0-9_])/i)
   if (!verdictMatch) {
     missingChecks.push('VERDICT (PASS/FAIL statement)')
   }

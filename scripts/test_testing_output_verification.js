@@ -31,6 +31,29 @@ METRICS: accuracy=0.91 runtime_seconds=1.25
 const verified = verifyTestingOutput('Evidence-First Probe', 'GPU model benchmark', gpuResultWithDefensiveCode)
 assert.equal(verified.valid, true, 'Testing verification must scan executed OUTPUT for error indicators, not defensive exception strings in [CODE]')
 
+
+const gpuResultWithJsonOnlyVerdict = `
+[GPU Execution Result] job:gpu_json_verdict
+[CODE]
+print({"verdict": "PASS", "metrics": {"accuracy": 0.91}})
+[OUTPUT]
+{"verdict":"PASS","metrics":{"accuracy":0.91,"runtime_seconds":1.25},"gpu_name":"NVIDIA GeForce GTX 1080 Ti","torch_cuda_available":true}
+`
+const jsonOnlyVerified = verifyTestingOutput('Evidence-First Probe', 'GPU model benchmark', gpuResultWithJsonOnlyVerdict)
+assert.equal(jsonOnlyVerified.valid, true, 'Testing verification must accept machine-readable JSON verdict fields without requiring a duplicated VERDICT: text line')
+
+
+const gpuResultWithNonVerdictField = `
+[GPU Execution Result] job:gpu_non_verdict
+[CODE]
+print({"nonverdict": "PASS", "metrics": {"accuracy": 0.91}})
+[OUTPUT]
+{"nonverdict":"PASS","metrics":{"accuracy":0.91,"runtime_seconds":1.25},"gpu_name":"NVIDIA GeForce GTX 1080 Ti","torch_cuda_available":true}
+`
+const nonVerdictRejected = verifyTestingOutput('Evidence-First Probe', 'GPU model benchmark', gpuResultWithNonVerdictField)
+assert.equal(nonVerdictRejected.valid, false, 'Testing verification must not accept nonverdict or other larger field names as a verdict')
+assert.ok(nonVerdictRejected.missingChecks.includes('VERDICT (PASS/FAIL statement)'))
+
 const gpuResultWithRealOutputError = `
 [GPU Execution Result] job:gpu_test
 [CODE]
