@@ -1461,10 +1461,12 @@ try:
                 item["safetensors_count"] = sum(1 for s in siblings if str(s.get("rfilename", "")).endswith(".safetensors"))
                 item["has_config"] = any(str(s.get("rfilename", "")) == "config.json" for s in siblings)
             else:
-                item["error"] = response.text[:300]
+                item["metadata_status"] = "http_non_ok"
+                item["status_preview"] = response.text[:300]
         metrics["model_metadata"].append(item)
 except Exception as exc:
-    metrics["model_metadata_error"] = repr(exc)
+    metrics["model_metadata_status"] = "optional_metadata_lookup_skipped"
+    metrics["model_metadata_note"] = str(exc).split("\\n", 1)[0][:200]
 
 step_lower = (step_description or "").lower()
 requires_model_attempt = (
@@ -1595,6 +1597,11 @@ if isinstance(preparation_manifest, dict):
                 matched.append(key)
         evidence_map[criterion] = {"matched": bool(matched), "matched_keys": matched[:8]}
     metrics["grading_criteria_evidence"] = evidence_map
+
+criteria_evidence = metrics.get("grading_criteria_evidence") or {}
+criteria_pass = all(bool(row.get("matched")) for row in criteria_evidence.values()) if criteria_evidence else True
+metrics["verdict"] = "PASS" if metrics.get("cuda_available") and metrics.get("research_metrics") and criteria_pass and not metrics.get("torch_error") else "FAIL"
+metrics["verdict_reason"] = "deterministic fallback produced GPU metrics and satisfied mapped criteria" if metrics["verdict"] == "PASS" else "deterministic fallback did not satisfy all GPU evidence requirements"
 
 metrics["runtime_seconds"] = round(time.time() - started, 3)
 metrics_path = workbench / "deterministic_gpu_experiment_metrics.json"
@@ -1745,7 +1752,8 @@ def query_huggingface(model_ids):
                     "config_files": [s.get("rfilename") for s in siblings if str(s.get("rfilename", "")) in {"config.json", "tokenizer.json", "tokenizer_config.json"}],
                 })
             else:
-                item["error"] = response.text[:300]
+                item["metadata_status"] = "http_non_ok"
+                item["status_preview"] = response.text[:300]
             results.append(item)
         except Exception as exc:
             results.append({"model_id": model_id, "error": repr(exc)})

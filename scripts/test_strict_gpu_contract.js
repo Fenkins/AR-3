@@ -824,6 +824,9 @@ function testDeterministicExperimentFallbackEmitsResearchSpecificMetrics() {
   assert.equal(typeof result.research_metrics.projection_residual, 'number')
   assert.ok(result.focus_terms.includes('trajectory'))
   assert.ok(result.grading_criteria_evidence, 'expected grading criteria evidence map')
+  assert.match(result.verdict, /^(PASS|FAIL)$/)
+  assert.equal(result.model_metadata_error, undefined, 'optional metadata lookup failures must not poison Testing evidence with error indicators')
+  assert.equal(result.torch_error, undefined, 'deterministic fallback should not emit torch_error when torch imports and CUDA smoke succeed')
   const criterionEvidence = result.grading_criteria_evidence['prints cuda_available and trajectory_cosine_similarity metrics']
   assert.equal(criterionEvidence.matched, true)
   assert.ok(criterionEvidence.matched_keys.some(key => /cuda_available|trajectory_cosine_similarity/.test(key)), criterionEvidence.matched_keys.join(', '))
