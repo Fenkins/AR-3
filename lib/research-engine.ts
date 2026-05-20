@@ -3687,8 +3687,15 @@ function verifyTestingOutput(
     }
   }
 
-  // 2. Check for VERDICT — required per Testing stage prompt
-  const verdictMatch = output.match(/(?:^|[^A-Za-z0-9_])[\"']?verdict[\"']?\s*[:=]\s*[\"']?(pass|fail)[\"']?(?=$|[^A-Za-z0-9_])/i)
+  // 2. Check for VERDICT — required per Testing stage prompt.
+  // Prefer the executed [OUTPUT] section so defensive code/comments do not
+  // satisfy the gate. Some executable GPU probes report the same testing
+  // verdict as a top-level JSON status field or a PASS/FAIL banner; accept
+  // those synonyms while still rejecting unrelated fields such as
+  // "nonverdict".
+  const verdictMatch = runtimeOutput.match(/(?:^|[^A-Za-z0-9_])[\"']?verdict[\"']?\s*[:=]\s*[\"']?(pass|fail)[\"']?(?=$|[^A-Za-z0-9_])/i) ||
+    runtimeOutput.match(/(?:^|[^A-Za-z0-9_])[\"']?status[\"']?\s*[:=]\s*[\"']?(pass|fail)[\"']?(?=$|[^A-Za-z0-9_])/i) ||
+    runtimeOutput.match(/(?:^|\n)\s*={2,}\s*(pass|fail)\s*={2,}\s*(?=$|\n)/i)
   if (!verdictMatch) {
     missingChecks.push('VERDICT (PASS/FAIL statement)')
   }

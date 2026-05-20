@@ -43,6 +43,18 @@ const jsonOnlyVerified = verifyTestingOutput('Evidence-First Probe', 'GPU model 
 assert.equal(jsonOnlyVerified.valid, true, 'Testing verification must accept machine-readable JSON verdict fields without requiring a duplicated VERDICT: text line')
 
 
+
+const gpuResultWithStatusOnlyPass = `
+[GPU Execution Result] job:gpu_status_verdict
+[CODE]
+print({"status": "PASS", "metrics": {"diversity_score": 1.42}})
+[OUTPUT]
+{"status":"PASS","metrics":{"diversity_score":1.42,"runtime_seconds":0.03},"baseline_verdict":{"ensemble_potential":true}}
+=== PASS ===
+`
+const statusOnlyVerified = verifyTestingOutput('Mechanism Isolation', 'GPU benchmark with status field', gpuResultWithStatusOnlyPass)
+assert.equal(statusOnlyVerified.valid, true, 'Testing verification must accept executable JSON status PASS plus numeric metrics as a verdict synonym')
+
 const gpuResultWithNonVerdictField = `
 [GPU Execution Result] job:gpu_non_verdict
 [CODE]
