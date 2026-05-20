@@ -1725,6 +1725,54 @@ def prepare_manifest_environment(manifest: dict, context: dict, timeout: int = 9
     return finish(True, None)
 
 
+
+
+def repair_raw_newlines_in_json_code_string(text: str) -> str:
+    """Escape physical newlines only inside a top-level JSON `code` string.
+
+    Some producers build the command envelope by interpolation instead of
+    json.dumps, yielding `{..., "code":"import json\nprint(...)"}` with a raw
+    newline. Strict JSON parsing must fail on that, but the surrounding envelope
+    is otherwise a valid run_python contract. Repair only this narrow envelope
+    damage; prose/markdown still falls through to rejection.
+    """
+    marker = '"code"'
+    marker_index = text.find(marker)
+    if marker_index < 0:
+        return text
+    colon_index = text.find(':', marker_index + len(marker))
+    if colon_index < 0:
+        return text
+    quote_index = text.find('"', colon_index + 1)
+    if quote_index < 0:
+        return text
+
+    out = [text[:quote_index + 1]]
+    escaped = False
+    i = quote_index + 1
+    while i < len(text):
+        ch = text[i]
+        if escaped:
+            out.append(ch)
+            escaped = False
+        elif ch == '\\':
+            out.append(ch)
+            escaped = True
+        elif ch == '"':
+            out.append(ch)
+            out.append(text[i + 1:])
+            return ''.join(out)
+        elif ch == '\n':
+            out.append('\\n')
+        elif ch == '\r':
+            out.append('\\r')
+        elif ch == '\t':
+            out.append('\\t')
+        else:
+            out.append(ch)
+        i += 1
+    return text
+
 def extract_gpu_command(prompt: str) -> dict:
     """Extract GPU command from LLM response using robust multi-strategy approach.
 
@@ -1753,7 +1801,16 @@ def extract_gpu_command(prompt: str) -> dict:
                 thread_id=threading.current_thread().name)
             return parsed
     except Exception:
-        pass
+        try:
+            repaired = repair_raw_newlines_in_json_code_string(stripped)
+            if repaired != stripped:
+                parsed = json.loads(repaired)
+                if isinstance(parsed, dict) and parsed.get('action') == 'run_python' and isinstance(parsed.get('code'), str):
+                    log(f"Strategy 0b: repaired raw-newline JSON code string, code={len(parsed['code'])} chars",
+                        thread_id=threading.current_thread().name)
+                    return parsed
+        except Exception:
+            pass
 
     gpu_command = None
 

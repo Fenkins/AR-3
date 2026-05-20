@@ -644,6 +644,17 @@ def test_prepare_workbench_context_carries_space_id(monkeypatch, tmp_path):
     assert context["space_id"] == "space-abc"
 
 
+def test_json_run_python_prompt_with_raw_newline_in_code_string_is_repaired():
+    prompt = r'''{"action":"run_python","dependencies":[],"code":"import json
+print(json.dumps({\"heartbeat\": true}))"}'''
+
+    command = gpu_worker.extract_gpu_command(prompt)
+
+    assert command["action"] == "run_python"
+    assert "import json" in command["code"]
+    assert "heartbeat" in command["code"]
+
+
 if __name__ == "__main__":
     import inspect
 
