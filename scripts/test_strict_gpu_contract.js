@@ -1076,6 +1076,33 @@ function testDeterministicExperimentFallbackPrioritizesModelRuntimeDepsWhenManif
   assert.ok(command.dependencies.length <= 12)
 }
 
+
+function testDeterministicExperimentFallbackEmitsTaskSpecificProbeEvidence() {
+  const command = contract.buildDeterministicGpuExperimentCommand({
+    researchGoal: 'Improve multi-model LLaDA collaboration with an ODE/gasket mechanism.',
+    stepDescription: 'Disable confounding components and compare the smallest reproducible behavior against a simple control.',
+    stageName: 'Verification',
+    reason: 'weak model emitted prose',
+  })
+  assert.equal(command.action, 'run_python')
+  assert.match(command.code, /task_specific_probe/)
+  assert.match(command.code, /task_keyword_coverage/)
+  assert.match(command.code, /classified_task/)
+  assert.match(command.code, /ablation_delta/)
+  assert.match(command.code, /control_score/)
+  const scriptPath = path.join(outDir, 'task-specific-deterministic-probe.py')
+  fs.writeFileSync(scriptPath, command.code)
+  const run = childProcess.spawnSync('python3', [scriptPath], { encoding: 'utf8', env: { ...process.env, AR3_WORKBENCH_DIR: path.join(outDir, 'task-specific-workbench') } })
+  assert.equal(run.status, 0, run.stderr || run.stdout)
+  const parsed = JSON.parse(run.stdout.trim().split(/\n/).pop())
+  assert.equal(parsed.classified_task, 'ablation')
+  assert.equal(parsed.task_specific_probe.classified_task, 'ablation')
+  assert.ok(parsed.task_specific_probe.matched_tasks.some(row => row.task === 'control_comparison'))
+  assert.equal(typeof parsed.task_specific_probe.ablation_delta, 'number')
+  assert.equal(typeof parsed.task_specific_probe.control_score, 'number')
+  assert.ok(parsed.task_keyword_coverage.covered_terms.includes('disable'))
+}
+
 function testGpuContractFailuresShortCircuitDeterministicWeakModelFailures() {
   assert.equal(contract.shouldShortCircuitGpuContractFailure('Investigation', 'response did not parse as the required JSON object', false), true)
   assert.equal(contract.shouldShortCircuitGpuContractFailure('Planning', 'JSON action must be "run_python"', false), true)
@@ -1286,6 +1313,7 @@ testDeterministicExperimentCriteriaEvidenceRejectsUnsatisfiedThreshold()
 testDeterministicExperimentCriteriaEvidenceAcceptsSatisfiedThreshold()
 testTestingStageStrictCommandWithoutVerdictFallsBackToDeterministicExperiment()
 testGpuEnabledStageCodeQualityWarningPromotesToDeterministicFallback()
+testDeterministicExperimentFallbackEmitsTaskSpecificProbeEvidence()
 testGpuContractFailuresShortCircuitDeterministicWeakModelFailures()
 testGpuStepCompletionRejectsProseWithoutExecutionResult()
 testGpuStepCompletionRejectsGpuError()

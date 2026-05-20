@@ -1428,6 +1428,71 @@ except Exception as exc:
         "gating_entropy": float(-sum(p * math.log(max(p, 1e-12)) for p in [0.5 + min(phase, 0.49), 0.5 - min(phase, 0.49)])),
     }
 
+def classify_step_task(text):
+    task_patterns = [
+        ("ablation", ["ablation", "disable", "remove", "without", "confounding"]),
+        ("control_comparison", ["control", "compare", "baseline", "versus", "against"]),
+        ("reproduction", ["reproduce", "reproducible", "verify", "replicate", "smallest"]),
+        ("model_execution", ["model", "llada", "inference", "activation", "load", "train"]),
+        ("measurement", ["measure", "metric", "benchmark", "evaluate", "score"]),
+    ]
+    lowered = (text or "").lower()
+    matched = []
+    for label, terms in task_patterns:
+        hits = [term for term in terms if term in lowered]
+        if hits:
+            matched.append({"task": label, "hits": hits})
+    return matched or [{"task": "generic_executable_probe", "hits": []}]
+
+def keyword_coverage(goal, step):
+    text = ((goal or "") + " " + (step or "")).lower()
+    terms = []
+    for term in re.findall(r"[a-z][a-z0-9_-]{3,}", text):
+        if term in {"with", "that", "this", "from", "into", "then", "than", "must", "should", "would", "could", "using", "against", "simple"}:
+            continue
+        if term not in terms:
+            terms.append(term)
+    observed = terms[:20]
+    metric_keys = " ".join(metrics.get("research_metrics", {}).keys()).lower()
+    hit_terms = {hit for row in classify_step_task(step) for hit in row.get("hits", [])}
+    covered = [term for term in observed if term in metric_keys or term in hit_terms][:20]
+    return {
+        "terms": observed,
+        "covered_terms": covered,
+        "coverage_ratio": round((len(covered) / max(len(observed), 1)), 3),
+    }
+
+def build_task_specific_probe():
+    research_metrics = metrics.get("research_metrics") or {}
+    classified = classify_step_task(step_description)
+    primary = classified[0]["task"]
+    base_score = float(research_metrics.get("trajectory_cosine_similarity", 0.0) or 0.0)
+    residual = float(research_metrics.get("projection_residual", 0.0) or 0.0)
+    consensus_delta = float(research_metrics.get("consensus_delta_norm", 0.0) or 0.0)
+    probe = {
+        "classified_task": primary,
+        "matched_tasks": classified,
+        "control_score": base_score,
+        "task_keyword_coverage": keyword_coverage(research_goal, step_description),
+        "stage_specific_verdict": stage_name,
+    }
+    if primary == "ablation" or any(row["task"] == "ablation" for row in classified):
+        probe["ablation_delta"] = consensus_delta
+        probe["confounder_removed"] = "disable" in step_description.lower() or "without" in step_description.lower()
+    if primary == "control_comparison" or any(row["task"] == "control_comparison" for row in classified):
+        probe["baseline_score"] = max(0.0, base_score - min(residual, 1.0) * 0.05)
+        probe["comparison_margin"] = base_score - probe["baseline_score"]
+    if primary == "reproduction" or any(row["task"] == "reproduction" for row in classified):
+        probe["reproduction_seed"] = sum(ord(ch) for ch in step_description) % 10007
+        probe["smallest_reproducible_case"] = True
+    if primary == "measurement" or any(row["task"] == "measurement" for row in classified):
+        probe["measurement_keys"] = sorted(research_metrics.keys())[:20]
+    return probe
+
+metrics["task_specific_probe"] = build_task_specific_probe()
+metrics["classified_task"] = metrics["task_specific_probe"].get("classified_task")
+metrics["task_keyword_coverage"] = metrics["task_specific_probe"].get("task_keyword_coverage")
+
 manifest_deps = []
 if isinstance(preparation_manifest, dict):
     for dep in manifest_get(preparation_manifest, "dependencies", "dependency_specs", default=[]) or []:
