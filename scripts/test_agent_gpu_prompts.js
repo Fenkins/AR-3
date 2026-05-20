@@ -4,6 +4,7 @@ const fs = require('fs')
 const path = require('path')
 
 const routeSource = fs.readFileSync(path.join(__dirname, '..', 'app/api/agents/route.ts'), 'utf8')
+const strictContractSource = fs.readFileSync(path.join(__dirname, '..', 'lib/research-engine.ts'), 'utf8')
 
 function roleBlock(role, nextRole) {
   const startMarker = '  ' + role + ': {'
@@ -54,7 +55,18 @@ for (const pair of gpuRoles) {
     /pseudocode is fine|code sketches|EXECUTION_PLAN|required execution_plan|include actual PyTorch code sketches|prose descriptions/i,
     role + ' GPU prompt must not invite sketches, markdown, execution plans, or prose',
   )
+  assert.match(
+    block[1],
+    /unmanaged \/tmp[\s\S]*AR3_WORKBENCH_DIR|AR3_WORKBENCH_DIR[\s\S]*unmanaged \/tmp/i,
+    role + ' GPU prompt must forbid unmanaged /tmp workbench paths and require AR3 workbench env vars',
+  )
 }
+
+assert.match(
+  strictContractSource,
+  /unmanaged \/tmp[\s\S]*AR3_WORKBENCH_DIR|AR3_WORKBENCH_DIR[\s\S]*unmanaged \/tmp/i,
+  'Shared strict GPU contract must forbid unmanaged /tmp paths before weak models generate rejected code',
+)
 
 assert.ok(
   routeSource.includes('gpuPromptVariant: gpuPromptVariant ?? defaults.gpuPromptVariant ?? null'),

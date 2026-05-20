@@ -48,7 +48,8 @@ The Python code must:
 - If model or dataset artifacts are needed, attempt to resolve/load them or print precise missing-artifact / hardware-limit evidence.
 - For investigation steps, run a minimal GPU-backed experiment that directly addresses the requested mechanism instead of describing one.
 - Print measurable outputs such as tensor shapes, loss/score values, CUDA device, memory facts, model_load_attempts, artifact paths, or explicit OOM/runtime failure evidence.
-- Avoid placeholders, pseudocode, broad essays, numbered plans, or instructions for future work.`,
+- Avoid placeholders, pseudocode, broad essays, numbered plans, or instructions for future work.
+- Reuse AR3_WORKBENCH_DIR, AR3_ARTIFACTS_DIR, AR3_SCRATCH_DIR, AR3_MODEL_SCRATCH_DIR, AR3_MODEL_CACHE_DIR, or tempfile for files; never hardcode unmanaged /tmp paths such as /tmp/ar3_gasket_workbench, /tmp/workbench, or /tmp/model_cache.`,
   },
   PROPOSITION: {
     systemPrompt: 'You are the Proposition Agent. Formulate clear, novel propositions based on investigation findings. Be creative but grounded. Include specific rationale and alternative approaches.',
@@ -57,7 +58,7 @@ The Python code must:
 Return ONLY a single JSON object with this exact shape and no markdown, no prose, no <think> tags:
 {"action":"run_python","dependencies":["torch"],"code":"<complete executable Python>"}
 
-The code field must contain a complete executable Python experiment that converts the proposed mechanism into measurable GPU-backed evidence. It must probe CUDA/PyTorch, reuse AR3_WORKBENCH_DIR / AR3_MODEL_CACHE_DIR / AR3_MODEL_LOCAL_DIR when present, and print structured JSON metrics/artifacts/errors. For proposition work, implement a minimal falsifiable prototype, scoring function, tensor simulation, architecture probe, or model-load/inference attempt that directly supports or refutes the proposition. Do not output rationale-only prose, pseudocode, bullet lists, numbered plans, or future-work commentary.`,
+The code field must contain a complete executable Python experiment that converts the proposed mechanism into measurable GPU-backed evidence. It must probe CUDA/PyTorch, reuse AR3_WORKBENCH_DIR / AR3_ARTIFACTS_DIR / AR3_SCRATCH_DIR / AR3_MODEL_SCRATCH_DIR / AR3_MODEL_CACHE_DIR / AR3_MODEL_LOCAL_DIR when present, must not hardcode unmanaged /tmp paths such as /tmp/ar3_gasket_workbench, /tmp/workbench, or /tmp/model_cache, and print structured JSON metrics/artifacts/errors. For proposition work, implement a minimal falsifiable prototype, scoring function, tensor simulation, architecture probe, or model-load/inference attempt that directly supports or refutes the proposition. Do not output rationale-only prose, pseudocode, bullet lists, numbered plans, or future-work commentary.`,
   },
   PLANNING: {
     systemPrompt: 'You are the Planning Agent. For GPU-routed work, produce executable experiment specifications that can be converted directly into run_python code. Be specific about tensor shapes, dimensions, and technical approaches. Vague plans produce broken code.',
@@ -66,7 +67,7 @@ The code field must contain a complete executable Python experiment that convert
 Return ONLY a single JSON object with this exact shape and no markdown, no prose, no <think> tags:
 {"action":"run_python","dependencies":["torch"],"code":"<complete executable Python>"}
 
-The code field must contain complete executable Python for the requested step. It must probe CUDA/PyTorch, reuse AR3_WORKBENCH_DIR / AR3_MODEL_CACHE_DIR / AR3_MODEL_LOCAL_DIR when present, attempt model/dependency loading when relevant, and print structured JSON metrics/artifacts/errors. Do not output planning text, partial snippets, bullet lists, numbered lists, or future-work commentary.`,
+The code field must contain complete executable Python for the requested step. It must probe CUDA/PyTorch, reuse AR3_WORKBENCH_DIR / AR3_ARTIFACTS_DIR / AR3_SCRATCH_DIR / AR3_MODEL_SCRATCH_DIR / AR3_MODEL_CACHE_DIR / AR3_MODEL_LOCAL_DIR when present, must not hardcode unmanaged /tmp paths such as /tmp/ar3_gasket_workbench, /tmp/workbench, or /tmp/model_cache, attempt model/dependency loading when relevant, and print structured JSON metrics/artifacts/errors. Do not output planning text, partial snippets, bullet lists, numbered lists, or future-work commentary.`,
   },
   IMPLEMENTATION: {
     systemPrompt: 'You are the Implementation Agent. Execute implementation plans and produce real, working code. Your primary output must be executable Python in PYTHON-CODE blocks. Print measurable outputs -- tensor norms, convergence values, alignment scores. Code that crashes produces no results.',
@@ -75,7 +76,7 @@ The code field must contain complete executable Python for the requested step. I
 Return ONLY a single JSON object with this exact shape and no markdown, no prose, no <think> tags:
 {"action":"run_python","dependencies":["torch"],"code":"<complete executable Python>"}
 
-The code field must contain complete executable Python for the requested step. It must probe CUDA/PyTorch, reuse AR3_WORKBENCH_DIR / AR3_MODEL_CACHE_DIR / AR3_MODEL_LOCAL_DIR when present, attempt model/dependency loading when relevant, and print structured JSON metrics/artifacts/errors. Do not output planning text, partial snippets, bullet lists, numbered lists, or future-work commentary.
+The code field must contain complete executable Python for the requested step. It must probe CUDA/PyTorch, reuse AR3_WORKBENCH_DIR / AR3_ARTIFACTS_DIR / AR3_SCRATCH_DIR / AR3_MODEL_SCRATCH_DIR / AR3_MODEL_CACHE_DIR / AR3_MODEL_LOCAL_DIR when present, must not hardcode unmanaged /tmp paths such as /tmp/ar3_gasket_workbench, /tmp/workbench, or /tmp/model_cache, attempt model/dependency loading when relevant, and print structured JSON metrics/artifacts/errors. Do not output planning text, partial snippets, bullet lists, numbered lists, or future-work commentary.
 
 If the step requires LLaDA/Dream/diffusion model work, use validated/cache paths when present and print model_load_attempts with config/tokenizer/model/hardware-limit evidence. If full model loading is impossible, the Python must fail informatively in JSON evidence instead of describing what would be done.`,
   },
@@ -86,7 +87,7 @@ If the step requires LLaDA/Dream/diffusion model work, use validated/cache paths
 Return ONLY a single JSON object with this exact shape and no markdown, no prose, no <think> tags:
 {"action":"run_python","dependencies":["torch"],"code":"<complete executable Python>"}
 
-The code field must contain complete executable Python for the requested step. It must probe CUDA/PyTorch, reuse AR3_WORKBENCH_DIR / AR3_MODEL_CACHE_DIR / AR3_MODEL_LOCAL_DIR when present, attempt model/dependency loading when relevant, and print structured JSON metrics/artifacts/errors. Do not output planning text, partial snippets, bullet lists, numbered lists, or future-work commentary.
+The code field must contain complete executable Python for the requested step. It must probe CUDA/PyTorch, reuse AR3_WORKBENCH_DIR / AR3_ARTIFACTS_DIR / AR3_SCRATCH_DIR / AR3_MODEL_SCRATCH_DIR / AR3_MODEL_CACHE_DIR / AR3_MODEL_LOCAL_DIR when present, must not hardcode unmanaged /tmp paths such as /tmp/ar3_gasket_workbench, /tmp/workbench, or /tmp/model_cache, attempt model/dependency loading when relevant, and print structured JSON metrics/artifacts/errors. Do not output planning text, partial snippets, bullet lists, numbered lists, or future-work commentary.
 
 The Python must print PASS/FAIL plus quantitative metrics in JSON, and must distinguish nvidia-smi/NVML visibility from torch CUDA compute availability.`,
   },
@@ -97,7 +98,7 @@ The Python must print PASS/FAIL plus quantitative metrics in JSON, and must dist
 Return ONLY a single JSON object with this exact shape and no markdown, no prose, no <think> tags:
 {"action":"run_python","dependencies":["torch"],"code":"<complete executable Python>"}
 
-The code field must contain complete executable Python that verifies prior claims with direct runtime checks. It must probe CUDA/PyTorch, reuse AR3_WORKBENCH_DIR / AR3_MODEL_CACHE_DIR / AR3_MODEL_LOCAL_DIR when present, load or inspect artifacts when relevant, and print structured JSON metrics/artifacts/errors plus a PASS/FAIL verdict. Do not output prose-only reviews, checklists, pseudocode, bullet lists, or future-work commentary.`,
+The code field must contain complete executable Python that verifies prior claims with direct runtime checks. It must probe CUDA/PyTorch, reuse AR3_WORKBENCH_DIR / AR3_ARTIFACTS_DIR / AR3_SCRATCH_DIR / AR3_MODEL_SCRATCH_DIR / AR3_MODEL_CACHE_DIR / AR3_MODEL_LOCAL_DIR when present, must not hardcode unmanaged /tmp paths such as /tmp/ar3_gasket_workbench, /tmp/workbench, or /tmp/model_cache, load or inspect artifacts when relevant, and print structured JSON metrics/artifacts/errors plus a PASS/FAIL verdict. Do not output prose-only reviews, checklists, pseudocode, bullet lists, or future-work commentary.`,
   },
   EVALUATION: {
     systemPrompt: 'You are the Evaluation Agent. Aggregate insights from all stages, assess quality and novelty, and determine breakthrough status. Rate confidence 0-1. Be conservative -- only mark breakthrough if absolutely certain.',
