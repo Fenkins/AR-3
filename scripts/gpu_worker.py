@@ -214,6 +214,16 @@ def _model_snapshot_integrity(path: Path):
     return status, problems
 
 
+HF_MODEL_ID_ALIASES = {
+    'ssslakter/llada-8b-base': 'GSAI-ML/LLaDA-8B-Base',
+}
+
+
+def canonical_hf_model_id(model_id: str) -> str:
+    normalized = str(model_id or '').strip()
+    return HF_MODEL_ID_ALIASES.get(normalized.lower(), normalized)
+
+
 def sync_model_cache_row(space_id: str, model_id: str, local_dir: str, source: str = 'huggingface'):
     """Best-effort mirror of worker-resolved model artifacts into ModelCache.
 
@@ -224,6 +234,8 @@ def sync_model_cache_row(space_id: str, model_id: str, local_dir: str, source: s
     """
     if not space_id or not model_id or not local_dir:
         return
+    requested_model_id = str(model_id).strip()
+    model_id = canonical_hf_model_id(requested_model_id) if source == 'huggingface' else requested_model_id
     db_path = _prisma_db_path()
     path = Path(local_dir)
     if not db_path.exists() or not path.exists() or not _sqlite_has_table(db_path, 'ModelCache'):
@@ -236,6 +248,8 @@ def sync_model_cache_row(space_id: str, model_id: str, local_dir: str, source: s
     integrity_status, integrity_problems = _model_snapshot_integrity(path)
     now_iso = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
     description_parts = [f'GPU worker resolved {source} model artifact; model_id={model_id}; actual_size_bytes={int(file_size)}']
+    if requested_model_id and requested_model_id != model_id:
+        description_parts.append(f'requested_model_id={requested_model_id}')
     if file_size > PRISMA_INT_MAX:
         description_parts.append('fileSize capped at Prisma Int max when artifact exceeds 2GiB')
     description_parts.extend(integrity_problems)
@@ -1480,6 +1494,7 @@ def _manifest_model_local_dir(model_id: str, context: dict) -> Path:
     already exists instead of downloading a second multi-GB copy into the
     worker's hashed fallback path.
     """
+    model_id = canonical_hf_model_id(model_id)
     model_cache_root = _manifest_model_cache_root(context)
     repo_key = str(model_id).strip().replace('/', '_')
     space_id = str(context.get('space_id') or '').strip()
@@ -1554,7 +1569,8 @@ print(json.dumps({
             return {'success': False, 'output': '\n'.join(output_parts), 'error': f'Invalid model entry at index {i}'}
         if model.get('source') != 'huggingface':
             continue
-        model_id = str(model.get('id') or '').strip()
+        requested_model_id = str(model.get('id') or '').strip()
+        model_id = canonical_hf_model_id(requested_model_id)
         required = model.get('required') is True
         if not model_id:
             if required:
