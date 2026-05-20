@@ -829,6 +829,18 @@ function testDeterministicExperimentFallbackEmitsResearchSpecificMetrics() {
   assert.ok(criterionEvidence.matched_keys.some(key => /cuda_available|trajectory_cosine_similarity/.test(key)), criterionEvidence.matched_keys.join(', '))
 }
 
+
+function testDeterministicExperimentFallbackAvoidsTorchLinalgVectorNorm() {
+  const command = contract.buildDeterministicGpuExperimentCommand({
+    researchGoal: 'Improve diffusion model inference with latent gasket ODE trajectory consensus.',
+    stepDescription: 'Run a GPU benchmark for latent trajectory projection residuals.',
+    stageName: 'Testing',
+    reason: 'code contains placeholder/pseudocode markers',
+    preparationManifest: samplePreparationManifest(),
+  })
+  assert.doesNotMatch(command.code, /torch\.linalg\.vector_norm/, 'deterministic fallback must avoid torch.linalg.vector_norm because CUDA backend failures poison evidence with torch_error')
+}
+
 function testDeterministicExperimentCriteriaEchoWithoutEvidenceIsRejected() {
   const assessed = contract.assessGpuExecutionEvidence({
     stageName: 'Implementation',
@@ -1237,6 +1249,7 @@ testPreparationStageWithExistingManifestPromotesWrapperToDeterministicExperiment
 testValidatedManifestReconcilesSameBasenameHuggingFaceModelIds()
 testValidatedManifestRejectsUnmatchedHuggingFaceModelIdsToDeterministicFallback()
 testDeterministicExperimentFallbackEmitsResearchSpecificMetrics()
+testDeterministicExperimentFallbackAvoidsTorchLinalgVectorNorm()
 testDeterministicExperimentCriteriaEchoWithoutEvidenceIsRejected()
 testDeterministicExperimentCriteriaEvidencePassesGate()
 testDeterministicExperimentCriteriaEvidenceRejectsPartialExplicitMetrics()

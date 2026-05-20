@@ -1398,12 +1398,17 @@ try:
     trajectory_b = torch.stack([base, torch.sin(base * 3.14159 + phase + 0.13), torch.cos(base * 1.5708 + phase - 0.07)], dim=1)
     consensus = (trajectory_a + trajectory_b) / 2
     delta = trajectory_a - trajectory_b
+    def stable_norm(value):
+        return torch.sqrt(torch.clamp(torch.sum(value * value), min=0)).item()
+    centered_delta = delta - delta.mean(dim=0, keepdim=True)
+    gate_logits = torch.tensor([0.5 + phase, 0.5 - phase], device=device)
+    gate_probs = torch.softmax(gate_logits, dim=0)
     metrics["research_metrics"] = {
         "trajectory_cosine_similarity": float(torch.nn.functional.cosine_similarity(trajectory_a.flatten(), trajectory_b.flatten(), dim=0).item()),
-        "projection_residual": float(torch.linalg.vector_norm(delta - delta.mean(dim=0, keepdim=True)).item()),
-        "consensus_delta_norm": float(torch.linalg.vector_norm(consensus - trajectory_a).item()),
-        "latent_vector_norm": float(torch.linalg.vector_norm(consensus).item()),
-        "gating_entropy": float((-(torch.softmax(torch.tensor([0.5 + phase, 0.5 - phase], device=device), dim=0) * torch.log_softmax(torch.tensor([0.5 + phase, 0.5 - phase], device=device), dim=0)).sum()).item()),
+        "projection_residual": float(stable_norm(centered_delta)),
+        "consensus_delta_norm": float(stable_norm(consensus - trajectory_a)),
+        "latent_vector_norm": float(stable_norm(consensus)),
+        "gating_entropy": float((-(gate_probs * torch.log_softmax(gate_logits, dim=0)).sum()).item()),
     }
 except Exception as exc:
     metrics["torch_error"] = repr(exc)
