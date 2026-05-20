@@ -219,8 +219,11 @@ export function runningVariantIsStaleWithoutActiveStep(
   if (activeJobs.length > 0) return false
   if (steps.some(step => step.status === 'RUNNING')) return false
   const hasPendingWork = steps.some(step => step.status === 'PENDING')
+  const hasTerminalFailure = steps.some(step => step.status === 'FAILED')
+  const hasOnlyTerminalSteps = steps.length > 0 && steps.every(step => step.status === 'COMPLETED' || step.status === 'FAILED')
   const hasOnlyTerminalFailures = steps.length > 0 && steps.every(step => step.status === 'FAILED')
-  if (!hasPendingWork && !hasOnlyTerminalFailures) return false
+  const hasMixedTerminalFailure = hasOnlyTerminalSteps && hasTerminalFailure
+  if (!hasPendingWork && !hasOnlyTerminalFailures && !hasMixedTerminalFailure) return false
   const newestStepUpdate = steps.reduce((latest, step) => {
     const updatedAt = step.updatedAt ? new Date(step.updatedAt).getTime() : NaN
     return Number.isFinite(updatedAt) ? Math.max(latest, updatedAt) : latest
@@ -431,9 +434,10 @@ async function recoverStaleRunningVariantsWithoutActiveSteps(spaceId: string): P
     })
 
     if (!runningVariantIsStaleWithoutActiveStep(variant, variant.VariantStep, activeJobs)) continue
-    const allStepsFailed = variant.VariantStep.length > 0 && variant.VariantStep.every(step => step.status === 'FAILED')
-    if (allStepsFailed) {
-      const reason = 'Recovered stale RUNNING variant whose steps already terminal-failed; marking variant FAILED so the stage can regenerate instead of blocking forever.'
+    const hasTerminalFailure = variant.VariantStep.some(step => step.status === 'FAILED')
+    const allStepsTerminal = variant.VariantStep.length > 0 && variant.VariantStep.every(step => step.status === 'COMPLETED' || step.status === 'FAILED')
+    if (allStepsTerminal && hasTerminalFailure) {
+      const reason = 'Recovered stale RUNNING variant whose steps already terminal-failed or mixed completed/failed; marking variant FAILED so the stage can regenerate instead of blocking forever.'
       await prisma.variant.update({
         where: { id: variant.id },
         data: {
@@ -444,7 +448,7 @@ async function recoverStaleRunningVariantsWithoutActiveSteps(spaceId: string): P
         },
       })
       recovered++
-      debugLog('[recoverStaleRunningVariantsWithoutActiveSteps] Marked stale RUNNING variant ' + variant.id + ' FAILED because all steps are terminal failures')
+      debugLog('[recoverStaleRunningVariantsWithoutActiveSteps] Marked stale RUNNING variant ' + variant.id + ' FAILED because all steps are terminal and at least one failed')
       continue
     }
     await prisma.variant.update({

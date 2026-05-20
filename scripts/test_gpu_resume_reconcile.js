@@ -302,6 +302,19 @@ assert.equal(
 assert.equal(
   runningVariantIsStaleWithoutActiveStep(
     { status: 'RUNNING', updatedAt: new Date('2026-05-17T21:00:00Z') },
+    [
+      { status: 'COMPLETED', updatedAt: new Date('2026-05-17T21:05:00Z') },
+      { status: 'FAILED', updatedAt: new Date('2026-05-17T21:06:00Z') },
+    ],
+    [],
+    new Date('2026-05-17T21:20:01Z').getTime(),
+  ),
+  true,
+  'a stale RUNNING variant with mixed terminal completed/failed steps must be reconciled instead of staying RUNNING forever',
+)
+assert.equal(
+  runningVariantIsStaleWithoutActiveStep(
+    { status: 'RUNNING', updatedAt: new Date('2026-05-17T21:00:00Z') },
     [{ status: 'PENDING', updatedAt: new Date('2026-05-17T21:05:00Z') }],
     [{ status: 'running_experiment' }],
     new Date('2026-05-17T21:20:01Z').getTime(),
