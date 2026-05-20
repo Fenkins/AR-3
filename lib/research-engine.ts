@@ -3653,13 +3653,21 @@ function verifyTestingOutput(
   gpuOutput: string
 ): TestingVerification {
   const output = gpuOutput.toLowerCase()
+  const runtimeOutput = (() => {
+    const outputMarker = gpuOutput.match(/(?:^|\n)\[OUTPUT\]\s*\n/i)
+    if (outputMarker?.index !== undefined) {
+      return gpuOutput.slice(outputMarker.index + outputMarker[0].length)
+    }
+    return gpuOutput
+  })().toLowerCase()
   const missingChecks: string[] = []
 
-  // 1. Check for error indicators
-  if (output.includes('[gpu error]') || output.includes('runtimeerror') ||
-      output.includes('typeerror') || output.includes('valueerror') ||
-      output.includes('modulenotfounderror') || output.includes('attributeerror') ||
-      output.includes('cuda out of memory') || output.includes('out of memory')) {
+  // 1. Check for error indicators in executed runtime output, not defensive
+  // exception-handling strings embedded in the persisted [CODE] section.
+  if (runtimeOutput.includes('[gpu error]') || runtimeOutput.includes('runtimeerror') ||
+      runtimeOutput.includes('typeerror') || runtimeOutput.includes('valueerror') ||
+      runtimeOutput.includes('modulenotfounderror') || runtimeOutput.includes('attributeerror') ||
+      runtimeOutput.includes('cuda out of memory') || runtimeOutput.includes('out of memory')) {
     return {
       valid: false,
       reason: `GPU output contains error indicators: testing code did not execute cleanly`,
@@ -3669,9 +3677,9 @@ function verifyTestingOutput(
 
 
   // 1b. Check for AI thinking tags — indicates the LLM produced internal monologue instead of real GPU output
-  if (output.includes('<thought') || output.includes('<think>') ||
-      output.includes('</thought>') || output.includes('```python\n<thought') ||
-      output.includes('\u3010') || output.includes('\u3011')) {  // Chinese brackets from AI text
+  if (runtimeOutput.includes('<thought') || runtimeOutput.includes('<think>') ||
+      runtimeOutput.includes('</thought>') || runtimeOutput.includes('```python\n<thought') ||
+      runtimeOutput.includes('\u3010') || runtimeOutput.includes('\u3011')) {  // Chinese brackets from AI text
     return {
       valid: false,
       reason: `GPU output contains AI thinking/monologue tags — real GPU code did not run. The variant produced simulated output instead of actual model inference.`,
