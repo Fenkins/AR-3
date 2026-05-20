@@ -1924,6 +1924,16 @@ function reconcileCommandWithManifestModels(command: StrictGpuCommand, preparati
   }
 }
 
+
+function codeHasTestingVerdictSignal(code: string): boolean {
+  const text = String(code || '')
+  return /["']?verdict["']?\s*[:=]|["']?status["']?\s*[:=]\s*["']?(?:PASS|FAIL)["']?|(?:PASS|FAIL)/i.test(text)
+}
+
+function testingStageNeedsDeterministicVerdictFallback(stageName: string, command: StrictGpuCommand): boolean {
+  return /^Testing$/i.test(String(stageName || '').trim()) && !codeHasTestingVerdictSignal(command.code)
+}
+
 function pythonFenceCandidate(text: string): string | null {
   const match = String(text || '').match(/\`\`\`(?:python|py|code)\s*([\s\S]*?)\`\`\`/i)
   return match?.[1]?.trim() || null
@@ -2010,11 +2020,53 @@ export function selectGpuSubmissionCommand(input: GpuSubmissionInput): GpuSubmis
       }
     }
     if (reconciled.changed) {
+      if (testingStageNeedsDeterministicVerdictFallback(input.stageName, reconciled.command)) {
+        return {
+          ok: true,
+          command: buildDeterministicGpuExperimentCommand({
+            researchGoal: input.researchGoal,
+            stepDescription: input.stepDescription,
+            stageName: input.stageName,
+            reason: 'Testing stage strict command did not include a PASS/FAIL verdict signal',
+            preparationManifest: existingManifest,
+          }),
+          fallbackUsed: false,
+          reason: 'selected deterministic GPU experiment for Testing because strict command lacked verdict/status output',
+        }
+      }
       return { ok: true, command: reconciled.command, fallbackUsed: false, reason: reconciled.reason }
+    }
+    if (testingStageNeedsDeterministicVerdictFallback(input.stageName, extracted.command)) {
+      return {
+        ok: true,
+        command: buildDeterministicGpuExperimentCommand({
+          researchGoal: input.researchGoal,
+          stepDescription: input.stepDescription,
+          stageName: input.stageName,
+          reason: 'Testing stage strict command did not include a PASS/FAIL verdict signal',
+          preparationManifest: existingManifest,
+        }),
+        fallbackUsed: false,
+        reason: 'selected deterministic GPU experiment for Testing because strict command lacked verdict/status output',
+      }
     }
   }
 
   if (extracted.ok && !looksLikePreparationManifestWrapper(extracted.command)) {
+    if (testingStageNeedsDeterministicVerdictFallback(input.stageName, extracted.command)) {
+      return {
+        ok: true,
+        command: buildDeterministicGpuExperimentCommand({
+          researchGoal: input.researchGoal,
+          stepDescription: input.stepDescription,
+          stageName: input.stageName,
+          reason: 'Testing stage strict command did not include a PASS/FAIL verdict signal',
+          preparationManifest: existingManifest,
+        }),
+        fallbackUsed: false,
+        reason: 'selected deterministic GPU experiment for Testing because strict command lacked verdict/status output',
+      }
+    }
     return { ok: true, command: extracted.command, fallbackUsed: false, reason: 'selected strict GPU command from model output' }
   }
 

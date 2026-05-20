@@ -1179,6 +1179,30 @@ function testGpuStepCompletionAcceptsTrainingHardwareLimitEvidence() {
   assert.equal(assessed.valid, true, assessed.reason)
 }
 
+
+function testTestingStageStrictCommandWithoutVerdictFallsBackToDeterministicExperiment() {
+  const selected = contract.selectGpuSubmissionCommand({
+    stageName: 'Testing',
+    researchGoal: 'Measure latent gasket improvements for LLaDA inference.',
+    stepDescription: 'Compare output against a simple control for improvement with quantitative metrics.',
+    llmResponse: JSON.stringify({
+      action: 'run_python',
+      dependencies: ['torch'],
+      code: [
+        'import json',
+        'import torch',
+        'print(json.dumps({"cuda_available": torch.cuda.is_available(), "metric": 0.42}))',
+      ].join('\n'),
+    }),
+    preparationManifest: samplePreparationManifest(),
+  })
+  assert.equal(selected.ok, true, selected.reason)
+  assert.equal(selected.fallbackUsed, false)
+  assert.match(selected.reason, /Testing.*verdict/i)
+  assert.match(selected.command.code, /deterministic_gpu_experiment/)
+  assert.match(selected.command.code, /"verdict"/)
+}
+
 function testGpuEnabledStageCodeQualityWarningPromotesToDeterministicFallback() {
   const selected = contract.selectGpuSubmissionCommand({
     stageName: 'Testing',
@@ -1260,6 +1284,7 @@ testDeterministicExperimentCriteriaEvidenceRejectsForgedKeys()
 testDeterministicExperimentCriteriaEvidenceRejectsEmptyValues()
 testDeterministicExperimentCriteriaEvidenceRejectsUnsatisfiedThreshold()
 testDeterministicExperimentCriteriaEvidenceAcceptsSatisfiedThreshold()
+testTestingStageStrictCommandWithoutVerdictFallsBackToDeterministicExperiment()
 testGpuEnabledStageCodeQualityWarningPromotesToDeterministicFallback()
 testGpuContractFailuresShortCircuitDeterministicWeakModelFailures()
 testGpuStepCompletionRejectsProseWithoutExecutionResult()
